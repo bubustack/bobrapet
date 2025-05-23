@@ -1,11 +1,101 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  labels:
-    app.kubernetes.io/name: bobrapet
-    app.kubernetes.io/managed-by: kustomize
   name: manager-role
 rules:
-- apiGroups: [""]
-  resources: ["pods"]
-  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bubu.sh
+  resources:
+  - modelconfigs
+  - models
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bubu.sh
+  resources:
+  - modelconfigs/finalizers
+  - models/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - bubu.sh
+  resources:
+  - modelconfigs/status
+  - models/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - virtualservices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transport.bubu.sh
+  resources:
+  - https
+  - websockets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transport.bubu.sh
+  resources:
+  - https/finalizers
+  - websockets/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - transport.bubu.sh
+  resources:
+  - https/status
+  - websockets/status
+  verbs:
+  - get
+  - patch
+  - update

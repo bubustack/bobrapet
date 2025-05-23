@@ -1,0 +1,9 @@
+apiVersion: transport.bubu.sh/v1alpha1
+kind: WebSocket
+metadata:
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
+  name: websocket-sample
+spec:
+  # TODO(user): Add fields here

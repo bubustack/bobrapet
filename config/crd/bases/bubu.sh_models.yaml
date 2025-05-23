@@ -1,0 +1,642 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: models.bubu.sh
+spec:
+  group: bubu.sh
+  names:
+    categories:
+    - bubu
+    - ai
+    kind: Model
+    listKind: ModelList
+    plural: models
+    shortNames:
+    - mod
+    - mdl
+    singular: model
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - description: The vendor/provider of the model
+      jsonPath: .spec.vendor
+      name: Vendor
+      type: string
+    - description: The specific model identifier
+      jsonPath: .spec.model
+      name: Model
+      type: string
+    - description: Max input tokens
+      jsonPath: .spec.limits.contextWindow
+      name: Context Window
+      priority: 1
+      type: integer
+    - description: Supported features
+      jsonPath: .spec.features
+      name: Features
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Model is the Schema for the models API. It represents AI/ML model
+          metadata within the cluster.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ModelSpec defines the desired state of Model. It contains
+              metadata and characteristics of an AI/ML model.
+            properties:
+              batchSupport:
+                description: Indicates if the model's API natively supports batching
+                  multiple requests into a single call.
+                type: boolean
+              billing:
+                description: Billing defines the pricing structure, plans, and associated
+                  rate limits for using the model.
+                properties:
+                  currency:
+                    default: USD
+                    description: ISO 4217 currency code for all monetary values in
+                      this section (e.g., "USD", "EUR").
+                    pattern: ^[A-Z]{3}$
+                    type: string
+                  docsURL:
+                    description: URL linking to the vendor's official pricing documentation
+                      for this model or service.
+                    format: uri
+                    type: string
+                  plans:
+                    description: List of available billing plans. Use the 'name' field
+                      within each plan as the key.
+                    items:
+                      description: BillingPlan defines a specific pricing plan for
+                        the model.
+                      properties:
+                        applicableTo:
+                          description: |-
+                            Specifies which modalities or operations this specific plan applies to (e.g., only applies to 'text' input/output, or only to the 'embeddings' endpoint).
+                            If empty or omitted, the plan is assumed to apply generally based on the defined Unit and Rates.
+                          items:
+                            enum:
+                            - text
+                            - audio
+                            - image
+                            - video
+                            - code
+                            - tool_calls
+                            - tool_results
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
+                        description:
+                          description: Human-readable description of the plan.
+                          type: string
+                        name:
+                          description: Unique name identifying the billing plan within
+                            this Model resource (e.g., "pay-as-you-go", "standard-tier",
+                            "enterprise-commit"). Used as the key in the list map.
+                          type: string
+                        rateLimits:
+                          description: Usage rate limits specifically associated with
+                            this billing plan.
+                          properties:
+                            burst:
+                              description: Burst capacity (requests or tokens) allowed
+                                beyond the sustained rate limit.
+                              minimum: 0
+                              type: integer
+                            ipm:
+                              description: Images Per Minute limit (for image generation/editing
+                                models).
+                              minimum: 0
+                              type: integer
+                            longContext:
+                              description: Rate limits specifically for long context
+                                requests.
+                              properties:
+                                burst:
+                                  description: Burst capacity for long context.
+                                  minimum: 0
+                                  type: integer
+                                queue:
+                                  description: Maximum queue depth or concurrent request
+                                    limit for long context.
+                                  minimum: 0
+                                  type: integer
+                                rpm:
+                                  description: Requests Per Minute limit for long
+                                    context.
+                                  minimum: 0
+                                  type: integer
+                                tpm:
+                                  description: Tokens Per Minute limit for long context.
+                                  minimum: 0
+                                  type: integer
+                                windowSeconds:
+                                  description: Time window for long context rate limits
+                                    in seconds.
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                            queue:
+                              description: Maximum queue depth or concurrent request
+                                limit. Meaning can vary by provider.
+                              minimum: 0
+                              type: integer
+                            rpd:
+                              description: Requests Per Day limit.
+                              minimum: 0
+                              type: integer
+                            rpm:
+                              description: Requests Per Minute limit.
+                              minimum: 0
+                              type: integer
+                            tpm:
+                              description: Tokens Per Minute limit (sum of prompt
+                                and completion tokens).
+                              minimum: 0
+                              type: integer
+                            windowSeconds:
+                              description: Time window over which rate limits are
+                                measured, in seconds (e.g., 60 for per-minute limits).
+                              minimum: 1
+                              type: integer
+                          type: object
+                        rates:
+                          description: Detailed pricing rates for different scenarios
+                            (standard, batch, long context) per the defined Unit.
+                          properties:
+                            batch:
+                              additionalProperties:
+                                description: PriceDetail holds the actual input/output
+                                  cost values.
+                                properties:
+                                  cachedInput:
+                                    description: Cost per unit for cached input processing,
+                                      if applicable.
+                                    format: double
+                                    type: number
+                                  input:
+                                    description: Cost per unit for input processing.
+                                    format: double
+                                    type: number
+                                  output:
+                                    description: Cost per unit for output generation.
+                                    format: double
+                                    type: number
+                                type: object
+                              description: Pricing for batch processing, if different,
+                                broken down by usage type.
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            longContext:
+                              additionalProperties:
+                                description: PriceDetail holds the actual input/output
+                                  cost values.
+                                properties:
+                                  cachedInput:
+                                    description: Cost per unit for cached input processing,
+                                      if applicable.
+                                    format: double
+                                    type: number
+                                  input:
+                                    description: Cost per unit for input processing.
+                                    format: double
+                                    type: number
+                                  output:
+                                    description: Cost per unit for output generation.
+                                    format: double
+                                    type: number
+                                type: object
+                              description: Pricing for long context processing, if
+                                different, broken down by usage type.
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                            standard:
+                              additionalProperties:
+                                description: PriceDetail holds the actual input/output
+                                  cost values.
+                                properties:
+                                  cachedInput:
+                                    description: Cost per unit for cached input processing,
+                                      if applicable.
+                                    format: double
+                                    type: number
+                                  input:
+                                    description: Cost per unit for input processing.
+                                    format: double
+                                    type: number
+                                  output:
+                                    description: Cost per unit for output generation.
+                                    format: double
+                                    type: number
+                                type: object
+                              description: Standard rate pricing, broken down by usage
+                                type (e.g., text, image).
+                              type: object
+                              x-kubernetes-preserve-unknown-fields: true
+                          type: object
+                        unit:
+                          description: The primary unit of measurement for billing
+                            under this plan (e.g., token, million_tokens, image, request).
+                          enum:
+                          - token
+                          - image
+                          - embedding
+                          - second
+                          - minute
+                          - request
+                          - character
+                          - million_tokens
+                          type: string
+                      required:
+                      - name
+                      - unit
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                type: object
+              characteristics:
+                description: Characteristics includes qualitative metrics like intelligence,
+                  speed, etc.
+                properties:
+                  hallucinationRate:
+                    description: Qualitative measure of the model's tendency to generate
+                      factually incorrect information (lower is better, e.g., 1-10).
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                  intelligence:
+                    description: Qualitative measure of the model's reasoning and
+                      knowledge capability (e.g., on a scale of 1-10).
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                  performance:
+                    description: Qualitative measure of the model's performance (e.g.,
+                      on a scale of 1-10).
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                  reasoning:
+                    description: Qualitative measure of the model's reasoning ability
+                      (e.g., on a scale of 1-10).
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                  selfConsistency:
+                    description: Qualitative measure of the model's consistency in
+                      responses to similar prompts (e.g., on a scale of 1-10).
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                  speed:
+                    description: Qualitative measure of the model's response generation
+                      speed (e.g., on a scale of 1-10).
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                type: object
+              complianceCertifications:
+                description: List of compliance certifications the model or its hosting
+                  platform adheres to (e.g., "SOC2", "HIPAA", "ISO27001").
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              dataRetentionPolicy:
+                description: Free-form string describing the vendor's policy regarding
+                  the retention of data sent to and generated by the model.
+                type: string
+              description:
+                description: Description provides a more detailed explanation of the
+                  model's capabilities, strengths, weaknesses, and intended use cases.
+                type: string
+              endpoints:
+                description: List of API endpoints or specific functionalities supported
+                  by this model (e.g., chat, embeddings, image generation).
+                items:
+                  enum:
+                  - completions
+                  - responses
+                  - realtime
+                  - assistants
+                  - batch
+                  - fine-tuning
+                  - embeddings
+                  - image-generation
+                  - image-edit
+                  - speech-generation
+                  - transcription
+                  - translation
+                  - moderation
+                  - completions-legacy
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              features:
+                description: List of additional features or capabilities supported
+                  by the model (e.g., streaming, tool-calling, JSON mode).
+                items:
+                  enum:
+                  - streaming
+                  - function-calling
+                  - structured-outputs
+                  - fine-tuning
+                  - distillation
+                  - predicted-outputs
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              latencyMs:
+                description: LatencyMs provides latency characteristics in milliseconds
+                  (e.g., p50, p90, p99). Values are indicative and may vary.
+                properties:
+                  p50:
+                    description: 50th percentile latency (median) in milliseconds.
+                    minimum: 0
+                    type: integer
+                  p90:
+                    description: 90th percentile latency in milliseconds.
+                    minimum: 0
+                    type: integer
+                  p99:
+                    description: 99th percentile latency in milliseconds.
+                    minimum: 0
+                    type: integer
+                type: object
+              limits:
+                description: Limits defines operational constraints like context window
+                  and max output tokens.
+                properties:
+                  contextWindow:
+                    description: Maximum number of tokens allowed in the input context
+                      window.
+                    minimum: 0
+                    type: integer
+                  knowledgeCutoff:
+                    description: The date up to which the model's training data is
+                      current (e.g., "2023-04", "April 2023"). Free-form string.
+                    type: string
+                  maxOutputTokens:
+                    description: Maximum number of tokens the model can generate in
+                      a single response.
+                    minimum: 0
+                    type: integer
+                type: object
+              maxBatchSize:
+                description: Maximum number of items (e.g., prompts, documents) allowed
+                  in a single batch request, if batching is supported.
+                minimum: 1
+                type: integer
+              modalities:
+                description: Modalities specifies the types of input and output the
+                  model supports (e.g., text, image).
+                properties:
+                  input:
+                    description: List of supported input types (e.g., text, image,
+                      audio).
+                    items:
+                      enum:
+                      - text
+                      - audio
+                      - image
+                      - video
+                      - code
+                      - tool_calls
+                      - tool_results
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  output:
+                    description: List of supported output types (e.g., text, image,
+                      audio).
+                    items:
+                      enum:
+                      - text
+                      - audio
+                      - image
+                      - video
+                      - code
+                      - tool_calls
+                      - tool_results
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
+              model:
+                description: Model is the specific identifier string used by the vendor
+                  for this model (e.g., "gpt-4-turbo", "claude-3-opus-20240229", "mistral-large-latest").
+                minLength: 1
+                type: string
+              provider:
+                description: Provider is an optional internal system identifier used
+                  for routing API calls or selecting implementation logic.
+                type: string
+              safetyLevel:
+                default: unknown
+                description: General level of safety filtering or content moderation
+                  applied by the model or platform (low, medium, high).
+                enum:
+                - low
+                - medium
+                - high
+                - unknown
+                type: string
+              samplingRates:
+                description: 'For audio models: List of supported audio sampling rates
+                  in Hertz (e.g., 16000, 24000, 44100, 48000).'
+                items:
+                  type: integer
+                type: array
+                x-kubernetes-list-type: set
+              shortDescription:
+                description: ShortDescription provides a brief, one-line summary of
+                  the model.
+                type: string
+              supportedFormats:
+                description: 'For image/audio models: List of supported file formats
+                  for input or output (e.g., "png", "jpeg", "webp", "wav", "mp3",
+                  "flac").'
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              supportedResolutions:
+                description: 'For image generation/processing models: List of supported
+                  output resolutions (e.g., "1024x1024", "1792x1024", "512x512").'
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              throughputRPS:
+                description: Estimated or benchmarked throughput in Requests Per Second
+                  (RPS). Value is indicative.
+                format: double
+                minimum: 0
+                type: number
+              url:
+                description: URL links to the vendor's official documentation or information
+                  page specifically for this model version.
+                format: uri
+                type: string
+              vendor:
+                description: Vendor identifies the provider or source of the model
+                  (e.g., openai, azure, google, meta).
+                enum:
+                - openai
+                - azure
+                - cloudy
+                - mistral
+                - llama
+                - anthropic
+                - google
+                - xai
+                - groq
+                - cohere
+                type: string
+              versioning:
+                description: Versioning information for the model, including lists
+                  of supported/deprecated versions and lifecycle dates.
+                properties:
+                  autoUpgradePolicy:
+                    default: manual
+                    description: Policy for automatically upgrading clients using
+                      this model reference.
+                    enum:
+                    - manual
+                    - minor
+                    - patch
+                    - major
+                    type: string
+                  deprecatedVersions:
+                    description: Subset of versions that are deprecated and should
+                      not be used.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  deprecationDate:
+                    description: The date when the primary/default version (or the
+                      version specified in `spec.model`) is scheduled for deprecation
+                      (RFC3339 format).
+                    type: string
+                  releaseDate:
+                    description: The date when the primary/default version (or the
+                      version specified in `spec.model`) was released (RFC3339 format).
+                    type: string
+                  supportedVersions:
+                    description: Subset of versions that are currently active and
+                      recommended for use.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  versions:
+                    description: List of all known versions for this model identifier
+                      (e.g., ["gpt-4-1106-preview", "gpt-4-0613"]).
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                type: object
+            required:
+            - model
+            - provider
+            - vendor
+            type: object
+          status:
+            description: ModelStatus defines the observed state of Model.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of an object's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

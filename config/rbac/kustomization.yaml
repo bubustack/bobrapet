@@ -18,3 +18,20 @@ resources:
 - metrics_auth_role.yaml
 - metrics_auth_role_binding.yaml
 - metrics_reader_role.yaml
+# For each CRD, "Admin", "Editor" and "Viewer" roles are scaffolded by
+# default, aiding admins in cluster management. Those roles are
+# not used by the {{ .ProjectName }} itself. You can comment the following lines
+# if you do not want those helpers be installed with your Project.
+- modelconfig_admin_role.yaml
+- modelconfig_editor_role.yaml
+- modelconfig_viewer_role.yaml
+- model_admin_role.yaml
+- model_editor_role.yaml
+- model_viewer_role.yaml
+- transport_http_admin_role.yaml
+- transport_http_editor_role.yaml
+- transport_http_viewer_role.yaml
+- transport_websocket_admin_role.yaml
+- transport_websocket_editor_role.yaml
+- transport_websocket_viewer_role.yaml
+

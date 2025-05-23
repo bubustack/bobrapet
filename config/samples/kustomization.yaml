@@ -1,0 +1,7 @@
+## Append samples of your project ##
+resources:
+- transport_v1alpha1_websocket.yaml
+- transport_v1alpha1_http.yaml
+- v1alpha1_model.yaml
+- v1alpha1_modelconfig.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

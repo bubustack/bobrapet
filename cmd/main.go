@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,7 +36,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	transportv1alpha1 "github.com/bubustack/bobrapet/api/transport/v1alpha1"
+	transportcontroller "github.com/bubustack/bobrapet/internal/controller/transport"
+
+	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/internal/controller"
+
+	bubuaiv1alpha1 "github.com/bubustack/bobrapet/api/bubu.ai/v1alpha1"
+	bubuaicontroller "github.com/bubustack/bobrapet/internal/controller/bubu.ai"
+
 	// +kubebuilder:scaffold:imports
+	istiov1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 )
 
 var (
@@ -47,6 +58,11 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
+	utilruntime.Must(transportv1alpha1.AddToScheme(scheme))
+
+	utilruntime.Must(istiov1beta1.AddToScheme(scheme))
+	utilruntime.Must(bubushv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(bubuaiv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -198,6 +214,42 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&transportcontroller.WebSocketReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WebSocket")
+		os.Exit(1)
+	}
+	if err = (&transportcontroller.HTTPReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "HTTP")
+		os.Exit(1)
+	}
+	if err = (&controller.ModelReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Model")
+		os.Exit(1)
+	}
+	if err = (&controller.ModelConfigReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ModelConfig")
+		os.Exit(1)
+	}
+
+	if err = (&bubuaicontroller.PromptReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Prompt")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

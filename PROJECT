@@ -5,6 +5,77 @@
 domain: bubu.sh
 layout:
 - go.kubebuilder.io/v4
+multigroup: true
 projectName: bobrapet
 repo: github.com/bubustack/bobrapet
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  kind: Project
+  path: github.com/bubustack/bobrapet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  group: transport
+  kind: WebSocket
+  path: github.com/bubustack/bobrapet/api/transport/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  group: transport
+  kind: HTTP
+  path: github.com/bubustack/bobrapet/api/transport/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  group: prompt
+  kind: Prompt
+  path: github.com/bubustack/bobrapet/api/prompt/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  group: bubu.sh
+  kind: Model
+  path: github.com/bubustack/bobrapet/api/bubu.sh/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  kind: Model
+  path: github.com/bubustack/bobrapet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  kind: ModelConfig
+  path: github.com/bubustack/bobrapet/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  group: bubu.ai
+  kind: Prompt
+  path: github.com/bubustack/bobrapet/api/bubu.ai/v1alpha1
+  version: v1alpha1
 version: "3"

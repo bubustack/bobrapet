@@ -1,9 +1,0 @@
-apiVersion: bubu.sh/v1alpha1
-kind: Model
-metadata:
-  labels:
-    app.kubernetes.io/name: bobrapet
-    app.kubernetes.io/managed-by: kustomize
-  name: model-sample
-spec:
-  # TODO(user): Add fields here

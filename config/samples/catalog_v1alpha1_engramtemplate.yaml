@@ -1,0 +1,55 @@
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: text-classifier-v1
+spec:
+  version: "1.0.0"
+  description: "AI-powered text classification for sentiment analysis"
+  inputSchema:
+    type: object
+    properties:
+      text:
+        type: string
+        description: "Text to classify"
+      model:
+        type: string
+        default: "gpt-4"
+        enum: ["gpt-4", "gpt-3.5-turbo"]
+  outputSchema:
+    type: object
+    properties:
+      label:
+        type: string
+        enum: ["positive", "negative", "neutral"]
+      confidence:
+        type: number
+        minimum: 0
+        maximum: 1
+  uiHints:
+    category: "ai"
+    displayName: "Text Classifier"
+    icon: "🤖"
+    color: "#4F46E5"
+    tags: ["ai", "nlp", "classification", "sentiment"]
+  examples:
+    - name: "positive-example"
+      description: "Example of positive text classification"
+      input:
+        text: "I love this product!"
+      output:
+        label: "positive"
+        confidence: 0.95
+    - name: "negative-example"  
+      description: "Example of negative text classification"
+      input:
+        text: "This is terrible"
+      output:
+        label: "negative"
+        confidence: 0.89
+  image: "ghcr.io/bubustack/engram-openai:v1.2.3"
+  resources:
+    cpu: "100m"
+    memory: "256Mi"
+  security:
+    requiredSecrets: ["openai-api-key"]
+    networkAccess: ["external"]

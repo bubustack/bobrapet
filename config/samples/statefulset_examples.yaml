@@ -1,0 +1,213 @@
+# StatefulSet Examples for Impulses
+# Shows when and how to use StatefulSets for stateful event listeners
+
+---
+# Kafka Consumer with StatefulSet (partition affinity + offset management)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: kafka-order-processor
+spec:
+  storyRef: "process-order"
+  
+  mapping:
+    order_id: "context.value.order_id"
+    customer_id: "context.value.customer_id"
+    partition: "context.partition"    # Include partition info
+  
+  engine:
+    mode: "statefulset"              # Stateful for partition assignment
+    templateRef: "kafka-consumer"
+    deployment:
+      minReplicas: 3                 # Each pod gets specific partitions
+      maxReplicas: 9                 # Max 9 partitions
+      statefulSet:
+        serviceName: "kafka-consumer-svc"
+        podManagementPolicy: "Parallel"     # Can start pods in parallel
+        updateStrategy: "RollingUpdate"
+        volumeClaimTemplates:
+          - name: "offset-storage"
+            size: "1Gi"
+            storageClass: "fast-ssd"
+            accessModes: ["ReadWriteOnce"]
+  
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+  
+  with:
+    brokers: ["kafka-1:9092", "kafka-2:9092", "kafka-3:9092"]
+    topic: "orders"
+    group: "order-processors"
+    # Each pod will be assigned partitions based on its ordinal
+    partition_assignment_strategy: "static"    # pod-0 -> partitions 0,3,6
+    offset_storage_path: "/data/offsets"       # Persisted storage
+    enable_partition_affinity: true
+
+---
+# Database Change Stream Listener (needs stable connection identity)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: mongo-change-stream
+spec:
+  storyRef: "handle-data-change"
+  
+  mapping:
+    operation: "context.operationType"    # insert, update, delete
+    document_id: "context.documentKey._id"
+    full_document: "context.fullDocument"
+  
+  engine:
+    mode: "statefulset"
+    templateRef: "mongodb-changestream"
+    deployment:
+      minReplicas: 1                    # Single instance for change stream
+      maxReplicas: 1                    # Change streams don't scale horizontally
+      statefulSet:
+        serviceName: "mongo-changestream-svc"
+        podManagementPolicy: "OrderedReady"  # Need ordered startup
+        volumeClaimTemplates:
+          - name: "resume-token-storage"
+            size: "100Mi"               # Small storage for resume tokens
+            accessModes: ["ReadWriteOnce"]
+  
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+  
+  with:
+    mongodb_uri_secret: "mongodb-credentials"
+    database: "production"
+    collection: "users"
+    resume_token_path: "/data/resume-token"  # Persistent resume point
+    watch_full_document: true
+
+---
+# Blockchain Event Listener (needs to track block heights)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: ethereum-event-listener
+spec:
+  storyRef: "process-smart-contract-event"
+  
+  mapping:
+    block_number: "context.blockNumber"
+    transaction_hash: "context.transactionHash" 
+    event_data: "context.eventData"
+  
+  engine:
+    mode: "statefulset"
+    templateRef: "ethereum-listener"
+    deployment:
+      minReplicas: 1
+      maxReplicas: 1                    # Single instance to avoid duplicate processing
+      statefulSet:
+        serviceName: "ethereum-listener-svc"
+        volumeClaimTemplates:
+          - name: "blockchain-state"
+            size: "5Gi"                 # Store block height and sync state
+            accessModes: ["ReadWriteOnce"]
+  
+  with:
+    rpc_url: "https://mainnet.infura.io/v3/YOUR_PROJECT_ID"
+    contract_address: "0x1234567890123456789012345678901234567890"
+    event_signature: "Transfer(address,address,uint256)"
+    state_storage_path: "/data/blockchain-state"
+    start_block: "latest"              # Resume from stored block height
+
+---
+# Message Queue Consumer with Local State (RabbitMQ)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: rabbitmq-task-processor
+spec:
+  storyRef: "process-background-task"
+  
+  mapping:
+    task_id: "context.body.task_id"
+    task_type: "context.body.type"
+    payload: "context.body.payload"
+  
+  engine:
+    mode: "statefulset"
+    templateRef: "rabbitmq-consumer"
+    deployment:
+      minReplicas: 2
+      maxReplicas: 6
+      statefulSet:
+        serviceName: "rabbitmq-consumer-svc"
+        volumeClaimTemplates:
+          - name: "message-state"
+            size: "1Gi"
+            accessModes: ["ReadWriteOnce"]
+  
+  with:
+    rabbitmq_url_secret: "rabbitmq-credentials"
+    queue_name: "background-tasks"
+    prefetch_count: 10                  # Number of unacked messages
+    ack_mode: "manual"                  # Manual acknowledgment
+    state_storage_path: "/data/message-state"
+    dead_letter_queue: "failed-tasks"
+
+---
+# COMPARISON: Stateless Webhook (uses Deployment, not StatefulSet)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: github-webhook
+spec:
+  storyRef: "ci-cd-pipeline"
+  
+  mapping:
+    repository: "context.body.repository.name"
+    branch: "context.body.ref | split('/') | last"
+  
+  engine:
+    mode: "deployment"                  # Stateless - any pod can handle any request
+    templateRef: "webhook-impulse"
+    deployment:
+      minReplicas: 2
+      maxReplicas: 10                   # Can scale freely
+  
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+  
+  with:
+    webhook_path: "/webhooks/github"
+    port: 8080
+    auth_secret: "github-webhook-secret"
+    # No persistent storage needed - stateless HTTP processing
+
+---
+# COMPARISON: Cron Scheduler (uses Deployment - could be StatefulSet for leader election)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: daily-report-scheduler
+spec:
+  storyRef: "generate-daily-report"
+  
+  mapping:
+    report_date: "context.triggerTime | date('2006-01-02')"
+  
+  engine:
+    mode: "deployment"                  # Usually deployment is fine for cron
+    templateRef: "cron-impulse"
+    deployment:
+      minReplicas: 1                    # Single instance to avoid duplicate jobs
+      maxReplicas: 1
+  
+  with:
+    schedule: "0 8 * * *"               # 8 AM daily
+    timezone: "UTC"
+    # Could use StatefulSet with leader election for HA cron scheduling

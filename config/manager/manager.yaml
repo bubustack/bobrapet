@@ -64,10 +64,11 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
         image: controller:latest
-        imagePullPolicy: Never
+        imagePullPolicy: IfNotPresent
         name: manager
         ports: []
         securityContext:
+          readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
             drop:

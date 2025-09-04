@@ -1,0 +1,71 @@
+apiVersion: bubu.sh/v1alpha1
+kind: Story
+metadata:
+  name: onboarding-flow
+spec:
+  inputsSchema: |
+    {
+      "type": "object",
+      "properties": {
+        "message": {"type": "string"},
+        "emails": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  outputSchema: |
+    {
+      "type": "object", 
+      "properties": {
+        "status": {"type": "string"},
+        "processed": {"type": "integer"}
+      }
+    }
+  policy:
+    timeouts:
+      story: "30m"
+      step: "5m"
+    retries:
+      maxRetries: 3
+      backoff: "exponential"
+      baseDelay: "2s"
+      maxDelay: "1m"
+    shortCircuit:
+      on: ["return", "fail"]
+      action: "cancelInFlight"
+  steps:
+    - name: classify
+      ref: classify-text
+      with:
+        text: "{{ inputs.message }}"
+    
+    - name: decision
+      type: condition
+      if: "{{ steps.classify.output.label == 'positive' }}"
+      then:
+        - name: notify
+          ref: slack-send
+          with:
+            message: "Positive message received"
+            channel: "#notifications"
+      else:
+        - name: wait
+          type: sleep
+          with:
+            duration: "5m"
+    
+    - name: bulk-send
+      type: loop
+      items: "{{ inputs.emails }}"
+      body:
+        - name: send
+          ref: send-email
+          with:
+            to: "{{ item }}"
+            subject: "Welcome!"
+            body: "Thank you for your interest"
+    
+    - name: finish
+      type: stop
+      mode: return
+      output:
+        status: "completed"
+        processed: "{{ len(inputs.emails) }}"

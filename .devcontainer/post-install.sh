@@ -16,18 +16,9 @@ curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$ARCH/kubectl"
 chmod +x kubectl
 mv kubectl /usr/local/bin/kubectl
 
-curl -L https://istio.io/downloadIstio | ISTIO_VERSION=1.25.0 sh -
-mv istio-1.25.0/bin/istioctl /usr/local/bin/istioctl
-rm -rf istio-1.25.0
-
-curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash -
-
-docker network create -d=bridge --subnet=172.19.0.0/24 kind
-
 docker --version
 go version
 kubectl version --client
 
 kind version
 kubebuilder version
-helm version

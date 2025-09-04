@@ -1,0 +1,115 @@
+apiVersion: bubu.sh/v1alpha1
+kind: Story
+metadata:
+  name: ai-agent-pipeline
+  annotations:
+    description: "Advanced AI agent workflow showcasing new primitives"
+spec:
+  inputsSchema: |
+    {
+      "type": "object",
+      "properties": {
+        "documents": {"type": "array", "items": {"type": "string"}},
+        "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        "user_id": {"type": "string"}
+      }
+    }
+  outputSchema: |
+    {
+      "type": "object",
+      "properties": {
+        "processed_count": {"type": "integer"},
+        "results": {"type": "array"},
+        "status": {"type": "string"}
+      }
+    }
+  policy:
+    timeouts:
+      story: "45m"
+      step: "10m"
+    retries:
+      maxRetries: 2
+      backoff: "exponential"
+  steps:
+    # Step 1: Filter out empty documents
+    - name: filter-documents
+      type: filter
+      filter: "{{ size(inputs.documents) > 0 && all(inputs.documents, doc, size(doc) > 10) }}"
+      
+    # Step 2: Transform documents to processing format
+    - name: prepare-documents
+      type: transform
+      transform: "{{ inputs.documents.map(doc, {'text': doc, 'user': inputs.user_id, 'timestamp': now()}) }}"
+      
+    # Step 3: Route based on priority using switch
+    - name: priority-router
+      type: switch
+      cases:
+        - when: "{{ inputs.priority == 'urgent' }}"
+          steps:
+            - name: urgent-processing
+              ref: fast-ai-processor
+        - when: "{{ inputs.priority == 'high' }}"
+          steps:
+            - name: high-priority
+              ref: premium-ai-processor
+        - when: "{{ inputs.priority == 'normal' }}"
+          steps:
+            - name: standard-processing
+              ref: standard-ai-processor
+      default:
+        - name: batch-processing
+          type: batch
+          size: 10
+          batchTimeout: "5m"
+          
+    # Step 4: Throttle API calls to respect rate limits
+    - name: rate-limit
+      type: throttle
+      rate: "100/minute"
+      burst: 10
+      
+    # Step 5: Execute specialized analysis sub-workflow
+    - name: detailed-analysis
+      type: executeStory
+      storyRef: document-analysis-pipeline
+      subInputs:
+        documents: "{{ steps.prepare-documents.result }}"
+        model: "gpt-4"
+        
+    # Step 6: Wait for external approval if high-value documents
+    - name: approval-gate
+      type: condition
+      if: "{{ inputs.priority == 'urgent' || size(inputs.documents) > 100 }}"
+      then:
+        - name: wait-approval
+          type: wait
+          duration: "30m"
+          event: "approval-received"
+      else:
+        - name: auto-approve
+          type: setData
+          with:
+            approved: true
+            
+    # Step 7: Final processing in parallel
+    - name: final-processing
+      type: parallel
+      branchPolicy:
+        on: ["return", "fail"]
+        action: "waitAll"
+      branches:
+        - name: generate-summary
+          ref: summary-generator
+        - name: extract-entities
+          ref: entity-extractor
+        - name: sentiment-analysis
+          ref: sentiment-analyzer
+          
+    # Step 8: Merge all results
+    - name: consolidate-results
+      type: mergeData
+      with:
+        processed_count: "{{ len(inputs.documents) }}"
+        completion_time: "{{ now() }}"
+        status: "completed"

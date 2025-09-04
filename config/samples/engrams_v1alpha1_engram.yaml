@@ -1,0 +1,35 @@
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: classify-text
+spec:
+  templateRef: text-classifier-v1
+  engine:
+    mode: container
+    image: ghcr.io/bubustack/engram-openai:v1.2.3@sha256:abc123
+  # Generic configuration - interpreted by the OpenAI engram container
+  with:
+    model: "gpt-4"
+    maxTokens: 10
+    temperature: 0.1
+    template: |
+      Classify the following text as positive, negative, or neutral:
+      
+      Text: {{ .text }}
+      
+      Return only: positive, negative, or neutral
+    secrets:
+      apiKey: "openai-api-key"
+  retry:
+    maxRetries: 3
+    backoff: exponential
+    baseDelay: "1s"
+    maxDelay: "30s"
+  resources:
+    cpu: "100m"
+    memory: "256Mi"
+  security:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    requiredSecrets: ["openai-api-key"]
+    networkPolicy: "allow-egress"

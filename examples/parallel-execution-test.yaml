@@ -1,0 +1,192 @@
+# Test Workflow for Parallel Execution
+# This workflow demonstrates the new parallel execution capabilities
+
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Story
+metadata:
+  name: parallel-execution-test
+  annotations:
+    description: "Test workflow to validate parallel step execution with dependencies"
+spec:
+  inputsSchema: |
+    {
+      "type": "object",
+      "properties": {
+        "userId": {"type": "string"},
+        "operation": {"type": "string"}
+      },
+      "required": ["userId", "operation"]
+    }
+    
+  steps:
+    # These two steps have no dependencies - should execute in parallel
+    - name: fetch-user-profile
+      ref: user-profile-fetcher
+      needs: []  # No dependencies - runs immediately
+      with:
+        userId: "{{ .inputs.userId }}"
+        
+    - name: fetch-user-settings
+      ref: user-settings-fetcher  
+      needs: []  # No dependencies - runs parallel with fetch-user-profile
+      with:
+        userId: "{{ .inputs.userId }}"
+        
+    # This step depends on both previous steps - waits for completion
+    - name: merge-user-data
+      ref: data-merger
+      needs: [fetch-user-profile, fetch-user-settings]  # Waits for both
+      with:
+        profile: "{{ .steps.fetch-user-profile.output }}"
+        settings: "{{ .steps.fetch-user-settings.output }}"
+        
+    # These two steps depend only on merge-user-data - should execute in parallel
+    - name: generate-recommendations
+      ref: recommendation-engine
+      needs: [merge-user-data]
+      with:
+        userData: "{{ .steps.merge-user-data.output }}"
+        
+    - name: update-cache
+      ref: cache-updater
+      needs: [merge-user-data]  # Same dependency - runs parallel with recommendations
+      with:
+        userData: "{{ .steps.merge-user-data.output }}"
+        operation: "{{ .inputs.operation }}"
+        
+    # Final step depends on all previous work
+    - name: send-notification
+      ref: notification-sender
+      needs: [generate-recommendations, update-cache]
+      with:
+        recommendations: "{{ .steps.generate-recommendations.output }}"
+        userId: "{{ .inputs.userId }}"
+
+---
+# Test Engrams (mock implementations for testing)
+
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: user-profile-fetcher
+spec:
+  engine:
+    mode: job
+    image: ghcr.io/bubustack/test-engram:v1.0.0
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"  
+      memory: "256Mi"
+      maxExecutionTime: "30s"
+  with:
+    operation: "fetchProfile"
+    delay: "2s"  # Simulate work
+
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: user-settings-fetcher
+spec:
+  engine:
+    mode: job
+    image: ghcr.io/bubustack/test-engram:v1.0.0
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+      maxExecutionTime: "20s"
+  with:
+    operation: "fetchSettings"
+    delay: "1s"  # Simulate work
+
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: data-merger
+spec:
+  engine:
+    mode: job
+    image: ghcr.io/bubustack/test-engram:v1.0.0
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "512Mi"
+      maxExecutionTime: "45s"
+  with:
+    operation: "mergeData"
+    delay: "3s"  # Simulate work
+
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: recommendation-engine
+spec:
+  engine:
+    mode: job
+    image: ghcr.io/bubustack/test-engram:v1.0.0
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2000m"
+      memory: "1Gi"
+      maxExecutionTime: "60s"
+  with:
+    operation: "generateRecommendations"
+    delay: "5s"  # Simulate work
+
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: cache-updater
+spec:
+  engine:
+    mode: job
+    image: ghcr.io/bubustack/test-engram:v1.0.0
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+      maxExecutionTime: "30s"
+  with:
+    operation: "updateCache"
+    delay: "2s"  # Simulate work
+
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: notification-sender
+spec:
+  engine:
+    mode: job
+    image: ghcr.io/bubustack/test-engram:v1.0.0
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "200m"
+      memory: "128Mi"
+      maxExecutionTime: "15s"
+  with:
+    operation: "sendNotification"
+    delay: "1s"  # Simulate work

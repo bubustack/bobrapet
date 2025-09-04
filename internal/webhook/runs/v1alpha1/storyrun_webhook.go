@@ -1,0 +1,101 @@
+/*
+Copyright 2025 BubuStack.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	"context"
+	"fmt"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	ctrl "sigs.k8s.io/controller-runtime"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+)
+
+// nolint:unused
+// log is for logging in this package.
+var storyrunlog = logf.Log.WithName("storyrun-resource")
+
+// SetupStoryRunWebhookWithManager registers the webhook for StoryRun in the manager.
+func SetupStoryRunWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr).For(&runsv1alpha1.StoryRun{}).
+		WithValidator(&StoryRunCustomValidator{}).
+		Complete()
+}
+
+// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
+
+// TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
+// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
+// Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
+// +kubebuilder:webhook:path=/validate-runs-bubu-sh-v1alpha1-storyrun,mutating=false,failurePolicy=fail,sideEffects=None,groups=runs.bubu.sh,resources=storyruns,verbs=create;update,versions=v1alpha1,name=vstoryrun-v1alpha1.kb.io,admissionReviewVersions=v1
+
+// StoryRunCustomValidator struct is responsible for validating the StoryRun resource
+// when it is created, updated, or deleted.
+//
+// NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
+// as this struct is used only for temporary operations and does not need to be deeply copied.
+type StoryRunCustomValidator struct {
+	// TODO(user): Add more fields as needed for validation
+}
+
+var _ webhook.CustomValidator = &StoryRunCustomValidator{}
+
+// ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
+func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
+	storyrun, ok := obj.(*runsv1alpha1.StoryRun)
+	if !ok {
+		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
+	}
+	storyrunlog.Info("Validation for StoryRun upon creation", "name", storyrun.GetName())
+
+	return v.validateStoryRun(storyrun)
+}
+
+// ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
+func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	storyrun, ok := newObj.(*runsv1alpha1.StoryRun)
+	if !ok {
+		return nil, fmt.Errorf("expected a StoryRun object for the newObj but got %T", newObj)
+	}
+	storyrunlog.Info("Validation for StoryRun upon update", "name", storyrun.GetName())
+
+	return v.validateStoryRun(storyrun)
+}
+
+// ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
+func (v *StoryRunCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	storyrun, ok := obj.(*runsv1alpha1.StoryRun)
+	if !ok {
+		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
+	}
+	storyrunlog.Info("Validation for StoryRun upon deletion", "name", storyrun.GetName())
+
+	// TODO(user): fill in your validation logic upon object deletion.
+
+	return nil, nil
+}
+
+func (v *StoryRunCustomValidator) validateStoryRun(sr *runsv1alpha1.StoryRun) (admission.Warnings, error) {
+	if sr.Spec.StoryRef == "" {
+		return nil, fmt.Errorf("spec.storyRef is required")
+	}
+	return nil, nil
+}

@@ -1,0 +1,38 @@
+# Simple HostPath storage that supports ReadWriteMany for Kind testing
+# This creates a shared directory on each node that can be accessed by multiple pods
+
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: hostpath-rwx
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+---
+# Pre-create a PV for our story since we're using static provisioning
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: test-http-story-pv
+  labels:
+    story: test-http-story
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: hostpath-rwx
+  hostPath:
+    path: /tmp/bobrapet-shared/test-http-story
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/os
+          operator: In
+          values:
+          - linux

@@ -1,5 +1,5 @@
 /*
-Copyright 2025.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -221,6 +221,7 @@ var _ = Describe("Manager", Ordered, func() {
 							"command": ["/bin/sh", "-c"],
 							"args": ["curl -v -k -H 'Authorization: Bearer %s' https://%s.%s.svc.cluster.local:8443/metrics"],
 							"securityContext": {
+								"readOnlyRootFilesystem": true,
 								"allowPrivilegeEscalation": false,
 								"capabilities": {
 									"drop": ["ALL"]
@@ -232,7 +233,7 @@ var _ = Describe("Manager", Ordered, func() {
 								}
 							}
 						}],
-						"serviceAccount": "%s"
+						"serviceAccountName": "%s"
 					}
 				}`, token, metricsServiceName, namespace, serviceAccountName))
 			_, err = utils.Run(cmd)
@@ -266,20 +267,6 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyCertManager).Should(Succeed())
 		})
 
-		It("should have CA injection for mutating webhooks", func() {
-			By("checking CA injection for mutating webhooks")
-			verifyCAInjection := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get",
-					"mutatingwebhookconfigurations.admissionregistration.k8s.io",
-					"bobrapet-mutating-webhook-configuration",
-					"-o", "go-template={{ range .webhooks }}{{ .clientConfig.caBundle }}{{ end }}")
-				mwhOutput, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(len(mwhOutput)).To(BeNumerically(">", 10))
-			}
-			Eventually(verifyCAInjection).Should(Succeed())
-		})
-
 		It("should have CA injection for validating webhooks", func() {
 			By("checking CA injection for validating webhooks")
 			verifyCAInjection := func(g Gomega) {
@@ -290,6 +277,20 @@ var _ = Describe("Manager", Ordered, func() {
 				vwhOutput, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(len(vwhOutput)).To(BeNumerically(">", 10))
+			}
+			Eventually(verifyCAInjection).Should(Succeed())
+		})
+
+		It("should have CA injection for mutating webhooks", func() {
+			By("checking CA injection for mutating webhooks")
+			verifyCAInjection := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get",
+					"mutatingwebhookconfigurations.admissionregistration.k8s.io",
+					"bobrapet-mutating-webhook-configuration",
+					"-o", "go-template={{ range .webhooks }}{{ .clientConfig.caBundle }}{{ end }}")
+				mwhOutput, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(len(mwhOutput)).To(BeNumerically(">", 10))
 			}
 			Eventually(verifyCAInjection).Should(Succeed())
 		})

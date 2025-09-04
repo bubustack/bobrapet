@@ -1,7 +1,11 @@
 ## Append samples of your project ##
 resources:
-- transport_v1alpha1_websocket.yaml
-- transport_v1alpha1_http.yaml
-- v1alpha1_model.yaml
-- v1alpha1_modelconfig.yaml
+# Current API group samples (consolidated)
+- v1alpha1_story.yaml
+- v1alpha1_engram.yaml  
+- v1alpha1_impulse.yaml
+- runs_v1alpha1_storyrun.yaml
+- runs_v1alpha1_steprun.yaml
+- catalog_v1alpha1_engramtemplate.yaml
+- catalog_v1alpha1_impulsetemplate.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

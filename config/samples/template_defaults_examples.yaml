@@ -1,0 +1,380 @@
+# Template Defaults and Inheritance Examples
+# Shows how templates provide defaults that users can override
+# Inheritance: Template defaults → User overrides → Kubernetes defaults (empty)
+
+---
+# EngramTemplate with comprehensive defaults
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: openai-llm
+spec:
+  version: "1.2.0"
+  description: "OpenAI LLM with intelligent defaults"
+  supportedModes: ["job", "deployment"]
+  
+  # Input/Output schemas (Engram-specific)
+  inputSchema:
+    type: object
+    properties:
+      prompt: 
+        type: string
+        description: "The text prompt for the LLM"
+        required: true
+      model: 
+        type: string
+        enum: ["gpt-4", "gpt-4-turbo"]
+        default: "gpt-4"
+        description: "Which GPT model to use"
+      max_tokens: 
+        type: integer
+        default: 1000
+        description: "Maximum tokens in response"
+  
+  outputSchema:
+    type: object
+    properties:
+      response: {type: string}
+      usage: {type: object}
+  
+  configSchema:
+    type: object
+    properties:
+      api_key_secret: 
+        type: string
+        default: "openai-api-key"
+        description: "Secret name containing OpenAI API key"
+        required: true
+      timeout: 
+        type: string
+        default: "30s"
+        description: "Request timeout duration"
+  
+  # Shared template configuration
+  image: "ghcr.io/bubustack/openai-llm:v1.2.0"
+  
+  # Template provides intelligent defaults
+  defaults:
+    workload:
+      # Job mode defaults
+      parallelism: 1
+      completions: 1
+      job:
+        backoffLimit: 2
+        completionMode: "NonIndexed"
+        ttlSecondsAfterFinished: 3600  # 1 hour cleanup
+      
+      # Common defaults
+      activeDeadlineSeconds: 1800      # 30 minute timeout
+    
+    retry:
+      maxRetries: 3
+      backoff: "exponential"
+      baseDelay: "2s"
+      maxDelay: "30s"
+    
+    timeout: "60s"
+    
+    resources:
+      requests:
+        cpu: "500m"                    # Default: moderate CPU
+        memory: "1Gi"                  # Default: 1GB memory
+      limits:
+        cpu: "2000m"                   # Default: up to 2 cores
+        memory: "4Gi"                  # Default: up to 4GB
+        maxNetworkConns: 10            # Default: 10 connections
+      
+      maxConcurrentInstances: 5        # Default: max 5 parallel
+      maxExecutionTime: "300s"         # Default: 5 minute max
+    
+    security:
+      runAsNonRoot: true               # Default: secure
+      allowPrivilegeEscalation: false  # Default: secure
+      requiredSecrets: ["openai-api-key"]
+      networkPolicy: "external"        # Default: needs external access
+    
+    # Default container configuration
+    config:
+      model: "gpt-4"
+      max_tokens: 1000
+      temperature: 0.7
+      timeout: "30s"
+
+  uiHints:
+    category: "ai"
+    displayName: "OpenAI GPT"
+    icon: "brain"
+    color: "#00D4AA"
+    tags: ["llm", "openai", "gpt", "ai"]
+
+---
+# ImpulseTemplate with defaults
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: ImpulseTemplate
+metadata:
+  name: kafka-consumer
+spec:
+  version: "1.0.0"
+  description: "Kafka consumer with StatefulSet defaults"
+  supportedModes: ["statefulset"]  # Only stateful mode
+  
+  # Context/Mapping schemas (Impulse-specific)
+  contextSchema:
+    type: object
+    properties:
+      topic: {type: string}
+      partition: {type: integer}
+      offset: {type: integer}
+      value: {type: object}
+  
+  mappingSchema:
+    type: object
+    properties:
+      message_id: {type: string}
+      payload: {type: object}
+  
+  configSchema:
+    type: object
+    properties:
+      brokers: 
+        type: array
+        items: {type: string}
+        description: "Kafka broker addresses"
+        required: true
+      topic: 
+        type: string
+        description: "Kafka topic to consume from"
+        required: true
+      group: 
+        type: string
+        description: "Consumer group ID"
+        required: true
+      auto_offset_reset:
+        type: string
+        enum: ["earliest", "latest"]
+        default: "earliest"
+        description: "Where to start consuming"
+      max_poll_records:
+        type: integer
+        default: 10
+        description: "Max records per poll"
+  
+  # Shared template configuration
+  image: "ghcr.io/bubustack/kafka-consumer:v1.0.0"
+  
+  # Template provides StatefulSet defaults
+  defaults:
+    workload:
+      replicas: 3                      # Default: 3 replicas for HA
+      updateStrategy:
+        type: "RollingUpdate"
+        rollingUpdate:
+          maxUnavailable: 1            # Default: update one at a time
+      
+      statefulSet:
+        podManagementPolicy: "Parallel"  # Default: can start in parallel
+        # serviceName: user must specify (StatefulSet requirement)
+    
+    retry:
+      maxRetries: 5
+      backoff: "exponential" 
+      baseDelay: "5s"
+      maxDelay: "300s"
+    
+    resources:
+      requests:
+        cpu: "200m"                    # Default: light CPU
+        memory: "256Mi"                # Default: 256MB memory
+      limits:
+        cpu: "1000m"                   # Default: up to 1 core
+        memory: "512Mi"                # Default: up to 512MB
+      
+      maxConcurrentInstances: 10       # Default: max 10 parallel triggers
+    
+    security:
+      runAsNonRoot: true
+      requiredSecrets: ["kafka-credentials"]
+      networkPolicy: "external"       # Default: needs external Kafka access
+    
+    # Default container configuration
+    config:
+      auto_offset_reset: "earliest"
+      enable_auto_commit: false
+      max_poll_records: 10
+      session_timeout_ms: 30000
+
+  uiHints:
+    category: "messaging"
+    displayName: "Kafka Consumer"
+    icon: "message-queue"
+    color: "#231F20"
+    tags: ["kafka", "messaging", "stream", "consumer"]
+
+---
+# Engram using template defaults (minimal user configuration)
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: document-analysis
+spec:
+  engine:
+    mode: "job"                        # User choice: job mode
+    templateRef: "openai-llm"          # Uses template defaults
+    # workload: not specified → uses template defaults
+  
+  # resources: not specified → uses template defaults
+  # retry: not specified → uses template defaults  
+  # security: not specified → uses template defaults
+  
+  # User only specifies what they want to override
+  with:
+    model: "gpt-4-turbo"               # Override: use turbo model
+    max_tokens: 2000                   # Override: more tokens
+    # Other fields use template defaults
+
+---
+# Engram with user overrides (user customization)
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: batch-translation
+spec:
+  engine:
+    mode: "job"
+    templateRef: "openai-llm"
+    workload:
+      # User override: higher parallelism for batch processing
+      parallelism: 10                  # Override template default (1)
+      completions: 100                 # Override template default (1)
+      job:
+        backoffLimit: 5                # Override template default (2)
+        # ttlSecondsAfterFinished: uses template default (3600)
+      
+      # activeDeadlineSeconds: uses template default (1800)
+  
+  # User override: more resources for batch job
+  resources:
+    requests:
+      cpu: "1000m"                     # Override template default (500m)
+      memory: "2Gi"                    # Override template default (1Gi)
+    limits:
+      cpu: "4000m"                     # Override template default (2000m)
+      memory: "8Gi"                    # Override template default (4Gi)
+    
+    # maxConcurrentInstances: uses template default (5)
+    maxExecutionTime: "600s"           # Override template default (300s)
+  
+  # retry: uses all template defaults
+  # security: uses all template defaults
+  
+  with:
+    model: "gpt-4"                     # Use template default
+    max_tokens: 4000                   # Override: more tokens for translation
+    batch_size: 50                     # User-specific config
+
+---
+# Impulse using template defaults (minimal configuration)
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: order-stream
+spec:
+  storyRef: "process-order"
+  
+  mapping:
+    order_id: "context.value.order_id"
+    payload: "context.value"
+  
+  engine:
+    mode: "statefulset"                # User choice: stateful mode
+    templateRef: "kafka-consumer"      # Uses template defaults
+    workload:
+      # replicas: uses template default (3)
+      # updateStrategy: uses template defaults
+      statefulSet:
+        serviceName: "order-stream-svc"  # User MUST specify (required)
+        volumeClaimTemplates:
+          - name: "offset-storage"       # User MUST specify storage
+            size: "1Gi"
+            accessModes: ["ReadWriteOnce"]
+        # podManagementPolicy: uses template default (Parallel)
+  
+  # resources: uses all template defaults
+  # retry: uses all template defaults
+  # security: uses all template defaults
+  
+  with:
+    brokers: ["kafka-1:9092", "kafka-2:9092", "kafka-3:9092"]  # User required
+    topic: "orders"                    # User required
+    group: "order-processors"          # User required
+    # Other config uses template defaults
+
+---
+# Impulse with user overrides
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: high-volume-events
+spec:
+  storyRef: "process-event"
+  
+  mapping:
+    event_type: "context.value.type"
+    data: "context.value.data"
+  
+  engine:
+    mode: "statefulset"
+    templateRef: "kafka-consumer"
+    workload:
+      replicas: 6                      # Override template default (3)
+      updateStrategy:
+        type: "RollingUpdate"          # Use template default
+        rollingUpdate:
+          maxUnavailable: 2            # Override template default (1)
+      
+      statefulSet:
+        serviceName: "high-volume-svc"
+        podManagementPolicy: "OrderedReady"  # Override template default (Parallel)
+        volumeClaimTemplates:
+          - name: "offset-storage"
+            size: "5Gi"                # Larger storage than typical
+            storageClass: "fast-ssd"   # Faster storage
+            accessModes: ["ReadWriteOnce"]
+  
+  # User override: more resources for high-volume processing
+  resources:
+    requests:
+      cpu: "500m"                      # Override template default (200m)
+      memory: "512Mi"                  # Override template default (256Mi)
+    limits:
+      cpu: "2000m"                     # Override template default (1000m)
+      memory: "1Gi"                    # Override template default (512Mi)
+    
+    maxConcurrentInstances: 20         # Override template default (10)
+  
+  retry:
+    maxRetries: 10                     # Override template default (5)
+    # Other retry fields use template defaults
+  
+  with:
+    brokers: ["kafka-1:9092", "kafka-2:9092", "kafka-3:9092"]
+    topic: "high-volume-events"
+    group: "high-volume-processors"
+    max_poll_records: 50               # Override template default (10)
+    # Other config uses template defaults
+
+---
+# INHERITANCE FLOW DEMONSTRATION:
+# 
+# Template Default    User Override    Final Result
+# ---------------     -------------    ------------
+# parallelism: 1      parallelism: 10  parallelism: 10    (user wins)
+# backoffLimit: 2     backoffLimit: 5  backoffLimit: 5    (user wins)
+# ttlSeconds: 3600    (not specified)  ttlSeconds: 3600   (template default)
+# cpu: "500m"         cpu: "1000m"     cpu: "1000m"       (user wins)  
+# memory: "1Gi"       (not specified)  memory: "1Gi"      (template default)
+# maxRetries: 3       (not specified)  maxRetries: 3      (template default)
+# runAsNonRoot: true  (not specified)  runAsNonRoot: true (template default)
+# replicas: (none)   replicas: (none) replicas: (empty)  (Kubernetes default)
+#
+# This provides intelligent defaults while preserving full user control!

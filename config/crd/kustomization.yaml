@@ -2,11 +2,13 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/transport.bubu.sh_websockets.yaml
-- bases/transport.bubu.sh_https.yaml
-- bases/bubu.sh_models.yaml
-- bases/bubu.sh_modelconfigs.yaml
-- bases/bubu.ai.bubu.sh_prompts.yaml
+- bases/bubu.sh_stories.yaml
+- bases/bubu.sh_engrams.yaml
+- bases/bubu.sh_impulses.yaml
+- bases/runs.bubu.sh_storyruns.yaml
+- bases/runs.bubu.sh_stepruns.yaml
+- bases/catalog.bubu.sh_engramtemplates.yaml
+- bases/catalog.bubu.sh_impulsetemplates.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

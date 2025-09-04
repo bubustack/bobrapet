@@ -8,10 +8,31 @@ rules:
   - ""
   resources:
   - configmaps
-  - services
+  - namespaces
+  - pods
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
   - get
   - list
   - patch
@@ -21,6 +42,18 @@ rules:
   - apps
   resources:
   - deployments
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
   verbs:
   - create
   - delete
@@ -32,8 +65,9 @@ rules:
 - apiGroups:
   - bubu.sh
   resources:
-  - modelconfigs
-  - models
+  - engrams
+  - impulses
+  - stories
   verbs:
   - create
   - delete
@@ -45,23 +79,26 @@ rules:
 - apiGroups:
   - bubu.sh
   resources:
-  - modelconfigs/finalizers
-  - models/finalizers
+  - engrams/finalizers
+  - impulses/finalizers
+  - stories/finalizers
   verbs:
   - update
 - apiGroups:
   - bubu.sh
   resources:
-  - modelconfigs/status
-  - models/status
+  - engrams/status
+  - impulses/status
+  - stories/status
   verbs:
   - get
   - patch
   - update
 - apiGroups:
-  - networking.istio.io
+  - catalog.bubu.sh
   resources:
-  - virtualservices
+  - engramtemplates
+  - impulsetemplates
   verbs:
   - create
   - delete
@@ -71,10 +108,25 @@ rules:
   - update
   - watch
 - apiGroups:
-  - transport.bubu.sh
+  - catalog.bubu.sh
   resources:
-  - https
-  - websockets
+  - engramtemplates/finalizers
+  - impulsetemplates/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - catalog.bubu.sh
+  resources:
+  - engramtemplates/status
+  - impulsetemplates/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - runs.bubu.sh
+  resources:
+  - stepruns
   verbs:
   - create
   - delete
@@ -84,18 +136,27 @@ rules:
   - update
   - watch
 - apiGroups:
-  - transport.bubu.sh
+  - runs.bubu.sh
   resources:
-  - https/finalizers
-  - websockets/finalizers
+  - stepruns/finalizers
   verbs:
   - update
 - apiGroups:
-  - transport.bubu.sh
+  - runs.bubu.sh
   resources:
-  - https/status
-  - websockets/status
+  - stepruns/status
+  - storyruns/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - runs.bubu.sh
+  resources:
+  - storyruns
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch

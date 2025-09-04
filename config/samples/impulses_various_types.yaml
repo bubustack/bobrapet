@@ -1,0 +1,200 @@
+# Examples of different Impulse types using the generic 'with' configuration
+# This showcases the DOTADIW principle - each impulse type handles its own specifics
+
+---
+# HTTP Webhook Impulse
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: github-webhook
+spec:
+  storyRef: ci-cd-pipeline
+  contextMapping:
+    repository: "request.body.repository.name"
+    branch: "request.body.ref"
+    commit: "request.body.head_commit.id"
+  engine:
+    mode: webhook
+    templateRef: "webhook-impulse"
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    minReplicas: 2
+  with:
+    path: "/webhooks/github"
+    method: "POST"
+    auth:
+      type: "webhook-secret"
+      secret: "github-webhook-secret"
+      header: "X-Hub-Signature-256"
+    validation:
+      events: ["push", "pull_request"]
+      branches: ["main", "develop"]
+
+---
+# Cron Schedule Impulse
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: daily-reports
+spec:
+  storyRef: generate-daily-report
+  contextMapping:
+    date: "{{ now().format('2006-01-02') }}"
+    departments: "['sales', 'marketing', 'engineering']"
+  engine:
+    mode: job
+    templateRef: "cron-impulse"
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+  with:
+    schedule: "0 8 * * *"  # Every day at 8 AM
+    timezone: "America/New_York"
+    runOnStartup: false
+
+---
+# Kafka Consumer Impulse
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: order-processor
+spec:
+  storyRef: process-order
+  contextMapping:
+    order_id: "message.value.order_id"
+    customer_id: "message.value.customer_id"
+    items: "message.value.items"
+  engine:
+    mode: deployment
+    templateRef: "kafka-impulse"
+  resources:
+    requests:
+      cpu: "300m"
+      memory: "512Mi"
+    minReplicas: 3
+  with:
+    brokers: ["kafka-cluster:9092"]
+    topic: "orders"
+    group: "order-processors"
+    autoOffsetReset: "earliest"
+    maxPollRecords: 10
+
+---
+# PubSub Subscription Impulse
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: gcp-events
+spec:
+  storyRef: handle-gcp-event
+  contextMapping:
+    event_type: "message.attributes.eventType"
+    resource: "message.data.resource"
+    timestamp: "message.publishTime"
+  engine:
+    mode: container
+    image: "ghcr.io/bubustack/impulse-pubsub:v1.0.0"
+    resources:
+      cpu: "200m"
+      memory: "256Mi"
+  with:
+    project: "my-gcp-project"
+    subscription: "workflow-events"
+    credentials: "gcp-service-account"
+    ackDeadline: "600s"
+    maxMessages: 5
+
+---
+# File System Watcher Impulse  
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: file-processor
+spec:
+  storyRef: process-uploaded-file
+  contextMapping:
+    file_path: "event.path"
+    file_size: "event.size"
+    operation: "event.operation"
+  engine:
+    mode: container
+    image: "ghcr.io/bubustack/impulse-fswatch:v1.0.0"
+    resources:
+      cpu: "100m"
+      memory: "128Mi"
+  with:
+    watchPath: "/data/uploads"
+    patterns: ["*.pdf", "*.docx", "*.txt"]
+    events: ["create", "modify"]
+    recursive: true
+    debounceMs: 1000
+
+---
+# Email/IMAP Impulse
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: support-emails
+spec:
+  storyRef: process-support-email
+  contextMapping:
+    from: "email.from"
+    subject: "email.subject" 
+    body: "email.body"
+    attachments: "email.attachments"
+  engine:
+    mode: container
+    image: "ghcr.io/bubustack/impulse-imap:v1.0.0"
+    resources:
+      cpu: "100m"
+      memory: "128Mi"
+  with:
+    server: "imap.gmail.com"
+    port: 993
+    ssl: true
+    credentials: "email-credentials"
+    folder: "INBOX"
+    markAsRead: true
+    pollInterval: "30s"
+
+---
+# External GRPC Service Impulse
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: external-events
+spec:
+  storyRef: handle-external-event
+  contextMapping:
+    event_id: "event.id"
+    payload: "event.data"
+  engine:
+    mode: grpc
+    serviceRef: "external-event-service.default.svc.cluster.local:9090"
+  with:
+    subscription: "workflow-events"
+    filter: "eventType in ['user.created', 'order.placed']"
+
+---
+# External Webhook Impulse  
+apiVersion: bubu.sh/v1alpha1
+kind: Impulse
+metadata:
+  name: external-webhook
+spec:
+  storyRef: process-webhook-event
+  contextMapping:
+    source: "webhook.source"
+    data: "webhook.payload"
+  engine:
+    mode: webhook
+    endpoint: "https://external-system.com/api/webhooks/register"
+  with:
+    callbackUrl: "https://myapp.com/api/callbacks/impulse"
+    events: ["deployment.success", "test.failure"]
+    auth:
+      type: "bearer"
+      token: "webhook-token"

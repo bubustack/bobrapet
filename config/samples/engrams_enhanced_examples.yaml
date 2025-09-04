@@ -1,0 +1,302 @@
+# Enhanced Engram examples using the new template-based architecture
+# These examples show how Engrams reference EngramTemplates for images and defaults
+
+---
+# OpenAI GPT Engram referencing template
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: openai-gpt-4
+  annotations:
+    catalog.bubu.sh/template: "openai-llm"
+    catalog.bubu.sh/version: "1.2.0"
+spec:
+  # Engine configuration references template for image
+  engine:
+    mode: "job"
+    templateRef: "openai-llm"
+    deployment:
+      minReplicas: 2
+      maxReplicas: 10
+      idleTimeout: "5m"
+  
+  # Schema definitions for validation
+  inputSchema:
+    type: object
+    required: ["prompt"]
+    properties:
+      prompt:
+        type: string
+        description: "The text prompt for the LLM"
+      model:
+        type: string
+        enum: ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+        default: "gpt-4"
+      max_tokens:
+        type: integer
+        minimum: 1
+        maximum: 4000
+        default: 1000
+      temperature:
+        type: number
+        minimum: 0
+        maximum: 2
+        default: 0.7
+  
+  outputSchema:
+    type: object
+    properties:
+      response:
+        type: string
+        description: "The LLM response"
+      usage:
+        type: object
+        properties:
+          prompt_tokens:
+            type: integer
+          completion_tokens:
+            type: integer
+          total_tokens:
+            type: integer
+  
+  # Instance-specific configuration
+  with:
+    model: "gpt-4"
+    max_tokens: 2000
+    temperature: 0.7
+    api_endpoint: "https://api.openai.com/v1/chat/completions"
+    rate_limit_rpm: 500
+    timeout: "30s"
+  
+  # Resource management
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    maxConcurrentInstances: 5
+    maxExecutionTime: "60s"
+    maxRetries: 3
+  
+  # Retry configuration
+  retry:
+    maxRetries: 3
+    backoff: "exponential"
+    baseDelay: "1s"
+    maxDelay: "30s"
+  timeout: "60s"
+  
+  # Security settings
+  security:
+    runAsNonRoot: true
+    requiredSecrets: ["openai-api-key"]
+    networkPolicy: "external"
+
+---
+# Data Processor Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: csv-processor
+  annotations:
+    catalog.bubu.sh/template: "data-processor"
+spec:
+  engine:
+    mode: "job"
+    templateRef: "data-processor"
+  
+  inputSchema:
+    type: object
+    required: ["data", "operation"]
+    properties:
+      data:
+        type: string
+        description: "CSV data or file path"
+      operation:
+        type: string
+        enum: ["filter", "transform", "aggregate", "validate"]
+      filters:
+        type: object
+        description: "Filter criteria"
+      transformations:
+        type: array
+        items:
+          type: object
+  
+  outputSchema:
+    type: object
+    properties:
+      processed_data:
+        type: string
+        description: "Processed CSV data"
+      summary:
+        type: object
+        properties:
+          rows_processed:
+            type: integer
+          rows_output:
+            type: integer
+          errors:
+            type: array
+  
+  with:
+    max_file_size: "100MB"
+    supported_encodings: ["utf-8", "latin1"]
+    output_format: "csv"
+    include_headers: true
+  
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+      ephemeralStorage: "1Gi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+      ephemeralStorage: "5Gi"
+    maxExecutionTime: "10m"
+  
+  security:
+    runAsNonRoot: true
+    networkPolicy: "internal"
+
+---
+# HTTP API Caller Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: slack-notifier
+  annotations:
+    catalog.bubu.sh/template: "http-client"
+spec:
+  engine:
+    mode: "deployment"
+    templateRef: "http-client"
+    deployment:
+      minReplicas: 1
+      maxReplicas: 5
+      idleTimeout: "10m"
+  
+  inputSchema:
+    type: object
+    required: ["message"]
+    properties:
+      message:
+        type: string
+        description: "Message to send"
+      channel:
+        type: string
+        description: "Slack channel"
+        default: "#general"
+      username:
+        type: string
+        description: "Bot username"
+        default: "bobrapet-bot"
+      priority:
+        type: string
+        enum: ["low", "normal", "high", "urgent"]
+        default: "normal"
+  
+  outputSchema:
+    type: object
+    properties:
+      success:
+        type: boolean
+      message_id:
+        type: string
+      timestamp:
+        type: string
+  
+  with:
+    base_url: "https://slack.com/api"
+    default_channel: "#notifications"
+    retry_failed_sends: true
+    timeout: "10s"
+  
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+    maxConcurrentInstances: 10
+  
+  retry:
+    maxRetries: 2
+    backoff: "exponential"
+    baseDelay: "2s"
+    maxDelay: "10s"
+  
+  security:
+    runAsNonRoot: true
+    requiredSecrets: ["slack-webhook-token"]
+    networkPolicy: "external"
+
+---
+# Database Query Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: postgres-query
+  annotations:
+    catalog.bubu.sh/template: "database-client"
+spec:
+  engine:
+    mode: "deployment"
+    templateRef: "database-client"
+    deployment:
+      minReplicas: 2
+      maxReplicas: 8
+  
+  inputSchema:
+    type: object
+    required: ["query"]
+    properties:
+      query:
+        type: string
+        description: "SQL query to execute"
+      parameters:
+        type: array
+        description: "Query parameters"
+      timeout:
+        type: string
+        default: "30s"
+      read_only:
+        type: boolean
+        default: true
+  
+  outputSchema:
+    type: object
+    properties:
+      rows:
+        type: array
+        description: "Query result rows"
+      count:
+        type: integer
+        description: "Number of rows returned"
+      execution_time:
+        type: string
+  
+  with:
+    database_type: "postgresql"
+    connection_pool_size: 10
+    query_timeout: "30s"
+    max_rows: 10000
+    read_only_mode: true
+  
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    maxConcurrentInstances: 20
+  
+  security:
+    runAsNonRoot: true
+    requiredSecrets: ["postgres-credentials"]
+    networkPolicy: "internal"

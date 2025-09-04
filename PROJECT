@@ -14,68 +14,59 @@ resources:
     namespaced: true
   controller: true
   domain: bubu.sh
-  kind: Project
+  kind: Story
   path: github.com/bubustack/bobrapet/api/v1alpha1
   version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
   domain: bubu.sh
-  group: transport
-  kind: WebSocket
-  path: github.com/bubustack/bobrapet/api/transport/v1alpha1
-  version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: bubu.sh
-  group: transport
-  kind: HTTP
-  path: github.com/bubustack/bobrapet/api/transport/v1alpha1
-  version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: bubu.sh
-  group: prompt
-  kind: Prompt
-  path: github.com/bubustack/bobrapet/api/prompt/v1alpha1
-  version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: bubu.sh
-  group: bubu.sh
-  kind: Model
-  path: github.com/bubustack/bobrapet/api/bubu.sh/v1alpha1
-  version: v1alpha1
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: bubu.sh
-  kind: Model
+  kind: Engram
   path: github.com/bubustack/bobrapet/api/v1alpha1
   version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
   domain: bubu.sh
-  kind: ModelConfig
+  kind: Impulse
   path: github.com/bubustack/bobrapet/api/v1alpha1
   version: v1alpha1
+  webhooks:
+    defaulting: true
+    validation: true
+    webhookVersion: v1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
   domain: bubu.sh
-  group: bubu.ai
-  kind: Prompt
-  path: github.com/bubustack/bobrapet/api/bubu.ai/v1alpha1
+  group: runs
+  kind: StoryRun
+  path: github.com/bubustack/bobrapet/api/runs/v1alpha1
   version: v1alpha1
+  webhooks:
+    validation: true
+    webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubu.sh
+  group: runs
+  kind: StepRun
+  path: github.com/bubustack/bobrapet/api/runs/v1alpha1
+  version: v1alpha1
+  webhooks:
+    validation: true
+    webhookVersion: v1
 version: "3"

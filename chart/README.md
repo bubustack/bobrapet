@@ -1,5 +1,0 @@
-# Install steps
-
-```
-istioctl install 
-```

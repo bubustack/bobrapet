@@ -1,0 +1,128 @@
+# Examples of different Engram types using the generic 'with' configuration
+# This showcases the DOTADIW principle - each engram type handles its own specifics
+
+---
+# HTTP API Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: weather-api
+spec:
+  engine:
+    mode: container
+    image: ghcr.io/bubustack/engram-http:v1.0.0
+  with:
+    endpoint: "https://api.openweathermap.org/data/2.5/weather"
+    method: "GET"
+    headers:
+      "User-Agent": "BobRapet/1.0"
+    params:
+      q: "{{ .city }}"
+      appid: "{{ .secrets.apiKey }}"
+    secrets:
+      apiKey: "weather-api-key"
+  retry:
+    maxRetries: 3
+    backoff: "exponential"
+  security:
+    requiredSecrets: ["weather-api-key"]
+    networkPolicy: "allow-egress"
+
+---
+# Database Query Engram  
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: user-lookup
+spec:
+  engine:
+    mode: container
+    image: ghcr.io/bubustack/engram-postgres:v1.0.0
+  with:
+    connection: "{{ .secrets.dbUrl }}"
+    query: |
+      SELECT id, name, email, created_at 
+      FROM users 
+      WHERE email = $1 AND active = true
+    params: ["{{ .email }}"]
+    secrets:
+      dbUrl: "postgres-connection"
+  security:
+    requiredSecrets: ["postgres-connection"]
+    networkPolicy: "default-deny"
+
+---
+# Function/Code Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: text-processor
+spec:
+  engine:
+    mode: container
+    image: ghcr.io/bubustack/engram-python:v1.0.0
+  with:
+    runtime: "python3.11"
+    requirements:
+      - "pandas>=1.5.0"
+      - "numpy>=1.24.0"
+    code: |
+      import pandas as pd
+      import re
+      
+      def process(input_data):
+          text = input_data.get('text', '')
+          
+          # Clean and process text
+          cleaned = re.sub(r'[^\w\s]', '', text.lower())
+          words = cleaned.split()
+          
+          return {
+              'original_length': len(text),
+              'word_count': len(words),
+              'cleaned_text': cleaned,
+              'first_words': words[:5]
+          }
+
+---
+# ML Model Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: sentiment-model
+spec:
+  engine:
+    mode: container
+    image: ghcr.io/bubustack/engram-transformers:v1.0.0
+  with:
+    model: "cardiffnlp/twitter-roberta-base-sentiment-latest"
+    task: "sentiment-analysis"
+    device: "cuda"  # Use GPU if available
+    max_length: 512
+    return_scores: true
+  resources:
+    cpu: "1"
+    memory: "4Gi"
+    gpu: "1"
+
+---
+# Message Queue Engram
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: kafka-publisher
+spec:
+  engine:
+    mode: container
+    image: ghcr.io/bubustack/engram-kafka:v1.0.0
+  with:
+    brokers: ["kafka-cluster:9092"]
+    topic: "processed-events"
+    key: "{{ .event_id }}"
+    message: "{{ .payload }}"
+    headers:
+      "source": "bobrapet"
+      "version": "v1"
+    serializer: "json"
+  security:
+    networkPolicy: "allow-egress"

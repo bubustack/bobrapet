@@ -1,0 +1,201 @@
+# Simplified ImpulseTemplate examples - operator stays tiny, containers handle complexity
+
+---
+# Generic webhook impulse template  
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: ImpulseTemplate
+metadata:
+  name: webhook-impulse
+  labels:
+    catalog.bubu.sh/category: "triggers"
+spec:
+  version: "1.0.0"
+  description: "Generic webhook trigger for receiving HTTP requests and starting workflows"
+  
+  # Optional schemas for validation and tooling (containers define their own specifics)
+  contextSchema:
+    type: object
+    properties:
+      headers:
+        type: object
+        description: "HTTP headers from the webhook request"
+      body:
+        type: object
+        description: "Request body"
+      query:
+        type: object
+        description: "Query parameters"
+  
+  # Configuration schema - containers handle auth, validation, etc.
+  configSchema:
+    type: object
+    properties:
+      webhook_path:
+        type: string
+        description: "Webhook endpoint path"
+        default: "/webhook"
+      port:
+        type: integer
+        description: "Port to listen on"
+        default: 8080
+
+  uiHints:
+    category: "triggers"
+    icon: "webhook"
+    color: "#4CAF50"
+    displayName: "Webhook Trigger"
+    tags: ["webhook", "http", "trigger"]
+
+  defaults:
+    webhook_path: "/webhook"
+    port: 8080
+
+  examples:
+    - name: "simple-webhook"
+      description: "Basic webhook trigger"
+      config:
+        webhook_path: "/api/trigger"
+        port: 8080
+
+  # Container image that handles all webhook complexity
+  image: "ghcr.io/bubustack/impulse-webhook:v1.0.0"
+
+  resources:
+    cpu: "100m"
+    memory: "128Mi"
+
+  security:
+    requiredSecrets: []
+    networkAccess: ["external"]
+    privilegedAccess: false
+
+---
+# Cron scheduler template
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: ImpulseTemplate
+metadata:
+  name: cron-impulse
+  labels:
+    catalog.bubu.sh/category: "schedulers"
+spec:
+  version: "1.0.0"
+  description: "Cron-based scheduler for time-triggered workflows"
+  
+  contextSchema:
+    type: object
+    properties:
+      triggerTime:
+        type: string
+        format: "date-time"
+        description: "When the trigger fired"
+      cronExpression:
+        type: string
+        description: "The cron expression that triggered this"
+  
+  configSchema:
+    type: object
+    required: ["schedule"]
+    properties:
+      schedule:
+        type: string
+        description: "Cron expression (e.g., '0 8 * * *')"
+      timezone:
+        type: string
+        description: "Timezone for the schedule"
+        default: "UTC"
+
+  uiHints:
+    category: "schedulers"
+    icon: "schedule"
+    color: "#FF9800"
+    displayName: "Cron Schedule"
+    tags: ["cron", "schedule", "timer"]
+
+  defaults:
+    timezone: "UTC"
+
+  examples:
+    - name: "daily-report"
+      description: "Generate daily report at 8 AM"
+      config:
+        schedule: "0 8 * * *"
+        timezone: "America/New_York"
+
+  image: "ghcr.io/bubustack/impulse-cron:v1.0.0"
+
+  resources:
+    cpu: "50m"
+    memory: "64Mi"
+
+  security:
+    requiredSecrets: []
+    networkAccess: ["internal"]
+    privilegedAccess: false
+
+---
+# Kafka consumer template
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: ImpulseTemplate
+metadata:
+  name: kafka-impulse
+  labels:
+    catalog.bubu.sh/category: "messaging"
+spec:
+  version: "1.0.0"
+  description: "Kafka consumer for message-driven workflows"
+  
+  contextSchema:
+    type: object
+    properties:
+      topic:
+        type: string
+      partition:
+        type: integer
+      offset:
+        type: integer
+      key:
+        type: string
+      value:
+        type: object
+
+  configSchema:
+    type: object
+    required: ["brokers", "topic"]
+    properties:
+      brokers:
+        type: array
+        items:
+          type: string
+        description: "Kafka broker addresses"
+      topic:
+        type: string
+        description: "Kafka topic to consume"
+      group:
+        type: string
+        description: "Consumer group ID"
+
+  uiHints:
+    category: "messaging"
+    icon: "message-queue"
+    color: "#9C27B0"
+    displayName: "Kafka Consumer"
+    tags: ["kafka", "messaging", "queue"]
+
+  examples:
+    - name: "order-processor"
+      description: "Process order messages"
+      config:
+        brokers: ["kafka-cluster:9092"]
+        topic: "orders"
+        group: "order-processors"
+
+  image: "ghcr.io/bubustack/impulse-kafka:v1.0.0"
+
+  resources:
+    cpu: "200m"
+    memory: "256Mi"
+
+  security:
+    requiredSecrets: ["kafka-credentials"]
+    networkAccess: ["external"]
+    privilegedAccess: false

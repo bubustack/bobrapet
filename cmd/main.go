@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -37,17 +38,22 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	transportv1alpha1 "github.com/bubustack/bobrapet/api/transport/v1alpha1"
-	transportcontroller "github.com/bubustack/bobrapet/internal/controller/transport"
-
+	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
+	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/internal/cel"
+	"github.com/bubustack/bobrapet/internal/config"
 	"github.com/bubustack/bobrapet/internal/controller"
+	lifecyclecontroller "github.com/bubustack/bobrapet/internal/controller/lifecycle"
+	runscontroller "github.com/bubustack/bobrapet/internal/controller/runs"
+	"github.com/bubustack/bobrapet/internal/lifecycle"
+	"github.com/bubustack/bobrapet/internal/storage"
 
-	bubuaiv1alpha1 "github.com/bubustack/bobrapet/api/bubu.ai/v1alpha1"
-	bubuaicontroller "github.com/bubustack/bobrapet/internal/controller/bubu.ai"
+	celgo "github.com/google/cel-go/cel"
 
+	webhookrunsv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/runs/v1alpha1"
+	webhookv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
-	istiov1beta1 "istio.io/client-go/pkg/apis/networking/v1beta1"
 )
 
 var (
@@ -58,11 +64,13 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
-	utilruntime.Must(transportv1alpha1.AddToScheme(scheme))
-
-	utilruntime.Must(istiov1beta1.AddToScheme(scheme))
 	utilruntime.Must(bubushv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(bubuaiv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(runsv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(catalogv1alpha1.AddToScheme(scheme))
+
+	// Enable workqueue metrics for controller performance monitoring
+	// Note: workqueue metrics are automatically enabled by default in controller-runtime
+
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -76,6 +84,17 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+
+	// Controller configuration variables
+	var storyRunConcurrency int
+	var stepRunConcurrency int
+	var storyConcurrency int
+	var engramConcurrency int
+	var impulseConcurrency int
+	var rateLimiterBaseDelay time.Duration
+	var rateLimiterMaxDelay time.Duration
+	var enableTelemetry bool
+	var otlpEndpoint string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -93,6 +112,18 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+
+	// Controller configuration flags
+	flag.IntVar(&storyRunConcurrency, "storyrun-concurrency", 8, "Maximum concurrent reconciles for StoryRun controller")
+	flag.IntVar(&stepRunConcurrency, "steprun-concurrency", 15, "Maximum concurrent reconciles for StepRun controller")
+	flag.IntVar(&storyConcurrency, "story-concurrency", 5, "Maximum concurrent reconciles for Story controller")
+	flag.IntVar(&engramConcurrency, "engram-concurrency", 5, "Maximum concurrent reconciles for Engram controller")
+	flag.IntVar(&impulseConcurrency, "impulse-concurrency", 5, "Maximum concurrent reconciles for Impulse controller")
+	flag.DurationVar(&rateLimiterBaseDelay, "rate-limiter-base-delay", 50*time.Millisecond, "Base delay for exponential backoff rate limiter")
+	flag.DurationVar(&rateLimiterMaxDelay, "rate-limiter-max-delay", 5*time.Minute, "Maximum delay for exponential backoff rate limiter")
+	flag.BoolVar(&enableTelemetry, "enable-telemetry", false, "Enable OpenTelemetry tracing for controllers")
+	flag.StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint (e.g., http://otel-collector:4317). If empty, exporter relies on env vars.")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -147,7 +178,7 @@ func main() {
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.2/pkg/metrics/server
+	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -159,7 +190,7 @@ func main() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
 		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.2/pkg/metrics/filters#WithAuthenticationAndAuthorization
+		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
@@ -214,41 +245,147 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&transportcontroller.WebSocketReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "WebSocket")
+	// Build controller configuration from flags
+	controllerConfig := config.DefaultControllerConfig()
+	controllerConfig.StoryRun.MaxConcurrentReconciles = storyRunConcurrency
+	controllerConfig.StepRun.MaxConcurrentReconciles = stepRunConcurrency
+	controllerConfig.Story.MaxConcurrentReconciles = storyConcurrency
+	controllerConfig.Engram.MaxConcurrentReconciles = engramConcurrency
+	controllerConfig.Impulse.MaxConcurrentReconciles = impulseConcurrency
+	controllerConfig.StoryRun.RateLimiter.BaseDelay = rateLimiterBaseDelay
+	controllerConfig.StoryRun.RateLimiter.MaxDelay = rateLimiterMaxDelay
+	controllerConfig.StepRun.RateLimiter.BaseDelay = rateLimiterBaseDelay
+	controllerConfig.StepRun.RateLimiter.MaxDelay = rateLimiterMaxDelay
+	controllerConfig.Story.RateLimiter.BaseDelay = rateLimiterBaseDelay
+	controllerConfig.Story.RateLimiter.MaxDelay = rateLimiterMaxDelay
+	controllerConfig.Engram.RateLimiter.BaseDelay = rateLimiterBaseDelay
+	controllerConfig.Engram.RateLimiter.MaxDelay = rateLimiterMaxDelay
+	controllerConfig.Impulse.RateLimiter.BaseDelay = rateLimiterBaseDelay
+	controllerConfig.Impulse.RateLimiter.MaxDelay = rateLimiterMaxDelay
+
+	// Telemetry feature gate
+	config.EnableTelemetry(enableTelemetry)
+	if enableTelemetry && otlpEndpoint != "" {
+		// Set process env so otel exporters (if used) can pick it up without wiring exporter here
+		_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint)
+	}
+
+	// Initialize storage manager (config will be loaded after manager starts)
+	storageManager := storage.NewSimpleStorageManager(mgr.GetClient())
+	setupLog.Info("Storage manager initialized")
+
+	// Initialize cleanup manager
+	cleanupManager := lifecycle.NewCleanupManager(mgr.GetClient())
+	setupLog.Info("Cleanup manager initialized")
+
+	// Setup all controllers with configuration
+	if err := controller.NewStoryReconciler(
+		mgr.GetClient(),
+		mgr.GetScheme(),
+	).SetupWithManagerAndConfig(mgr, controllerConfig.BuildStoryControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Story")
 		os.Exit(1)
 	}
-	if err = (&transportcontroller.HTTPReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "HTTP")
+	if err := (&controller.EngramReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		StorageManager: storageManager,
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildEngramControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Engram")
 		os.Exit(1)
 	}
-	if err = (&controller.ModelReconciler{
+	if err := (&controller.ImpulseReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Model")
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildImpulseControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Impulse")
 		os.Exit(1)
 	}
-	if err = (&controller.ModelConfigReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ModelConfig")
+	// Initialize CEL cache
+	env, err := createCELEnvironment()
+	if err != nil {
+		setupLog.Error(err, "unable to create CEL environment")
 		os.Exit(1)
 	}
 
-	if err = (&bubuaicontroller.PromptReconciler{
+	if err := (&runscontroller.StoryRunReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		CELCache: createCELCache(env),
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildStoryRunControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StoryRun")
+		os.Exit(1)
+	}
+	if err := (&runscontroller.StepRunReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		StorageManager: storageManager,
+		// ArtifactManager removed - delegating large data handling to engrams for better performance
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildStepRunControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "StepRun")
+		os.Exit(1)
+	}
+
+	// Template controllers
+	if err := (&controller.EngramTemplateReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Prompt")
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "EngramTemplate")
 		os.Exit(1)
+	}
+	if err := (&controller.ImpulseTemplateReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ImpulseTemplate")
+		os.Exit(1)
+	}
+
+	// Lifecycle controllers
+	if err := (&lifecyclecontroller.CleanupReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		CleanupManager: cleanupManager,
+	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildCleanupControllerOptions()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Cleanup")
+		os.Exit(1)
+	}
+
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookrunsv1alpha1.SetupStoryRunWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "StoryRun")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookrunsv1alpha1.SetupStepRunWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "StepRun")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupImpulseWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Impulse")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupStoryWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Story")
+			os.Exit(1)
+		}
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupEngramWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Engram")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
@@ -282,4 +419,14 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// createCELEnvironment creates the enhanced CEL environment
+func createCELEnvironment() (*celgo.Env, error) {
+	return runscontroller.EnhancedCELEnvironment()
+}
+
+// createCELCache creates a CEL compilation cache
+func createCELCache(env *celgo.Env) *cel.CompilationCache {
+	return cel.NewCompilationCache(nil, env) // Uses default config
 }

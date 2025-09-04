@@ -1,0 +1,34 @@
+apiVersion: bubu.sh/v1alpha1
+kind: Story
+metadata:
+  name: document-analysis-pipeline
+  annotations:
+    description: "Sub-workflow for detailed document analysis"
+spec:
+  inputsSchema: |
+    {
+      "type": "object",
+      "properties": {
+        "documents": {"type": "array"},
+        "model": {"type": "string", "default": "gpt-3.5-turbo"}
+      }
+    }
+  steps:
+    - name: analyze-content
+      ref: content-analyzer
+      with:
+        model: "{{ inputs.model }}"
+        documents: "{{ inputs.documents }}"
+        
+    - name: quality-check
+      type: condition
+      if: "{{ steps.analyze-content.output.confidence > 0.8 }}"
+      then:
+        - name: high-quality-processing
+          ref: advanced-processor
+      else:
+        - name: reprocess
+          ref: content-analyzer
+          with:
+            model: "gpt-4"
+            enhanced: true

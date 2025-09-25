@@ -65,8 +65,7 @@ func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) er
 	}
 	storylog.Info("Defaulting for Story", "name", story.GetName())
 
-	// No object-wide defaults. Field-level defaults are set via CRD markers.
-	// Keep webhook defaulting minimal to avoid drift with CRD defaults.
+	// TODO(user): fill in your defaulting logic.
 
 	return nil
 }
@@ -95,7 +94,9 @@ func (v *StoryCustomValidator) ValidateCreate(_ context.Context, obj runtime.Obj
 	}
 	storylog.Info("Validation for Story upon creation", "name", story.GetName())
 
-	return v.validateStory(story)
+	// TODO(user): fill in your validation logic upon object creation.
+
+	return nil, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Story.
@@ -106,7 +107,9 @@ func (v *StoryCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj 
 	}
 	storylog.Info("Validation for Story upon update", "name", story.GetName())
 
-	return v.validateStory(story)
+	// TODO(user): fill in your validation logic upon object update.
+
+	return nil, nil
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Story.
@@ -117,24 +120,7 @@ func (v *StoryCustomValidator) ValidateDelete(ctx context.Context, obj runtime.O
 	}
 	storylog.Info("Validation for Story upon deletion", "name", story.GetName())
 
-	// No delete-time validation
-	return nil, nil
-}
+	// TODO(user): fill in your validation logic upon object deletion.
 
-// validateStory contains creation/update validation logic
-func (v *StoryCustomValidator) validateStory(story *bubushv1alpha1.Story) (admission.Warnings, error) {
-	if len(story.Spec.Steps) == 0 {
-		return nil, fmt.Errorf("spec.steps must not be empty")
-	}
-	for _, s := range story.Spec.Steps {
-		if s.Name == "" {
-			return nil, fmt.Errorf("each step must have a non-empty name")
-		}
-		hasType := s.Type != nil && *s.Type != ""
-		hasRef := s.Ref != nil && *s.Ref != ""
-		if hasType == hasRef {
-			return nil, fmt.Errorf("step %q must set exactly one of type or ref", s.Name)
-		}
-	}
 	return nil, nil
 }

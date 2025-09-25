@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
-	storiesv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -60,9 +59,6 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = storiesv1alpha1.AddToScheme(scheme.Scheme)
-	Expect(err).NotTo(HaveOccurred())
-
 	err = bubushv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 

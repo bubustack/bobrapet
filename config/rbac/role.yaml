@@ -8,9 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
-  - namespaces
   - pods
-  - secrets
   verbs:
   - get
   - list
@@ -19,6 +17,7 @@ rules:
   - ""
   resources:
   - persistentvolumeclaims
+  - services
   verbs:
   - create
   - delete
@@ -30,13 +29,11 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - services
+  - serviceaccounts
   verbs:
   - create
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - apps
@@ -45,6 +42,7 @@ rules:
   - statefulsets
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -124,9 +122,30 @@ rules:
   - patch
   - update
 - apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - bind
+  - create
+  - escalate
+  - get
+  - list
+  - watch
+- apiGroups:
   - runs.bubu.sh
   resources:
   - stepruns
+  - storyruns
   verbs:
   - create
   - delete
@@ -139,6 +158,7 @@ rules:
   - runs.bubu.sh
   resources:
   - stepruns/finalizers
+  - storyruns/finalizers
   verbs:
   - update
 - apiGroups:
@@ -150,13 +170,3 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - runs.bubu.sh
-  resources:
-  - storyruns
-  verbs:
-  - get
-  - list
-  - patch
-  - update
-  - watch

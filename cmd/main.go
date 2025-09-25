@@ -20,8 +20,6 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
-	"path/filepath"
-	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -31,26 +29,23 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	config "github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/internal/controller"
+	setup "github.com/bubustack/bobrapet/internal/setup"
+	"github.com/bubustack/bobrapet/pkg/cel"
+	"github.com/bubustack/bobrapet/pkg/logging"
+
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
-	"github.com/bubustack/bobrapet/internal/cel"
-	"github.com/bubustack/bobrapet/internal/config"
-	"github.com/bubustack/bobrapet/internal/controller"
-	lifecyclecontroller "github.com/bubustack/bobrapet/internal/controller/lifecycle"
+	catalogcontroller "github.com/bubustack/bobrapet/internal/controller/catalog"
 	runscontroller "github.com/bubustack/bobrapet/internal/controller/runs"
-	"github.com/bubustack/bobrapet/internal/lifecycle"
-	"github.com/bubustack/bobrapet/internal/storage"
-
-	celgo "github.com/google/cel-go/cel"
-
 	webhookrunsv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/runs/v1alpha1"
 	webhookv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
@@ -67,10 +62,6 @@ func init() {
 	utilruntime.Must(bubushv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(runsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(catalogv1alpha1.AddToScheme(scheme))
-
-	// Enable workqueue metrics for controller performance monitoring
-	// Note: workqueue metrics are automatically enabled by default in controller-runtime
-
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -84,17 +75,6 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
-
-	// Controller configuration variables
-	var storyRunConcurrency int
-	var stepRunConcurrency int
-	var storyConcurrency int
-	var engramConcurrency int
-	var impulseConcurrency int
-	var rateLimiterBaseDelay time.Duration
-	var rateLimiterMaxDelay time.Duration
-	var enableTelemetry bool
-	var otlpEndpoint string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -112,18 +92,6 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-
-	// Controller configuration flags
-	flag.IntVar(&storyRunConcurrency, "storyrun-concurrency", 8, "Maximum concurrent reconciles for StoryRun controller")
-	flag.IntVar(&stepRunConcurrency, "steprun-concurrency", 15, "Maximum concurrent reconciles for StepRun controller")
-	flag.IntVar(&storyConcurrency, "story-concurrency", 5, "Maximum concurrent reconciles for Story controller")
-	flag.IntVar(&engramConcurrency, "engram-concurrency", 5, "Maximum concurrent reconciles for Engram controller")
-	flag.IntVar(&impulseConcurrency, "impulse-concurrency", 5, "Maximum concurrent reconciles for Impulse controller")
-	flag.DurationVar(&rateLimiterBaseDelay, "rate-limiter-base-delay", 50*time.Millisecond, "Base delay for exponential backoff rate limiter")
-	flag.DurationVar(&rateLimiterMaxDelay, "rate-limiter-max-delay", 5*time.Minute, "Maximum delay for exponential backoff rate limiter")
-	flag.BoolVar(&enableTelemetry, "enable-telemetry", false, "Enable OpenTelemetry tracing for controllers")
-	flag.StringVar(&otlpEndpoint, "otlp-endpoint", "", "OTLP endpoint (e.g., http://otel-collector:4317). If empty, exporter relies on env vars.")
-
 	opts := zap.Options{
 		Development: true,
 	}
@@ -147,38 +115,26 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	// Create watchers for metrics and webhooks certificates
-	var metricsCertWatcher, webhookCertWatcher *certwatcher.CertWatcher
-
 	// Initial webhook TLS options
 	webhookTLSOpts := tlsOpts
+	webhookServerOptions := webhook.Options{
+		TLSOpts: webhookTLSOpts,
+	}
 
 	if len(webhookCertPath) > 0 {
 		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
 			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
 
-		var err error
-		webhookCertWatcher, err = certwatcher.New(
-			filepath.Join(webhookCertPath, webhookCertName),
-			filepath.Join(webhookCertPath, webhookCertKey),
-		)
-		if err != nil {
-			setupLog.Error(err, "Failed to initialize webhook certificate watcher")
-			os.Exit(1)
-		}
-
-		webhookTLSOpts = append(webhookTLSOpts, func(config *tls.Config) {
-			config.GetCertificate = webhookCertWatcher.GetCertificate
-		})
+		webhookServerOptions.CertDir = webhookCertPath
+		webhookServerOptions.CertName = webhookCertName
+		webhookServerOptions.KeyName = webhookCertKey
 	}
 
-	webhookServer := webhook.NewServer(webhook.Options{
-		TLSOpts: webhookTLSOpts,
-	})
+	webhookServer := webhook.NewServer(webhookServerOptions)
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/server
+	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
@@ -190,7 +146,7 @@ func main() {
 		// FilterProvider is used to protect the metrics endpoint with authn/authz.
 		// These configurations ensure that only authorized users and service accounts
 		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/metrics/filters#WithAuthenticationAndAuthorization
+		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/metrics/filters#WithAuthenticationAndAuthorization
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
 	}
 
@@ -206,19 +162,9 @@ func main() {
 		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
 			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
 
-		var err error
-		metricsCertWatcher, err = certwatcher.New(
-			filepath.Join(metricsCertPath, metricsCertName),
-			filepath.Join(metricsCertPath, metricsCertKey),
-		)
-		if err != nil {
-			setupLog.Error(err, "to initialize metrics certificate watcher", "error", err)
-			os.Exit(1)
-		}
-
-		metricsServerOptions.TLSOpts = append(metricsServerOptions.TLSOpts, func(config *tls.Config) {
-			config.GetCertificate = metricsCertWatcher.GetCertificate
-		})
+		metricsServerOptions.CertDir = metricsCertPath
+		metricsServerOptions.CertName = metricsCertName
+		metricsServerOptions.KeyName = metricsCertKey
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -245,165 +191,96 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build controller configuration from flags
-	controllerConfig := config.DefaultControllerConfig()
-	controllerConfig.StoryRun.MaxConcurrentReconciles = storyRunConcurrency
-	controllerConfig.StepRun.MaxConcurrentReconciles = stepRunConcurrency
-	controllerConfig.Story.MaxConcurrentReconciles = storyConcurrency
-	controllerConfig.Engram.MaxConcurrentReconciles = engramConcurrency
-	controllerConfig.Impulse.MaxConcurrentReconciles = impulseConcurrency
-	controllerConfig.StoryRun.RateLimiter.BaseDelay = rateLimiterBaseDelay
-	controllerConfig.StoryRun.RateLimiter.MaxDelay = rateLimiterMaxDelay
-	controllerConfig.StepRun.RateLimiter.BaseDelay = rateLimiterBaseDelay
-	controllerConfig.StepRun.RateLimiter.MaxDelay = rateLimiterMaxDelay
-	controllerConfig.Story.RateLimiter.BaseDelay = rateLimiterBaseDelay
-	controllerConfig.Story.RateLimiter.MaxDelay = rateLimiterMaxDelay
-	controllerConfig.Engram.RateLimiter.BaseDelay = rateLimiterBaseDelay
-	controllerConfig.Engram.RateLimiter.MaxDelay = rateLimiterMaxDelay
-	controllerConfig.Impulse.RateLimiter.BaseDelay = rateLimiterBaseDelay
-	controllerConfig.Impulse.RateLimiter.MaxDelay = rateLimiterMaxDelay
+	// Index Fields for efficient lookups
+	setup.SetupIndexers(mgr)
 
-	// Telemetry feature gate
-	config.EnableTelemetry(enableTelemetry)
-	if enableTelemetry && otlpEndpoint != "" {
-		// Set process env so otel exporters (if used) can pick it up without wiring exporter here
-		_ = os.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", otlpEndpoint)
+	operatorConfigManager := config.NewOperatorConfigManager(mgr.GetClient(), "bobrapet-system", "bobrapet-operator-config")
+	setupLog.Info("Operator configuration manager initialized")
+	controllerConfig := operatorConfigManager.GetControllerConfig()
+	setupLog.Info("Controller configuration loaded")
+	configResolver := config.NewResolver(mgr.GetClient(), operatorConfigManager)
+	setupLog.Info("Configuration resolver initialized")
+	celLogger := logging.NewCELLogger(ctrl.Log)
+	celEvaluator, err := cel.New(celLogger)
+	if err != nil {
+		setupLog.Error(err, "unable to create CEL evaluator")
+		os.Exit(1)
 	}
 
-	// Initialize storage manager (config will be loaded after manager starts)
-	storageManager := storage.NewSimpleStorageManager(mgr.GetClient())
-	setupLog.Info("Storage manager initialized")
+	deps := config.ControllerDependencies{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		ConfigResolver: configResolver,
+		CELEvaluator:   *celEvaluator,
+	}
 
-	// Initialize cleanup manager
-	cleanupManager := lifecycle.NewCleanupManager(mgr.GetClient())
-	setupLog.Info("Cleanup manager initialized")
-
-	// Setup all controllers with configuration
-	if err := controller.NewStoryReconciler(
-		mgr.GetClient(),
-		mgr.GetScheme(),
-	).SetupWithManagerAndConfig(mgr, controllerConfig.BuildStoryControllerOptions()); err != nil {
+	if err := (&controller.StoryReconciler{
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildStoryControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Story")
 		os.Exit(1)
 	}
 	if err := (&controller.EngramReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		StorageManager: storageManager,
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildEngramControllerOptions()); err != nil {
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildEngramControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Engram")
 		os.Exit(1)
 	}
 	if err := (&controller.ImpulseReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildImpulseControllerOptions()); err != nil {
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildImpulseControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Impulse")
 		os.Exit(1)
 	}
-	// Initialize CEL cache
-	env, err := createCELEnvironment()
-	if err != nil {
-		setupLog.Error(err, "unable to create CEL environment")
-		os.Exit(1)
-	}
-
 	if err := (&runscontroller.StoryRunReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		CELCache: createCELCache(env),
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildStoryRunControllerOptions()); err != nil {
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildStoryRunControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StoryRun")
 		os.Exit(1)
 	}
 	if err := (&runscontroller.StepRunReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		StorageManager: storageManager,
-		// ArtifactManager removed - delegating large data handling to engrams for better performance
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildStepRunControllerOptions()); err != nil {
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildStepRunControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StepRun")
 		os.Exit(1)
 	}
-
-	// Template controllers
-	if err := (&controller.EngramTemplateReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
+	if err := (&catalogcontroller.EngramTemplateReconciler{
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "EngramTemplate")
 		os.Exit(1)
 	}
-	if err := (&controller.ImpulseTemplateReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
+	if err := (&catalogcontroller.ImpulseTemplateReconciler{
+		ControllerDependencies: deps,
+	}).SetupWithManager(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ImpulseTemplate")
 		os.Exit(1)
 	}
 
-	// Lifecycle controllers
-	if err := (&lifecyclecontroller.CleanupReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		CleanupManager: cleanupManager,
-	}).SetupWithManagerAndConfig(mgr, controllerConfig.BuildCleanupControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Cleanup")
-		os.Exit(1)
-	}
-
-	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		setupLog.Info("setting up webhooks")
+		if err := webhookv1alpha1.SetupStoryWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Story")
+			os.Exit(1)
+		}
+		if err := webhookv1alpha1.SetupEngramWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Engram")
+			os.Exit(1)
+		}
+		if err := webhookv1alpha1.SetupImpulseWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Impulse")
+			os.Exit(1)
+		}
 		if err := webhookrunsv1alpha1.SetupStoryRunWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "StoryRun")
 			os.Exit(1)
 		}
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err := webhookrunsv1alpha1.SetupStepRunWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to create webhook", "webhook", "StepRun")
 			os.Exit(1)
 		}
 	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupImpulseWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Impulse")
-			os.Exit(1)
-		}
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupStoryWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Story")
-			os.Exit(1)
-		}
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err := webhookv1alpha1.SetupEngramWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Engram")
-			os.Exit(1)
-		}
-	}
 	// +kubebuilder:scaffold:builder
-
-	if metricsCertWatcher != nil {
-		setupLog.Info("Adding metrics certificate watcher to manager")
-		if err := mgr.Add(metricsCertWatcher); err != nil {
-			setupLog.Error(err, "unable to add metrics certificate watcher to manager")
-			os.Exit(1)
-		}
-	}
-
-	if webhookCertWatcher != nil {
-		setupLog.Info("Adding webhook certificate watcher to manager")
-		if err := mgr.Add(webhookCertWatcher); err != nil {
-			setupLog.Error(err, "unable to add webhook certificate watcher to manager")
-			os.Exit(1)
-		}
-	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -419,14 +296,4 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
-}
-
-// createCELEnvironment creates the enhanced CEL environment
-func createCELEnvironment() (*celgo.Env, error) {
-	return runscontroller.EnhancedCELEnvironment()
-}
-
-// createCELCache creates a CEL compilation cache
-func createCELCache(env *celgo.Env) *cel.CompilationCache {
-	return cel.NewCompilationCache(nil, env) // Uses default config
 }

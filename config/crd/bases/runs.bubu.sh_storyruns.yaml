@@ -3,11 +3,15 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: storyruns.runs.bubu.sh
 spec:
   group: runs.bubu.sh
   names:
+    categories:
+    - bubu
+    - ai
+    - runs
     kind: StoryRun
     listKind: StoryRunList
     plural: storyruns
@@ -17,12 +21,40 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.storyRef.name
+      name: Story
+      type: string
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.startedAt
+      name: Started
+      type: date
+    - jsonPath: .status.duration
+      name: Duration
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: |-
+          StoryRun represents an actual execution instance of a Story
+
+          Think of the relationship like this:
+          - Story = A movie script (defines what should happen)
+          - StoryRun = Actually filming the movie (executing the script with specific actors and locations)
+
+          Every time a Story is triggered (by an Impulse, manual trigger, or another Story),
+          a new StoryRun is created to track that specific execution.
+
+          StoryRuns are the "run history" of your automation - they show:
+          - When each story execution started and finished
+          - What inputs were provided
+          - Which steps succeeded or failed
+          - What outputs were produced
+          - Any errors that occurred
         properties:
           apiVersion:
             description: |-
@@ -42,55 +74,111 @@ spec:
           metadata:
             type: object
           spec:
+            description: StoryRunSpec defines what Story to run and with what inputs
             properties:
+              impulseRef:
+                description: |-
+                  Which Impulse triggered this StoryRun, if any
+                  This provides a clear audit trail from an event trigger to its corresponding workflow execution
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                required:
+                - name
+                type: object
               inputs:
+                description: |-
+                  Input data for this specific story execution
+                  This data gets validated against the Story's inputsSchema
+                  Examples:
+                  - CI pipeline: {"repository": "my-app", "branch": "main", "commit": "abc123"}
+                  - Data processing: {"filename": "data.csv", "format": "csv", "destination": "warehouse"}
+                  - Deployment: {"environment": "production", "version": "v1.2.3", "rollback": false}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               storyRef:
-                type: string
+                description: |-
+                  Which Story to execute
+                  References can be same-namespace (name only) or cross-namespace with explicit namespace
+                  Examples: "ci-pipeline", cross-ns: {"name": "deploy-app", "namespace": "production"}
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced Story for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      When a controller resolves this reference, it stores the target's UID.
+                      On subsequent reconciliations, if the UID has changed, it indicates
+                      the target was deleted and recreated, which may require special handling.
+                    type: string
+                required:
+                - name
+                type: object
             required:
             - storyRef
             type: object
-            x-kubernetes-validations:
-            - message: storyRef is required
-              rule: size(self.storyRef) > 0
-            - message: storyRef must be valid name or ns/name format
-              rule: self.storyRef.matches('^([a-z0-9]([-a-z0-9]*[a-z0-9])?/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-            - message: storyRef must be <= 253 characters
-              rule: size(self.storyRef) <= 253
           status:
+            description: StoryRunStatus tracks the current state and results of this
+              story execution
             properties:
               active:
+                description: List of steps that are currently executing
                 items:
                   type: string
                 type: array
-              artifacts:
-                items:
-                  properties:
-                    name:
-                      type: string
-                    sha256:
-                      type: string
-                    size:
-                      format: int64
-                      type: integer
-                    ttl:
-                      type: string
-                    uri:
-                      type: string
-                  required:
-                  - name
-                  - sha256
-                  - size
-                  - uri
-                  type: object
-                type: array
               completed:
+                description: List of steps that have completed successfully
                 items:
                   type: string
                 type: array
               conditions:
-                description: Status conditions
+                description: Standard Kubernetes conditions for detailed status tracking
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -146,24 +234,101 @@ spec:
                   - type
                   type: object
                 type: array
+              duration:
+                description: How long did this execution take? (calculated field)
+                type: string
               error:
+                description: |-
+                  If the story failed, what was the error?
+                  Contains structured error information for debugging
+                  Examples:
+                  - Step failure: {"failedStep": "deploy", "reason": "timeout", "details": "..."}
+                  - Validation error: {"type": "input_validation", "field": "url", "message": "Invalid URL"}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               finishedAt:
                 format: date-time
                 type: string
               message:
+                description: Human-readable message about the story's status
                 type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this StoryRun. It corresponds to the
+                  StoryRun's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
               output:
-                description: Final outputs and artifacts
+                description: |-
+                  What data did this story produce upon completion?
+                  For small outputs (< 1MB), stored inline here
+                  For large outputs, automatically stored in shared storage (if enabled) and path referenced here
+                  This gets validated against the Story's outputSchema
+                  Examples:
+                  - CI pipeline: {"buildArtifact": "app-v1.2.3.tar.gz", "testResults": {...}, "deploymentUrl": "https://..."}
+                  - Data processing: {"processedRows": 1000, "outputFile": "processed-data.json", "errors": 5}
+                  - Large output: {"result": "success", "outputPath": "/shared/storage/story-123/final-output.json"}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               phase:
+                description: |-
+                  Current execution phase
+                  - Pending: StoryRun created but not yet started
+                  - Running: Story is actively executing steps
+                  - Succeeded: All steps completed successfully
+                  - Failed: A step failed and the story cannot continue
+                  - Canceled: Execution was canceled by user or system
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Canceled
+                - Compensated
+                - Paused
+                - Blocked
+                - Scheduling
+                - Timeout
+                - Aborted
                 type: string
+              primitiveChildren:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  Tracks the child StepRuns created by primitive steps (e.g., parallel branches, loop iterations)
+                  Key: Name of the parent primitive step (e.g., "my-parallel-step")
+                  Value: List of child StepRun names created by that primitive
+                type: object
               startedAt:
                 description: Execution timing
                 format: date-time
                 type: string
+              stepOutputs:
+                additionalProperties:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                description: |-
+                  StepOutputs stores the outputs of each completed step.
+                  The key is the step ID (from the Story spec).
+                  The value is the raw JSON output from the StepRun.
+                  This allows subsequent steps to reference the outputs of prior steps.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              stepsComplete:
+                format: int32
+                type: integer
+              stepsFailed:
+                format: int32
+                type: integer
+              stepsSkipped:
+                format: int32
+                type: integer
+              stepsTotal:
+                description: Step execution summary for quick overview
+                format: int32
+                type: integer
             type: object
         type: object
     served: true

@@ -28,6 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+
+	"github.com/bubustack/bobrapet/internal/config"
 )
 
 var _ = Describe("Impulse Controller", func() {
@@ -69,10 +71,11 @@ var _ = Describe("Impulse Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &ImpulseReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				ControllerDependencies: config.ControllerDependencies{
+					Client: k8sClient,
+					Scheme: k8sClient.Scheme(),
+				},
 			}
-
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})

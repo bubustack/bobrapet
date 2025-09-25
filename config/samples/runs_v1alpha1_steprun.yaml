@@ -1,9 +1,0 @@
-apiVersion: runs.bubu.sh/v1alpha1
-kind: StepRun
-metadata:
-  labels:
-    app.kubernetes.io/name: bobrapet
-    app.kubernetes.io/managed-by: kustomize
-  name: steprun-sample
-spec:
-  # TODO(user): Add fields here

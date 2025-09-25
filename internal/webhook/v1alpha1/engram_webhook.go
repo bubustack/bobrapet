@@ -65,9 +65,7 @@ func (d *EngramCustomDefaulter) Default(_ context.Context, obj runtime.Object) e
 	}
 	engramlog.Info("Defaulting for Engram", "name", engram.GetName())
 
-	if engram.Spec.Engine != nil && engram.Spec.Engine.Mode == "" {
-		engram.Spec.Engine.Mode = "job"
-	}
+	// TODO(user): fill in your defaulting logic.
 
 	return nil
 }
@@ -96,7 +94,9 @@ func (v *EngramCustomValidator) ValidateCreate(_ context.Context, obj runtime.Ob
 	}
 	engramlog.Info("Validation for Engram upon creation", "name", engram.GetName())
 
-	return v.validateEngram(engram)
+	// TODO(user): fill in your validation logic upon object creation.
+
+	return nil, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Engram.
@@ -107,7 +107,9 @@ func (v *EngramCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj
 	}
 	engramlog.Info("Validation for Engram upon update", "name", engram.GetName())
 
-	return v.validateEngram(engram)
+	// TODO(user): fill in your validation logic upon object update.
+
+	return nil, nil
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Engram.
@@ -121,16 +123,4 @@ func (v *EngramCustomValidator) ValidateDelete(ctx context.Context, obj runtime.
 	// TODO(user): fill in your validation logic upon object deletion.
 
 	return nil, nil
-}
-
-func (v *EngramCustomValidator) validateEngram(engram *bubushv1alpha1.Engram) (admission.Warnings, error) {
-	if engram.Spec.Engine == nil || engram.Spec.Engine.TemplateRef == "" {
-		return nil, fmt.Errorf("spec.engine.templateRef is required")
-	}
-	switch engram.Spec.Engine.Mode {
-	case "", "job", "deployment", "statefulset":
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("invalid spec.engine.mode: %s", engram.Spec.Engine.Mode)
-	}
 }

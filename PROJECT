@@ -2,6 +2,7 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
+cliVersion: 4.9.0
 domain: bubu.sh
 layout:
 - go.kubebuilder.io/v4
@@ -69,4 +70,20 @@ resources:
   webhooks:
     validation: true
     webhookVersion: v1
+- api:
+    crdVersion: v1
+  controller: true
+  domain: bubu.sh
+  group: catalog
+  kind: EngramTemplate
+  path: github.com/bubustack/bobrapet/api/catalog/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+  controller: true
+  domain: bubu.sh
+  group: catalog
+  kind: ImpulseTemplate
+  path: github.com/bubustack/bobrapet/api/catalog/v1alpha1
+  version: v1alpha1
 version: "3"

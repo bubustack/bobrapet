@@ -25,20 +25,22 @@ resources:
 - catalog_impulsetemplate_admin_role.yaml
 - catalog_impulsetemplate_editor_role.yaml
 - catalog_impulsetemplate_viewer_role.yaml
-# CRD RBAC roles - consolidated API groups
-- story_admin_role.yaml
-- story_editor_role.yaml
-- story_viewer_role.yaml
-- engram_admin_role.yaml
-- engram_editor_role.yaml
-- engram_viewer_role.yaml
-- impulse_admin_role.yaml
-- impulse_editor_role.yaml
-- impulse_viewer_role.yaml
+- catalog_engramtemplate_admin_role.yaml
+- catalog_engramtemplate_editor_role.yaml
+- catalog_engramtemplate_viewer_role.yaml
 - runs_steprun_admin_role.yaml
 - runs_steprun_editor_role.yaml
 - runs_steprun_viewer_role.yaml
 - runs_storyrun_admin_role.yaml
 - runs_storyrun_editor_role.yaml
 - runs_storyrun_viewer_role.yaml
+- impulse_admin_role.yaml
+- impulse_editor_role.yaml
+- impulse_viewer_role.yaml
+- engram_admin_role.yaml
+- engram_editor_role.yaml
+- engram_viewer_role.yaml
+- story_admin_role.yaml
+- story_editor_role.yaml
+- story_viewer_role.yaml
 

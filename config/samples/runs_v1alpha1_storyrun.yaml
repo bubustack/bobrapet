@@ -1,12 +1,10 @@
+---
 apiVersion: runs.bubu.sh/v1alpha1
 kind: StoryRun
 metadata:
-  name: onboarding-run-001
+  name: summarize-trigger
 spec:
-  storyRef: onboarding-flow
-  tenant: acme-corp
   inputs:
-    message: "I'm interested in your product and would like to learn more"
-    emails: 
-      - "customer@example.com"
-      - "lead@company.com"
+    url: https://kubernetes.io/docs/concepts/overview/
+  storyRef:
+    name: summarize-website-story

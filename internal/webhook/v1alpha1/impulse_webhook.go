@@ -65,9 +65,7 @@ func (d *ImpulseCustomDefaulter) Default(_ context.Context, obj runtime.Object) 
 	}
 	impulselog.Info("Defaulting for Impulse", "name", impulse.GetName())
 
-	if impulse.Spec.Engine != nil && impulse.Spec.Engine.Mode == "" {
-		impulse.Spec.Engine.Mode = "deployment"
-	}
+	// TODO(user): fill in your defaulting logic.
 
 	return nil
 }
@@ -96,7 +94,9 @@ func (v *ImpulseCustomValidator) ValidateCreate(_ context.Context, obj runtime.O
 	}
 	impulselog.Info("Validation for Impulse upon creation", "name", impulse.GetName())
 
-	return v.validateImpulse(impulse)
+	// TODO(user): fill in your validation logic upon object creation.
+
+	return nil, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
@@ -107,7 +107,9 @@ func (v *ImpulseCustomValidator) ValidateUpdate(_ context.Context, oldObj, newOb
 	}
 	impulselog.Info("Validation for Impulse upon update", "name", impulse.GetName())
 
-	return v.validateImpulse(impulse)
+	// TODO(user): fill in your validation logic upon object update.
+
+	return nil, nil
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
@@ -118,20 +120,7 @@ func (v *ImpulseCustomValidator) ValidateDelete(ctx context.Context, obj runtime
 	}
 	impulselog.Info("Validation for Impulse upon deletion", "name", impulse.GetName())
 
-	return nil, nil
-}
+	// TODO(user): fill in your validation logic upon object deletion.
 
-func (v *ImpulseCustomValidator) validateImpulse(impulse *bubushv1alpha1.Impulse) (admission.Warnings, error) {
-	if impulse.Spec.StoryRef == "" {
-		return nil, fmt.Errorf("spec.storyRef is required")
-	}
-	if impulse.Spec.Engine == nil || impulse.Spec.Engine.TemplateRef == "" {
-		return nil, fmt.Errorf("spec.engine.templateRef is required")
-	}
-	switch impulse.Spec.Engine.Mode {
-	case "", "deployment", "statefulset":
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("invalid spec.engine.mode for impulse: %s", impulse.Spec.Engine.Mode)
-	}
+	return nil, nil
 }

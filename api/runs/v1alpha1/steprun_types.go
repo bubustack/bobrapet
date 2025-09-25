@@ -19,12 +19,42 @@ package v1alpha1
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
+// StepRun represents the execution of a single step within a StoryRun
+//
+// Think of the relationship like this:
+// - Story = A recipe (defines the cooking process)
+// - StoryRun = Actually cooking the dish (following the recipe)
+// - StepRun = Each individual cooking step (chopping vegetables, heating oil, etc.)
+//
+// StepRuns are the atomic units of execution. They represent:
+// - Running a single Engram with specific inputs
+// - Executing a built-in primitive action (condition, loop, etc.)
+// - Launching a sub-story
+//
+// StepRuns provide detailed execution tracking:
+// - Exactly when each step started and finished
+// - What inputs were provided and outputs produced
+// - Resource usage and performance metrics
+// - Detailed error information for debugging
+// - Retry attempts and circuit breaker status
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=step
+// +kubebuilder:resource:scope=Namespaced,shortName=step,categories={bubu,ai,runs}
+// +kubebuilder:printcolumn:name="StoryRun",type=string,JSONPath=.spec.storyRunRef.name
+// +kubebuilder:printcolumn:name="Step",type=string,JSONPath=.spec.stepId
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
+// +kubebuilder:printcolumn:name="Retries",type=integer,JSONPath=.status.retries
+// +kubebuilder:printcolumn:name="Duration",type=string,JSONPath=.status.duration
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
+// +kubebuilder:rbac:groups=runs.bubu.sh,resources=stepruns,verbs=get;watch
+// +kubebuilder:rbac:groups=runs.bubu.sh,resources=stepruns/status,verbs=patch;update
 type StepRun struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -33,123 +63,141 @@ type StepRun struct {
 	Status StepRunStatus `json:"status,omitempty"`
 }
 
-// +kubebuilder:validation:XValidation:rule="size(self.storyRunRef) > 0",message="storyRunRef is required"
-// +kubebuilder:validation:XValidation:rule="self.storyRunRef.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="storyRunRef must be valid DNS-1123 label"
-// +kubebuilder:validation:XValidation:rule="size(self.stepId) > 0",message="stepId is required"
-// +kubebuilder:validation:XValidation:rule="!has(self.engramRef) || self.engramRef.matches('^([a-z0-9]([-a-z0-9]*[a-z0-9])?/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="engramRef must be valid name or ns/name format"
+// StepRunSpec defines exactly how to execute this specific step
 type StepRunSpec struct {
-	StoryRunRef string `json:"storyRunRef"`
-	StepID      string `json:"stepId"`
+	// Which StoryRun does this step belong to?
+	// Used to track the parent execution and coordinate step ordering
+	// +kubebuilder:validation:Required
+	StoryRunRef refs.StoryRunReference `json:"storyRunRef"`
 
-	// Engram execution details
-	EngramRef string                `json:"engramRef,omitempty"` // reference to Engram CRD
-	Image     string                `json:"image,omitempty"`     // OCI image (fallback if no EngramRef)
-	Input     *runtime.RawExtension `json:"input,omitempty"`     // JSON input for the Engram
+	// Which step in the Story is this executing?
+	// References the step name/ID from the original Story definition
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	StepID string `json:"stepId"`
 
-	// ABI contract environment
-	Deadline         string `json:"deadline,omitempty"` // RFC3339 timestamp
-	IdempotencyToken string `json:"idempotencyToken,omitempty"`
+	// What should this step execute?
+	// Always references an Engram (for custom logic) or uses built-in primitive type
+	// Primitive types: condition, loop, parallel, sleep, stop, switch, filter, transform, etc.
+	EngramRef *refs.EngramReference `json:"engramRef,omitempty"` // Reference to an Engram for custom logic
 
-	// Execution configuration
-	Mode string `json:"mode,omitempty"` // container|pooled|grpc|wasi
-	// +kubebuilder:validation:XValidation:rule="size(self) == 0 || self.matches('^([0-9]+(\\\\.[0-9]+)?(ms|s|m|h))+$')",message="timeout must be a valid duration"
-	Timeout     string       `json:"timeout,omitempty"` // duration string
-	RetryPolicy *RetryPolicy `json:"retryPolicy,omitempty"`
+	// What data should be passed to this step?
+	// This is the resolved input after CEL evaluation and data flow from previous steps
+	// Examples:
+	// - HTTP request: {"url": "https://api.example.com", "method": "GET", "headers": {...}}
+	// - OpenAI call: {"prompt": "Summarize this text: ...", "model": "gpt-4", "temperature": 0.7}
+	// - Condition: {"expression": "{{ steps.http_check.output.status == 200 }}"}
+	// - Loop: {"items": ["file1.txt", "file2.txt"], "concurrency": 3}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Input *runtime.RawExtension `json:"input,omitempty"`
+
+	// Execution timing constraints (inherited from Story → Engram → Template hierarchy)
+	// How long to wait before considering this step failed?
+	// Examples: "30s", "5m", "1h"
+	// Priority: StepRun > Story.steps[].execution.timeout > Engram.execution.timeout > Template.execution.timeout
+	Timeout string `json:"timeout,omitempty"`
+
+	// What to do if this step fails?
+	// Priority: StepRun > Story.steps[].execution.retry > Engram.execution.retry > Template.execution.retry
+	Retry *bubuv1alpha1.RetryPolicy `json:"retry,omitempty"`
+
+	// Last-minute overrides for special situations
+	// This has the highest priority in the configuration hierarchy
+	ExecutionOverrides *StepExecutionOverrides `json:"executionOverrides,omitempty"`
+
+	// DownstreamTargets instructs the Engram's SDK what to do with the output.
+	// This is populated by the storyrun-controller to enable direct Engram-to-Engram communication.
+	// Can be a list to support fanning out to multiple parallel steps.
+	// +optional
+	DownstreamTargets []DownstreamTarget `json:"downstreamTargets,omitempty"`
 }
 
+// DownstreamTarget defines the destination for an Engram's output in real-time execution mode.
+// Exactly one of the fields must be set.
+type DownstreamTarget struct {
+	// GRPCTarget specifies the connection details for the next Engram in the chain.
+	// +optional
+	GRPCTarget *GRPCTarget `json:"grpc,omitempty"`
+
+	// Terminate indicates that this is the last step in the flow.
+	// +optional
+	Terminate *TerminateTarget `json:"terminate,omitempty"`
+}
+
+// GRPCTarget provides the endpoint for a downstream gRPC peer.
+type GRPCTarget struct {
+	// Endpoint is the address of the downstream service (e.g., "engram-b.default.svc:9000").
+	// +kubebuilder:validation:Required
+	Endpoint string `json:"endpoint"`
+}
+
+// TerminateTarget specifies how a terminal step should conclude the workflow.
+type TerminateTarget struct {
+	// StopMode defines the final phase of the StoryRun (e.g., success, failure).
+	// +kubebuilder:validation:Required
+	StopMode enums.StopMode `json:"stopMode"`
+}
+
+// StepRunStatus tracks the detailed execution state of this individual step
 type StepRunStatus struct {
-	Phase string `json:"phase,omitempty"` // Pending|Running|Succeeded|Failed|Canceled|Paused
+	// observedGeneration is the most recent generation observed for this StepRun. It corresponds to the
+	// StepRun's generation, which is updated on mutation by the API Server.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// Execution metadata
-	StartedAt  string `json:"startedAt,omitempty"`  // RFC3339 timestamp
-	FinishedAt string `json:"finishedAt,omitempty"` // RFC3339 timestamp
-	ExitCode   int32  `json:"exitCode,omitempty"`   // Actual exit code from container
-	ExitClass  string `json:"exitClass,omitempty"`  // success|retry|terminal|rateLimited
-	Retries    int    `json:"retries,omitempty"`
-	PodName    string `json:"podName,omitempty"`
+	// Current execution phase
+	// - Pending: StepRun created but not yet started (waiting for dependencies)
+	// - Running: Step is actively executing
+	// - Succeeded: Step completed successfully
+	// - Failed: Step failed and will not be retried
+	// - Canceled: Step was canceled by user or system
+	// - Paused: Step is paused waiting for external input or approval
+	Phase enums.Phase `json:"phase,omitempty"`
 
-	// ABI contract outputs - Enhanced for large data handling
-	Output    *runtime.RawExtension `json:"output,omitempty"`    // inline output if <1MB
-	Artifacts []ArtifactRef         `json:"artifacts,omitempty"` // references to artifacts in store
-	Error     *runtime.RawExtension `json:"error,omitempty"`     // structured error from stderr
+	// Execution timing and metadata
+	StartedAt  *metav1.Time `json:"startedAt,omitempty"`  // When did this step start?
+	FinishedAt *metav1.Time `json:"finishedAt,omitempty"` // When did this step finish?
+	Duration   string       `json:"duration,omitempty"`   // How long did execution take? (calculated field)
 
-	// Observability
-	LogsURI string `json:"logsURI,omitempty"`
-	TraceID string `json:"traceID,omitempty"` // OpenTelemetry trace ID
+	// Process execution details
+	ExitCode  int32           `json:"exitCode,omitempty"`  // What exit code did the container return? (0 = success)
+	ExitClass enums.ExitClass `json:"exitClass,omitempty"` // How should we interpret this exit? (success|retry|terminal|rateLimited)
+	PodName   string          `json:"podName,omitempty"`   // Which Kubernetes pod executed this step?
 
-	// Dependencies and triggering (simplified communication pattern)
-	Dependencies []string `json:"dependencies,omitempty"` // StepRuns this step depends on
-	Triggers     []string `json:"triggers,omitempty"`     // StepRuns triggered by this step
+	// Retry tracking (aligned with our Story/Engram/Template retry design)
+	Retries        int32        `json:"retries,omitempty"`        // How many times has this step been retried?
+	NextRetryAt    *metav1.Time `json:"nextRetryAt,omitempty"`    // When will the next retry happen?
+	LastFailureMsg string       `json:"lastFailureMsg,omitempty"` // Most recent failure message for debugging
 
-	// Pause information
-	PauseInfo *PauseInfo `json:"pauseInfo,omitempty"`
-}
+	// What did this step produce?
+	// For small outputs (< 1MB), stored inline here
+	// For large outputs, automatically stored in shared storage (if enabled) and path referenced here
+	// This gets validated against the Engram's outputSchema (if applicable)
+	// Examples:
+	// - HTTP client: {"status": 200, "body": "...", "headers": {...}, "responseTime": 150}
+	// - OpenAI: {"response": "Summary text...", "usage": {"tokens": 250}, "model": "gpt-4"}
+	// - Large file: {"result": "success", "outputPath": "/shared/storage/story-123/step-fetch/response.json"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Output *runtime.RawExtension `json:"output,omitempty"`
 
-type RetryPolicy struct {
-	MaxRetries int    `json:"maxRetries,omitempty"`
-	Backoff    string `json:"backoff,omitempty"`   // exponential|linear|fixed
-	BaseDelay  string `json:"baseDelay,omitempty"` // duration string
-	MaxDelay   string `json:"maxDelay,omitempty"`  // duration string
+	// If the step failed, what was the error?
+	// Contains structured error information for debugging
+	// Examples:
+	// - HTTP error: {"type": "http_error", "status": 404, "message": "Not Found", "url": "..."}
+	// - Timeout: {"type": "timeout", "duration": "30s", "stage": "execution"}
+	// - Validation: {"type": "validation_error", "field": "url", "message": "Invalid URL format"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Error *runtime.RawExtension `json:"error,omitempty"`
 
-	// Circuit breaker configuration
-	CircuitBreaker *CircuitBreakerConfig `json:"circuitBreaker,omitempty"`
-}
+	// Conditions provide a standard way to convey the state of the StepRun.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-// CircuitBreakerConfig defines circuit breaker behavior for resilient execution
-type CircuitBreakerConfig struct {
-	// Failure threshold before opening circuit
-	FailureThreshold int32 `json:"failureThreshold,omitempty"` // default: 5
-
-	// Success threshold to close circuit from half-open
-	SuccessThreshold int32 `json:"successThreshold,omitempty"` // default: 3
-
-	// Time window to evaluate failures
-	TimeWindow string `json:"timeWindow,omitempty"` // default: "1m"
-
-	// Reset timeout when circuit is open
-	ResetTimeout string `json:"resetTimeout,omitempty"` // default: "30s"
-
-	// Fallback action when circuit is open
-	FallbackAction *FallbackAction `json:"fallbackAction,omitempty"`
-
-	// What constitutes a failure (HTTP codes, exit codes, etc.)
-	FailureConditions []FailureCondition `json:"failureConditions,omitempty"`
-}
-
-// FallbackAction defines what to do when circuit is open
-type FallbackAction struct {
-	Type string `json:"type"` // skip|fail|engram|value
-
-	// For type=engram: reference to fallback engram
-	EngramRef string `json:"engramRef,omitempty"`
-
-	// For type=value: static fallback value
-	Value *runtime.RawExtension `json:"value,omitempty"`
-}
-
-// FailureCondition defines what constitutes a failure
-type FailureCondition struct {
-	Type string `json:"type"` // httpStatus|exitCode|exception|timeout
-
-	// For httpStatus: HTTP status codes (e.g., "5xx", ">=400")
-	HTTPStatusPattern string `json:"httpStatusPattern,omitempty"`
-
-	// For exitCode: container exit codes (e.g., "!=0")
-	ExitCodePattern string `json:"exitCodePattern,omitempty"`
-
-	// For exception: exception patterns
-	ExceptionPattern string `json:"exceptionPattern,omitempty"`
-
-	// For timeout: consider timeouts as failures
-	IncludeTimeouts bool `json:"includeTimeouts,omitempty"`
-}
-
-type ArtifactRef struct {
-	Name   string `json:"name"`          // artifact name
-	URI    string `json:"uri"`           // S3/MinIO URI
-	SHA256 string `json:"sha256"`        // content hash
-	Size   int64  `json:"size"`          // size in bytes
-	TTL    string `json:"ttl,omitempty"` // time to live
+	// Step coordination - which steps must complete before this one can start
+	// Uses the same "needs" terminology as our Story API for consistency
+	Needs []string `json:"needs,omitempty"` // StepRun names that must complete first
 }
 
 // +kubebuilder:object:root=true
@@ -159,19 +207,19 @@ type StepRunList struct {
 	Items           []StepRun `json:"items"`
 }
 
-// PauseInfo contains information about a paused step
-type PauseInfo struct {
-	// When the step was paused
-	PausedAt *metav1.Time `json:"pausedAt,omitempty"`
+// StepExecutionOverrides allows overriding execution parameters at the StepRun level
+// This has the highest priority in the configuration hierarchy: StepRun > Story > Engram > Template
+type StepExecutionOverrides struct {
+	// Resource overrides - only the essentials
+	CPURequest    *string `json:"cpuRequest,omitempty"`    // Override CPU request (e.g., "100m", "0.5")
+	CPULimit      *string `json:"cpuLimit,omitempty"`      // Override CPU limit (e.g., "500m", "1")
+	MemoryRequest *string `json:"memoryRequest,omitempty"` // Override memory request (e.g., "128Mi", "1Gi")
+	MemoryLimit   *string `json:"memoryLimit,omitempty"`   // Override memory limit (e.g., "256Mi", "2Gi")
 
-	// Reason for pausing
-	Reason string `json:"reason,omitempty"`
-
-	// Expected resume time (for timeout-based resume)
-	ResumeAt *metav1.Time `json:"resumeAt,omitempty"`
-
-	// External trigger status
-	ExternalTriggerStatus string `json:"externalTriggerStatus,omitempty"`
+	// Job behavior overrides
+	BackoffLimit            *int32  `json:"backoffLimit,omitempty"`            // Override job backoff limit
+	TTLSecondsAfterFinished *int32  `json:"ttlSecondsAfterFinished,omitempty"` // Override job cleanup time
+	RestartPolicy           *string `json:"restartPolicy,omitempty"`           // Override restart policy (Never, OnFailure)
 }
 
 func init() {

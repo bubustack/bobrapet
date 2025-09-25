@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bobrapet-operator-config
+  namespace: bobrapet-system
+data:
+  # Controller Configuration
+  controller.max-concurrent-reconciles: "15"
+  controller.requeue-base-delay: "2s"
+  controller.requeue-max-delay: "1m"
+  controller.health-check-interval: "30s"
+  controller.cleanup-interval: "6h"
+  
+  # Image Configuration  
+  images.registry: "ghcr.io/bubustack"
+  images.default-engram: "engram-default:latest"
+  images.default-impulse: "impulse-default:latest"
+  images.pull-policy: "IfNotPresent"
+  
+  # Resource Limits
+  resources.engram.cpu-request: "100m"
+  resources.engram.cpu-limit: "1"
+  resources.engram.memory-request: "128Mi"
+  resources.engram.memory-limit: "512Mi"
+  
+  # Retry and Timeout Configuration
+  retry.max-retries: "3"
+  retry.exponential-backoff-base: "2s"
+  retry.exponential-backoff-max: "1m"
+  timeout.default-step: "5m"
+  timeout.approval-default: "24h"
+  timeout.external-data-default: "30m"
+  timeout.conditional-default: "10m"
+  
+  # Loop Processing Configuration
+  loop.max-iterations: "10000"
+  loop.default-batch-size: "100"
+  loop.max-batch-size: "1000"
+  loop.max-concurrency: "10"
+  loop.max-concurrency-limit: "50"
+  
+  # Security Configuration
+  security.run-as-non-root: "true"
+  security.read-only-root-filesystem: "true"
+  security.allow-privilege-escalation: "false"
+  security.drop-capabilities: "ALL"
+  security.run-as-user: "1000"
+  
+  # Job Configuration
+  job.backoff-limit: "0"
+  job.ttl-seconds-after-finished: "300"
+  job.restart-policy: "Never"
+  
+  # CEL Configuration
+  cel.evaluation-timeout: "30s"
+  cel.max-expression-length: "1000"
+  cel.enable-macros: "true"
+  
+  # Telemetry Configuration
+  telemetry.enabled: "true"
+  telemetry.trace-propagation: "true"
+  
+  # Development/Debug Configuration
+  debug.enable-verbose-logging: "false"
+  debug.enable-step-output-logging: "false"
+  debug.enable-metrics: "true"

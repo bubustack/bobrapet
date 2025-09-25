@@ -1,9 +1,25 @@
+---
 apiVersion: bubu.sh/v1alpha1
 kind: Engram
 metadata:
-  labels:
-    app.kubernetes.io/name: bobrapet
-    app.kubernetes.io/managed-by: kustomize
-  name: engram-sample
+  name: http-request-engram
 spec:
-  # TODO(user): Add fields here
+  mode: job
+  templateRef: 
+    name: http-request
+---
+apiVersion: bubu.sh/v1alpha1
+kind: Engram
+metadata:
+  name: openai-summarizer-engram
+spec:
+  mode: job
+  secrets:
+    openai: openai-credentials
+  templateRef: 
+    name: openai-chat
+  with:
+    model: gpt-4
+    systemPrompt: |
+      You are an expert at summarizing technical content. Given the body
+      of a webpage, provide a concise, one-paragraph summary.

@@ -25,9 +25,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/bubustack/bobrapet/internal/config"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	storiesv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 )
 
 var _ = Describe("Story Controller", func() {
@@ -40,13 +42,13 @@ var _ = Describe("Story Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		story := &storiesv1alpha1.Story{}
+		story := &bubushv1alpha1.Story{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Story")
 			err := k8sClient.Get(ctx, typeNamespacedName, story)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &storiesv1alpha1.Story{
+				resource := &bubushv1alpha1.Story{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
@@ -59,7 +61,7 @@ var _ = Describe("Story Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &storiesv1alpha1.Story{}
+			resource := &bubushv1alpha1.Story{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -69,8 +71,10 @@ var _ = Describe("Story Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &StoryReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				ControllerDependencies: config.ControllerDependencies{
+					Client: k8sClient,
+					Scheme: k8sClient.Scheme(),
+				},
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

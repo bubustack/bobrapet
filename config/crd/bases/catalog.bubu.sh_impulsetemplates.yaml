@@ -3,11 +3,15 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: impulsetemplates.catalog.bubu.sh
 spec:
   group: catalog.bubu.sh
   names:
+    categories:
+    - bubu
+    - ai
+    - catalog
     kind: ImpulseTemplate
     listKind: ImpulseTemplateList
     plural: impulsetemplates
@@ -17,11 +21,17 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.uiHints.category
-      name: Category
+    - jsonPath: .spec.description
+      name: Description
       type: string
     - jsonPath: .spec.version
       name: Version
+      type: string
+    - jsonPath: .status.usageCount
+      name: Usage
+      type: integer
+    - jsonPath: .status.validationStatus
+      name: Status
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -29,6 +39,21 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: |-
+          ImpulseTemplate defines a reusable "trigger" component that launches stories
+
+          Think of ImpulseTemplates as event listeners or sensors that know how to handle specific types of events:
+          - "github-webhook": Handles GitHub webhook events (push, PR, release, etc.)
+          - "slack-handler": Processes Slack events (mentions, slash commands, reactions)
+          - "file-watcher": Monitors file uploads/changes in cloud storage
+          - "cron-scheduler": Triggers stories on schedules (like GitHub Actions cron)
+          - "kafka-consumer": Consumes messages from Kafka topics
+
+          Templates are cluster-scoped because they're meant to be shared across teams and namespaces.
+          They define WHAT events can be handled, while Impulses define HOW to configure and use them.
+
+          The relationship is:
+          ImpulseTemplate (defines trigger capabilities) → Impulse (configured trigger) → Launches Stories
         properties:
           apiVersion:
             description: |-
@@ -48,257 +73,199 @@ spec:
           metadata:
             type: object
           spec:
+            description: ImpulseTemplateSpec defines the capabilities and contract
+              of a trigger component
             properties:
               configSchema:
-                description: Configuration schema for the component itself (optional,
-                  for validation and tooling)
+                description: |-
+                  JSON Schema defining how users can configure this template
+                  This validates the "with" field when users create Engrams/Impulses
+                  Example: {"timeout": {"type": "string"}, "retries": {"type": "integer"}}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               contextSchema:
                 description: |-
-                  Impulse-specific schema fields
-                  JSON Schema for trigger context/payload (optional, for validation and tooling)
+                  What data does this trigger provide when events occur?
+                  This defines the structure of the event context that will be available for mapping to Story inputs
+                  Examples:
+                  - GitHub webhook: {"repository": "object", "ref": "string", "commits": "array", "sender": "object"}
+                  - File watcher: {"bucket": "string", "objectKey": "string", "size": "integer", "timestamp": "string"}
+                  - Slack event: {"channel": "string", "user": "object", "message": "string", "timestamp": "string"}
+                  - Cron trigger: {"scheduledTime": "string", "timezone": "string", "schedule": "string"}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
-              defaults:
-                description: Default configuration that can be overridden by users
+              description:
+                description: |-
+                  Human-readable description of what this template does
+                  Examples: "HTTP client with retry and timeout support", "OpenAI GPT integration"
+                type: string
+              execution:
+                description: |-
+                  Default execution settings that template authors recommend
+                  These provide sensible defaults but can be overridden by users
                 properties:
-                  config:
-                    description: Default container configuration (passed to 'with'
-                      field)
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  resources:
-                    description: Default resource configuration
+                  images:
+                    description: Image handling recommendations (pull policies, etc.)
                     properties:
-                      limits:
-                        description: DefaultResourceLimits provides resource limit
-                          defaults
-                        properties:
-                          cpu:
-                            type: string
-                          ephemeralStorage:
-                            type: string
-                          gpu:
-                            type: string
-                          maxArtifactSize:
-                            type: string
-                          maxFileSize:
-                            type: string
-                          maxNetworkConns:
-                            format: int32
-                            type: integer
-                          memory:
-                            type: string
-                        type: object
-                      maxConcurrentInstances:
-                        format: int32
-                        type: integer
-                      maxExecutionTime:
+                      pullPolicy:
+                        description: Default image pull policy for this template (Always,
+                          Never, IfNotPresent)
                         type: string
-                      maxRetries:
+                    type: object
+                  job:
+                    description: Job-specific recommendations (for templates that
+                      run as jobs)
+                    properties:
+                      recommendedBackoffLimit:
+                        description: Recommended backoff limit for this template
                         format: int32
                         type: integer
-                      nodeSelector:
-                        additionalProperties:
-                          type: string
-                        type: object
-                      requests:
-                        description: DefaultResourceRequests provides resource request
-                          defaults
-                        properties:
-                          cpu:
-                            type: string
-                          ephemeralStorage:
-                            type: string
-                          gpu:
-                            type: string
-                          memory:
-                            type: string
-                        type: object
-                      tolerations:
-                        items:
-                          type: string
-                        type: array
+                      recommendedRestartPolicy:
+                        description: Recommended restart policy for this template
+                        type: string
+                      recommendedTtlSecondsAfterFinished:
+                        description: Recommended TTL after finished for this template
+                        format: int32
+                        type: integer
+                    type: object
+                  resources:
+                    description: Resource recommendations (how much CPU/memory this
+                      typically needs)
+                    properties:
+                      minCpuRequest:
+                        description: Minimum resource requirements for this template
+                        type: string
+                      minMemoryRequest:
+                        type: string
+                      recommendedCpuLimit:
+                        description: Recommended CPU limit for this template
+                        type: string
+                      recommendedCpuRequest:
+                        description: Recommended CPU request for this template
+                        type: string
+                      recommendedMemoryLimit:
+                        description: Recommended memory limit for this template
+                        type: string
+                      recommendedMemoryRequest:
+                        description: Recommended memory request for this template
+                        type: string
                     type: object
                   retry:
-                    description: Default retry policy
+                    description: Retry behavior recommendations
                     properties:
-                      backoff:
+                      recommendedBackoff:
+                        description: Recommended backoff strategy for this template
                         type: string
-                      baseDelay:
+                      recommendedBaseDelay:
+                        description: Recommended base delay for this template
                         type: string
-                      maxDelay:
+                      recommendedMaxDelay:
+                        description: Recommended max delay for this template
                         type: string
-                      maxRetries:
+                      recommendedMaxRetries:
+                        description: Recommended max retries for this template
                         type: integer
                     type: object
                   security:
-                    description: Default security configuration
+                    description: Security requirements and recommendations
                     properties:
-                      allowPrivilegeEscalation:
+                      recommendedRunAsUser:
+                        description: Recommended user ID for this template
+                        format: int64
+                        type: integer
+                      requiresNoPrivilegeEscalation:
+                        description: Whether this template requires no privilege escalation
                         type: boolean
-                      networkPolicy:
-                        type: string
-                      requiredSecrets:
-                        items:
-                          type: string
-                        type: array
-                      runAsNonRoot:
+                      requiresNonRoot:
+                        description: Whether this template requires running as non-root
+                        type: boolean
+                      requiresReadOnlyRoot:
+                        description: Whether this template requires read-only root
+                          filesystem
                         type: boolean
                     type: object
                   timeout:
-                    description: Default timeout
+                    description: Default timeout recommendation
                     type: string
-                  workload:
-                    description: Default workload configuration
-                    properties:
-                      activeDeadlineSeconds:
-                        format: int64
-                        type: integer
-                      completions:
-                        format: int32
-                        type: integer
-                      job:
-                        description: DefaultJobConfig provides job defaults
-                        properties:
-                          backoffLimit:
-                            format: int32
-                            type: integer
-                          completionMode:
-                            type: string
-                          suspend:
-                            type: boolean
-                        type: object
-                      parallelism:
-                        format: int32
-                        type: integer
-                      replicas:
-                        format: int32
-                        type: integer
-                      statefulSet:
-                        description: DefaultStatefulSetConfig provides StatefulSet
-                          defaults
-                        properties:
-                          podManagementPolicy:
-                            type: string
-                          serviceName:
-                            type: string
-                        type: object
-                      ttlSecondsAfterFinished:
-                        format: int32
-                        type: integer
-                      updateStrategy:
-                        description: DefaultUpdateStrategy provides update strategy
-                          defaults
-                        properties:
-                          rollingUpdate:
-                            description: DefaultRollingUpdateConfig provides rolling
-                              update defaults
-                            properties:
-                              maxSurge:
-                                type: string
-                              maxUnavailable:
-                                type: string
-                            type: object
-                          type:
-                            type: string
-                        type: object
-                    type: object
                 type: object
-              description:
-                description: Human-readable description
-                type: string
-              examples:
-                description: Example configurations
-                items:
-                  description: Example provides template usage examples
-                  properties:
-                    config:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                    description:
-                      type: string
-                    input:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                    name:
-                      type: string
-                    output:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                  required:
-                  - name
-                  type: object
-                type: array
               image:
-                description: OCI image reference
+                description: |-
+                  Container image that implements this template's functionality
+                  This is the actual code that runs when someone uses this template
+                maxLength: 512
                 type: string
-              mappingSchema:
-                description: JSON Schema for context mapping configuration (optional,
-                  for validation and tooling)
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
-              resources:
-                description: Resource requirements and hints
-                properties:
-                  cpu:
-                    type: string
-                  gpu:
-                    type: string
-                  memory:
-                    type: string
-                  nodeSelector:
-                    additionalProperties:
+              secretSchema:
+                additionalProperties:
+                  description: |-
+                    SecretDefinition defines the structure and requirements of a secret
+                    This handles both simple key-value secrets and complex structured secrets
+                  properties:
+                    description:
+                      description: |-
+                        Human-readable description of what this secret is used for
+                        Example: "API key for OpenAI authentication", "Database connection credentials"
                       type: string
-                    description: Node selection hints
-                    type: object
-                  tolerations:
-                    items:
+                    envPrefix:
+                      description: |-
+                        For env mounting: what environment variable prefix to use
+                        If not specified, uses secret name in uppercase
+                        Example: "DATABASE" -> DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD
                       type: string
-                    type: array
-                type: object
-              security:
-                description: Security requirements
-                properties:
-                  networkAccess:
-                    items:
+                    expectedKeys:
+                      description: |-
+                        Expected keys in this secret (for validation and documentation)
+                        Example: ["host", "username", "password"] or ["api-key", "org-id"]
+                      items:
+                        type: string
+                      type: array
+                    mountPath:
+                      description: |-
+                        For file mounting: where to mount the secret files
+                        Example: "/etc/secrets/database", "/opt/certs"
                       type: string
-                    type: array
-                  privilegedAccess:
-                    type: boolean
-                  requiredSecrets:
-                    items:
+                    mountType:
+                      description: |-
+                        How this secret should be mounted and accessed
+                        - env: As environment variables (default for simple secrets)
+                        - file: As mounted files (better for certificates, config files)
+                        - both: Available as both env vars and files
+                      enum:
+                      - env
+                      - file
+                      - both
                       type: string
-                    type: array
+                    required:
+                      description: Whether this secret is required for the template
+                        to function
+                      type: boolean
+                  type: object
+                description: |-
+                  Secret definitions that this template can use
+                  Defines what secrets this template expects and how they should be structured
+                  Users must provide corresponding secrets when creating Engrams/Impulses
                 type: object
               supportedModes:
-                description: Supported execution modes (job, deployment, statefulset)
+                description: |-
+                  Which Kubernetes workload types this template supports
+                  - job: One-shot tasks (like batch processing, CI builds)
+                  - deployment: Always-on stateless services (like APIs, webhooks)
+                  - statefulset: Always-on stateful services (like databases, file processors)
                 items:
+                  description: |-
+                    WorkloadMode defines how a workload should be executed in Kubernetes.
+                    This determines the fundamental execution pattern and lifecycle management.
+                  enum:
+                  - job
+                  - deployment
+                  - statefulset
                   type: string
+                maxItems: 3
+                minItems: 1
                 type: array
-              uiHints:
-                description: UI hints for builders/editors
-                properties:
-                  category:
-                    type: string
-                  color:
-                    type: string
-                  displayName:
-                    type: string
-                  icon:
-                    type: string
-                  layout:
-                    additionalProperties:
-                      type: string
-                    type: object
-                  tags:
-                    items:
-                      type: string
-                    type: array
-                type: object
               version:
-                description: Version of this template
+                description: |-
+                  Version of this template package (use semantic versioning like "1.2.3")
+                  This allows users to pin to specific versions or upgrade safely
                 type: string
             required:
             - supportedModes
@@ -307,6 +274,7 @@ spec:
           status:
             properties:
               conditions:
+                description: Standard Kubernetes conditions (Ready, Available, etc.)
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -362,16 +330,32 @@ spec:
                   - type
                   type: object
                 type: array
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this Template. It corresponds to the
+                  Template's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
               usageCount:
-                description: Usage statistics
+                description: |-
+                  How many Engrams/Impulses are currently using this template
+                  Useful for understanding template popularity and impact of changes
                 format: int32
                 type: integer
               validationErrors:
+                description: |-
+                  If validation failed, what were the specific errors?
+                  Helps template authors fix issues with their schemas or configuration
                 items:
                   type: string
                 type: array
               validationStatus:
-                description: Validation status
+                description: Whether this template passed validation checks
+                enum:
+                - valid
+                - invalid
+                - unknown
+                - pending
                 type: string
             type: object
         type: object

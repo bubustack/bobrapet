@@ -21,11 +21,28 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// EngramTemplate defines a reusable "worker" component for stories
+//
+// Think of EngramTemplates as specialized tools in a toolbox:
+// - "http-client": Makes HTTP requests with retry and timeout support
+// - "openai-chat": Integrates with OpenAI's GPT models
+// - "postgres-query": Executes SQL queries against PostgreSQL
+// - "slack-notify": Sends messages to Slack channels
+// - "image-resize": Processes and resizes images
+//
+// Templates are cluster-scoped because they're meant to be shared across teams and namespaces.
+// They define WHAT can be done, while Engrams define HOW to configure and run them.
+//
+// The relationship is:
+// EngramTemplate (defines capabilities) → Engram (configured instance) → Used in Story steps
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=etpl
-// +kubebuilder:printcolumn:name="Category",type=string,JSONPath=.spec.uiHints.category
+// +kubebuilder:resource:scope=Cluster,shortName=etpl,categories={bubu,ai,catalog}
+// +kubebuilder:printcolumn:name="Description",type=string,JSONPath=.spec.description
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=.spec.version
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=.status.usageCount
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=.status.validationStatus
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 type EngramTemplate struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -35,22 +52,31 @@ type EngramTemplate struct {
 	Status EngramTemplateStatus `json:"status,omitempty"`
 }
 
+// EngramTemplateSpec defines the capabilities and contract of a worker component
 type EngramTemplateSpec struct {
-
-	// Shared template fields
+	// Common template fields (version, description, image, etc.)
 	TemplateSpec `json:",inline"`
 
-	// Engram-specific schema fields
-	// JSON Schema for inputs
+	// What data does this engram expect as input?
+	// This defines the contract for the data flowing INTO this component
+	// Examples:
+	// - HTTP client: {"url": "string", "method": "string", "headers": "object"}
+	// - OpenAI: {"prompt": "string", "model": "string", "temperature": "number"}
+	// - Database: {"query": "string", "parameters": "object"}
+	// +kubebuilder:pruning:PreserveUnknownFields
 	InputSchema *runtime.RawExtension `json:"inputSchema,omitempty"`
 
-	// JSON Schema for outputs
+	// What data does this engram produce as output?
+	// This defines the contract for the data flowing OUT of this component
+	// Examples:
+	// - HTTP client: {"status": "integer", "body": "string", "headers": "object"}
+	// - OpenAI: {"response": "string", "usage": "object", "model": "string"}
+	// - Database: {"rows": "array", "rowCount": "integer", "duration": "number"}
+	// +kubebuilder:pruning:PreserveUnknownFields
 	OutputSchema *runtime.RawExtension `json:"outputSchema,omitempty"`
 }
 
-// All shared types (UIHints, Example, ResourceHints, SecurityHints, TemplateStatus)
-// are defined in template_types.go to ensure consistency between EngramTemplate and ImpulseTemplate
-
+// EngramTemplateStatus defines the observed state of EngramTemplate
 type EngramTemplateStatus struct {
 	TemplateStatus `json:",inline"`
 }

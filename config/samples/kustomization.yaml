@@ -1,11 +1,9 @@
 ## Append samples of your project ##
 resources:
-# Current API group samples (consolidated)
 - v1alpha1_story.yaml
-- v1alpha1_engram.yaml  
+- v1alpha1_engram.yaml
 - v1alpha1_impulse.yaml
 - runs_v1alpha1_storyrun.yaml
-- runs_v1alpha1_steprun.yaml
 - catalog_v1alpha1_engramtemplate.yaml
 - catalog_v1alpha1_impulsetemplate.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

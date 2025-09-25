@@ -16,9 +16,12 @@ curl -LO "https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$ARCH/kubectl"
 chmod +x kubectl
 mv kubectl /usr/local/bin/kubectl
 
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
 docker --version
 go version
 kubectl version --client
 
 kind version
 kubebuilder version
+helm version

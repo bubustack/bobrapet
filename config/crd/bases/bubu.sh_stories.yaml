@@ -3,11 +3,15 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: stories.bubu.sh
 spec:
   group: bubu.sh
   names:
+    categories:
+    - bubu
+    - ai
+    - workflows
     kind: Story
     listKind: StoryList
     plural: stories
@@ -17,15 +21,32 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.stepsCount
+    - jsonPath: .status.stepsTotal
       name: Steps
       type: integer
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: |-
+          Story represents a workflow definition - a sequence of steps that accomplish a business goal
+
+          Stories are the main workflows in your system. Think of them like:
+          - GitHub Actions workflows
+          - Jenkins pipelines
+          - Zapier automations
+          - Any business process you want to automate
+
+          Stories orchestrate Engrams (the workers) to create powerful workflows:
+          - CI/CD pipeline: checkout → test → build → deploy
+          - Data processing: extract → transform → load → notify
+          - E-commerce: validate order → charge payment → ship → update inventory
+          - Content moderation: analyze → classify → approve/reject → notify
         properties:
           apiVersion:
             description: |-
@@ -45,272 +66,390 @@ spec:
           metadata:
             type: object
           spec:
-            description: Enforce policy.concurrency at the spec level to avoid cross-struct
-              references
+            description: StorySpec defines what the workflow does and how it should
+              run
             properties:
               inputsSchema:
-                description: Optional JSON schema strings for inputs/outputs (opaque
-                  for MVP)
-                type: string
+                description: |-
+                  What inputs does this Story expect?
+                  Define the data structure that triggers (Impulses) or users need to provide
+                  Example: {"repository": "string", "branch": "string", "commit": "string"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               outputSchema:
+                description: |-
+                  What outputs does this Story produce?
+                  Define the data structure this workflow will return upon completion
+                  Example: {"buildArtifact": "string", "testResults": "object", "deploymentUrl": "string"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              pattern:
+                default: batch
+                description: |-
+                  Pattern defines the execution strategy for this Story.
+                  'batch' (default): Runs the story as a series of ephemeral jobs. Good for asynchronous tasks.
+                  'streaming': Deploys the story as a persistent pipeline of services for real-time, low-latency workloads.
+                enum:
+                - batch
+                - streaming
                 type: string
               policy:
-                description: Simple policy placeholder (MVP)
+                description: How should this Story behave? (timeouts, retries, storage,
+                  etc.)
                 properties:
-                  artifacts:
-                    description: Artifact store policy and TTL
-                    properties:
-                      maxInlineSize:
-                        description: Max inline size for outputs kept in status (e.g.,
-                          "256Ki")
-                        type: string
-                      store:
-                        description: Store name or class (e.g., s3, minio, gcs)
-                        type: string
-                      ttl:
-                        description: Time-to-live for artifacts (e.g., "24h")
-                        type: string
-                    type: object
                   concurrency:
-                    description: Story-level concurrency cap (max in-flight steps)
+                    description: Concurrency limits
                     format: int32
                     type: integer
-                  dlq:
-                    description: Dead-letter handling target (e.g., step name or sink
-                      ref)
-                    type: string
-                  idempotency:
-                    description: Enable effectively-once semantics when possible
-                    type: boolean
-                  retries:
+                  execution:
+                    description: Default execution settings (can be overridden at
+                      step level)
                     properties:
-                      backoff:
-                        default: exponential
-                        enum:
-                        - exponential
-                        - linear
-                        - fixed
+                      job:
+                        description: Job configuration
+                        properties:
+                          backoffLimit:
+                            description: Backoff limit for jobs
+                            format: int32
+                            type: integer
+                          restartPolicy:
+                            description: Restart policy
+                            type: string
+                          ttlSecondsAfterFinished:
+                            description: TTL for job cleanup
+                            format: int32
+                            type: integer
+                        type: object
+                      resources:
+                        description: Resource configuration (actual values, not defaults)
+                        properties:
+                          cpuLimit:
+                            description: CPU limit
+                            type: string
+                          cpuRequest:
+                            description: CPU request
+                            type: string
+                          memoryLimit:
+                            description: Memory limit
+                            type: string
+                          memoryRequest:
+                            description: Memory request
+                            type: string
+                        type: object
+                      retry:
+                        description: Retry configuration
+                        properties:
+                          backoff:
+                            description: |-
+                              Backoff strategy for retry delays
+                              - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                              - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                              - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                            enum:
+                            - exponential
+                            - linear
+                            - constant
+                            type: string
+                          delay:
+                            default: 1s
+                            description: |-
+                              Base delay between retries
+                              Examples: "1s", "5s", "30s"
+                            type: string
+                          maxRetries:
+                            default: 3
+                            description: Maximum number of retry attempts
+                            format: int32
+                            maximum: 10
+                            minimum: 0
+                            type: integer
+                        type: object
+                      security:
+                        description: Security configuration
+                        properties:
+                          allowPrivilegeEscalation:
+                            description: Whether to allow privilege escalation
+                            type: boolean
+                          readOnlyRootFilesystem:
+                            description: Read-only root filesystem
+                            type: boolean
+                          runAsNonRoot:
+                            description: Whether to run as non-root user
+                            type: boolean
+                          runAsUser:
+                            description: User ID to run as
+                            format: int64
+                            type: integer
+                        type: object
+                      serviceAccountName:
+                        description: ServiceAccount to use for workloads created from
+                          this policy.
                         type: string
-                      baseDelay:
-                        default: 2s
-                        pattern: ^[0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h)$
+                      timeout:
+                        description: Timeout configuration
                         type: string
-                      maxDelay:
-                        default: 1m
-                        pattern: ^[0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h)$
-                        type: string
-                      maxRetries:
-                        default: 3
-                        maximum: 100
-                        minimum: 0
-                        type: integer
                     type: object
-                  shortCircuit:
-                    description: ShortCircuit controls early termination behavior
+                  retries:
+                    description: Retry behavior
                     properties:
-                      action:
-                        default: cancelInFlight
-                        type: string
-                      "on":
-                        default:
-                        - return
-                        - fail
-                        items:
-                          type: string
-                        type: array
+                      continueOnStepFailure:
+                        description: Whether to continue story on step failure
+                        type: boolean
+                      stepRetryPolicy:
+                        description: Default retry policy for steps
+                        properties:
+                          backoff:
+                            description: |-
+                              Backoff strategy for retry delays
+                              - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                              - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                              - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                            enum:
+                            - exponential
+                            - linear
+                            - constant
+                            type: string
+                          delay:
+                            default: 1s
+                            description: |-
+                              Base delay between retries
+                              Examples: "1s", "5s", "30s"
+                            type: string
+                          maxRetries:
+                            default: 3
+                            description: Maximum number of retry attempts
+                            format: int32
+                            maximum: 10
+                            minimum: 0
+                            type: integer
+                        type: object
+                    type: object
+                  storage:
+                    description: Storage configuration
+                    properties:
+                      s3:
+                        description: S3 specifies the configuration for an S3-compatible
+                          object store.
+                        properties:
+                          authentication:
+                            description: Authentication configures how the workload
+                              authenticates with S3.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef references a Kubernetes Secret that contains the credentials.
+                                  The secret must contain keys 'accessKeyID' and 'secretAccessKey'.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              serviceAccountAnnotations:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  ServiceAccountAnnotations allows specifying annotations to be added to the
+                                  auto-generated ServiceAccount. This is the recommended approach for
+                                  IAM-based authentication on cloud providers (e.g., IRSA on EKS).
+                                  The key-value pairs will be added to the ServiceAccount's metadata.annotations.
+                                type: object
+                            type: object
+                          bucket:
+                            description: Bucket is the name of the S3 bucket.
+                            type: string
+                          endpoint:
+                            description: Endpoint is the S3 endpoint URL. Useful for
+                              S3-compatible stores like MinIO.
+                            type: string
+                          region:
+                            description: Region is the AWS region of the bucket.
+                            type: string
+                        required:
+                        - authentication
+                        - bucket
+                        type: object
                     type: object
                   timeouts:
+                    description: Timeouts
                     properties:
                       step:
-                        default: 5m
+                        description: Default timeout for individual steps
                         type: string
                       story:
-                        default: 30m
+                        description: Total time for the entire story
                         type: string
                     type: object
                 type: object
               steps:
-                description: 'Minimal step list: either a built-in Type or a Ref (image)'
+                description: |-
+                  The actual workflow steps - this is where the magic happens!
+                  Steps run in sequence unless you use parallel/condition logic
                 items:
+                  description: |-
+                    Step represents a single action in a story
+                    Steps are the building blocks of stories - each step does one specific thing
                   properties:
-                    batchTimeout:
-                      type: string
-                    body:
-                      x-kubernetes-preserve-unknown-fields: true
-                    branchPolicy:
-                      description: Policies
+                    execution:
+                      description: |-
+                        Override execution settings for this specific step
+                        Use sparingly - most configuration should be at the story or engram level
                       properties:
-                        action:
-                          default: cancelSiblings
+                        imagePullPolicy:
+                          description: Image pull policy override
                           type: string
-                        "on":
-                          default:
-                          - return
-                          - fail
-                          items:
-                            type: string
-                          type: array
-                      type: object
-                    branches:
-                      x-kubernetes-preserve-unknown-fields: true
-                    burst:
-                      type: integer
-                    cases:
-                      description: Switch specific (multi-way branching)
-                      items:
-                        description: SwitchCase represents a case in a switch statement
-                        properties:
-                          steps:
-                            x-kubernetes-preserve-unknown-fields: true
-                          when:
-                            type: string
-                        required:
-                        - steps
-                        - when
-                        type: object
-                      type: array
-                    condition:
-                      type: string
-                    continueOnError:
-                      description: Continue on error (GitHub Actions inspiration)
-                      type: boolean
-                    default:
-                      x-kubernetes-preserve-unknown-fields: true
-                    duration:
-                      type: string
-                    else:
-                      x-kubernetes-preserve-unknown-fields: true
-                    event:
-                      description: Wait specific
-                      type: string
-                    filter:
-                      description: Filter/Transform specific
-                      type: string
-                    gate:
-                      description: Gate specific
-                      properties:
-                        approvers:
-                          items:
-                            type: string
-                          type: array
-                        sla:
+                        retry:
+                          description: Retry policy override
+                          properties:
+                            backoff:
+                              description: |-
+                                Backoff strategy for retry delays
+                                - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                                - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                                - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                              enum:
+                              - exponential
+                              - linear
+                              - constant
+                              type: string
+                            delay:
+                              default: 1s
+                              description: |-
+                                Base delay between retries
+                                Examples: "1s", "5s", "30s"
+                              type: string
+                            maxRetries:
+                              default: 3
+                              description: Maximum number of retry attempts
+                              format: int32
+                              maximum: 10
+                              minimum: 0
+                              type: integer
+                          type: object
+                        security:
+                          description: Security context override
+                          properties:
+                            allowPrivilegeEscalation:
+                              description: Whether to allow privilege escalation
+                              type: boolean
+                            readOnlyRootFilesystem:
+                              description: Read-only root filesystem
+                              type: boolean
+                            requiredSecrets:
+                              description: Required secrets for this workload
+                              items:
+                                type: string
+                              type: array
+                            runAsNonRoot:
+                              description: Whether to run as non-root user
+                              type: boolean
+                            runAsUser:
+                              description: User ID to run as
+                              format: int64
+                              type: integer
+                          type: object
+                        serviceAccountName:
+                          description: ServiceAccount to use for the workload.
+                          type: string
+                        timeout:
+                          description: Timeout for execution
                           type: string
                       type: object
                     id:
+                      description: |-
+                        Optional unique identifier for referencing this step's outputs
+                        Useful for complex stories where later steps need data from specific earlier steps
+                      maxLength: 63
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     if:
-                      description: Control flow with nested structures (natural workflow
-                        definition)
-                      type: string
-                    items:
-                      type: string
-                    maxConcurrency:
-                      description: Parallel execution hints
-                      format: int32
-                      type: integer
-                    maxWait:
-                      type: string
-                    mode:
-                      description: Stop specific
+                      description: |-
+                        When should this step run? (CEL expression)
+                        Examples: "inputs.environment == 'production'", "steps.validate.outputs.success == true"
                       type: string
                     name:
-                      type: string
-                    needs:
-                      description: Dependencies (GitHub Actions needs)
-                      items:
-                        type: string
-                      type: array
-                    output:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                    pausePolicy:
-                      description: Pause/Resume control
-                      properties:
-                        condition:
-                          description: CEL expression for conditional pausing (when
-                            trigger=onCondition)
-                          type: string
-                        externalTrigger:
-                          description: External trigger configuration (when resumeMode=external)
-                          properties:
-                            config:
-                              description: Configuration passed to the external trigger
-                                engram
-                              type: object
-                              x-kubernetes-preserve-unknown-fields: true
-                            engramRef:
-                              description: Reference to an Engram that handles the
-                                external trigger
-                              type: string
-                          required:
-                          - engramRef
-                          type: object
-                        resumeMode:
-                          default: manual
-                          description: 'How to resume: manual, timeout, or external
-                            trigger'
-                          enum:
-                          - manual
-                          - timeout
-                          - external
-                          type: string
-                        resumeTimeout:
-                          description: Timeout for automatic resume (when resumeMode=timeout)
-                          type: string
-                        trigger:
-                          default: onFailure
-                          enum:
-                          - onFailure
-                          - onCondition
-                          - manual
-                          type: string
-                      type: object
-                    rate:
-                      description: Throttle specific
+                      description: |-
+                        Human-readable name for this step
+                        Examples: "fetch-data", "process-payment", "send-notification"
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     ref:
-                      type: string
-                    retry:
-                      description: Step-level policies (override Story defaults)
+                      description: |-
+                        Reference to an Engram for custom logic (alternative to Type)
+                        Use this when you need functionality that's not covered by built-in types
                       properties:
-                        backoff:
-                          default: exponential
-                          enum:
-                          - exponential
-                          - linear
-                          - fixed
+                        name:
+                          description: |-
+                            Name of the referenced object.
+                            Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                           type: string
-                        baseDelay:
-                          default: 2s
-                          pattern: ^[0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h)$
+                        namespace:
+                          description: |-
+                            Namespace of the referenced object.
+                            If empty, defaults to same namespace as the referencing object.
+
+                            Cross-namespace references should be used carefully and only when
+                            multi-tenancy is properly configured. Consider the security implications:
+                            - Ensure RBAC policies allow cross-namespace access
+                            - Validate that the target namespace is trusted
+                            - Monitor cross-namespace references for security compliance
+                          maxLength: 63
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                           type: string
-                        maxDelay:
-                          default: 1m
-                          pattern: ^[0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h)$
+                        uid:
+                          description: |-
+                            UID is a type that holds unique ID values, including UUIDs.  Because we
+                            don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                            intent and helps make sure that UIDs and names do not get conflated.
                           type: string
-                        maxRetries:
-                          default: 3
-                          maximum: 100
-                          minimum: 0
-                          type: integer
+                      required:
+                      - name
                       type: object
-                    size:
-                      description: Batch specific
-                      type: integer
+                    secrets:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Maps template secret definitions to actual Kubernetes secrets for this step
+                        Example: {"apiKey": "openai-credentials", "database": "postgres-creds"}
+                      type: object
                     storyRef:
-                      description: Sub-workflow execution
-                      type: string
-                    subInputs:
-                      type: object
-                      x-kubernetes-preserve-unknown-fields: true
-                    then:
-                      x-kubernetes-preserve-unknown-fields: true
-                    timeout:
-                      type: string
-                    transform:
+                      description: |-
+                        Launch another story as a sub-story (using same 'with' pattern for arguments)
+                        Useful for breaking complex stories into smaller, reusable pieces
+                      maxLength: 253
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     type:
-                      description: Exactly one of Type or Ref must be set
+                      description: |-
+                        What type of action should this step perform?
+                        Use built-in types for common patterns, or reference an Engram for custom logic
+
+                        Built-in primitive types:
+                        - condition: if/then/else logic
+                        - loop: iterate over arrays or repeat N times
+                        - parallel: run multiple steps simultaneously
+                        - sleep: wait for a specified duration
+                        - stop: halt story execution (success or failure)
+                        - switch: multi-way branching like switch/case
+                        - filter: filter arrays or objects based on conditions
+                        - transform: modify data structure or format
+                        - wait: wait for external conditions or events
+                        - throttle: rate limiting and flow control
+                        - batch: group operations for efficiency
+                        - executeStory: run another story as a sub-story
+                        - setData: set variables or update context
+                        - mergeData: combine data from multiple sources
                       enum:
                       - condition
                       - loop
@@ -324,46 +463,31 @@ spec:
                       - throttle
                       - batch
                       - executeStory
-                      - gate
                       - setData
                       - mergeData
-                      type: string
-                    window:
+                      - gate
                       type: string
                     with:
-                      description: Generic step configuration
+                      description: |-
+                        How to configure this step (works for both built-in types and Engrams)
+                        The structure depends on what Type or Ref you're using
                       type: object
                       x-kubernetes-preserve-unknown-fields: true
                   required:
                   - name
                   type: object
-                  x-kubernetes-validations:
-                  - message: Exactly one of type or ref must be set
-                    rule: (has(self.type) && size(self.type) > 0) != (has(self.ref)
-                      && size(self.ref) > 0)
+                maxItems: 100
+                minItems: 1
                 type: array
             required:
             - steps
             type: object
-            x-kubernetes-validations:
-            - message: policy.concurrency must be 1-1000
-              rule: '!has(self.policy) || !has(self.policy.concurrency) || (self.policy.concurrency
-                >= 1 && self.policy.concurrency <= 1000)'
-            - message: policy.timeouts.story must be valid duration
-              rule: '!has(self.policy) || !has(self.policy.timeouts) || !has(self.policy.timeouts.story)
-                || self.policy.timeouts.story.matches(''^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$'')'
-            - message: policy.timeouts.step must be valid duration
-              rule: '!has(self.policy) || !has(self.policy.timeouts) || !has(self.policy.timeouts.step)
-                || self.policy.timeouts.step.matches(''^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$'')'
           status:
             properties:
-              compiledAt:
-                description: Compilation results
-                format: date-time
-                type: string
-              compiledSteps:
-                type: integer
               conditions:
+                description: |-
+                  Standard Kubernetes conditions for detailed status tracking (e.g., "Ready", "Validated")
+                  This will indicate if the Story's syntax is valid and all referenced Engrams exist.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -419,8 +543,17 @@ spec:
                   - type
                   type: object
                 type: array
-              stepsCount:
-                description: Derived count for UX (moved from spec)
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this Story. It corresponds to the
+                  Story's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
+              stepsTotal:
+                description: |-
+                  StepsTotal reflects the total number of steps defined in the story's specification.
+                  This provides a quick way to understand the complexity of the story.
+                format: int32
                 type: integer
             type: object
         type: object

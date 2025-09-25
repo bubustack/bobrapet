@@ -1,55 +1,116 @@
+---
 apiVersion: catalog.bubu.sh/v1alpha1
 kind: EngramTemplate
 metadata:
-  name: text-classifier-v1
+  name: http-request
 spec:
-  version: "1.0.0"
-  description: "AI-powered text classification for sentiment analysis"
+  description: Makes an HTTP request to a specified URL.
+  execution:
+    job:
+      recommendedRestartPolicy: Never
+  image: http-request:latest
   inputSchema:
-    type: object
     properties:
-      text:
+      body:
+        description: The request body (for POST, PUT, etc.).
         type: string
-        description: "Text to classify"
-      model:
+      headers:
+        additionalProperties:
+          type: string
+        description: A map of HTTP headers to send with the request.
+        type: object
+      method:
+        default: GET
+        description: The HTTP method to use (GET, POST, etc.).
         type: string
-        default: "gpt-4"
-        enum: ["gpt-4", "gpt-3.5-turbo"]
+      url:
+        description: The URL to send the request to.
+        type: string
+        required: true
+    type: object
   outputSchema:
-    type: object
     properties:
-      label:
+      body:
+        description: The response body.
         type: string
-        enum: ["positive", "negative", "neutral"]
-      confidence:
+      headers:
+        description: A map of the response headers.
+        type: object
+      status:
+        description: The HTTP status text of the response.
+        type: string
+      statusCode:
+        description: The HTTP status code of the response.
+        type: integer
+    type: object
+  supportedModes:
+  - job
+  version: 0.1.0
+---
+apiVersion: catalog.bubu.sh/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: openai-chat
+spec:
+  configSchema:
+    properties:
+      model:
+        default: gpt-3.5-turbo
+        description: The OpenAI chat model to use (e.g., gpt-4, gpt-3.5-turbo).
+        type: string
+      systemPrompt:
+        default: You are a helpful assistant.
+        description: The initial system message to guide the model's behavior.
+        type: string
+      temperature:
+        default: 0.7
+        description: Controls randomness in the model's output.
         type: number
-        minimum: 0
-        maximum: 1
-  uiHints:
-    category: "ai"
-    displayName: "Text Classifier"
-    icon: "🤖"
-    color: "#4F46E5"
-    tags: ["ai", "nlp", "classification", "sentiment"]
-  examples:
-    - name: "positive-example"
-      description: "Example of positive text classification"
-      input:
-        text: "I love this product!"
-      output:
-        label: "positive"
-        confidence: 0.95
-    - name: "negative-example"  
-      description: "Example of negative text classification"
-      input:
-        text: "This is terrible"
-      output:
-        label: "negative"
-        confidence: 0.89
-  image: "ghcr.io/bubustack/engram-openai:v1.2.3"
-  resources:
-    cpu: "100m"
-    memory: "256Mi"
-  security:
-    requiredSecrets: ["openai-api-key"]
-    networkAccess: ["external"]
+    type: object
+  description: A conversational LLM engram using OpenAI's chat models.
+  image: openai-chat:latest
+  inputSchema:
+    properties:
+      history:
+        items:
+          properties:
+            content:
+              type: string
+            role:
+              enum:
+              - user
+              - assistant
+              type: string
+          type: object
+        type: array
+      text:
+        description: The user's latest message.
+        required: true
+        type: string
+    type: object
+  outputSchema:
+    properties:
+      actionRequest:
+        description: An optional structured request to trigger another story.
+        properties:
+          inputs:
+            type: object
+          storyName:
+            type: string
+        type: object
+      text:
+        description: The model's text response.
+        type: string
+    type: object
+  secretSchema:
+    openai:
+      description: API key for OpenAI authentication.
+      envPrefix: OPENAI_
+      expectedKeys:
+      - API_KEY
+      mountType: env
+      required: true
+  supportedModes:
+  - deployment
+  - job
+  version: 1.0.0

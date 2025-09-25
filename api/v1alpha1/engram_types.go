@@ -17,13 +17,19 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=engram
+// +kubebuilder:resource:scope=Namespaced,shortName=engram,categories={bubu,ai}
+// +kubebuilder:printcolumn:name="Template",type=string,JSONPath=".spec.templateRef.name"
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 type Engram struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -32,37 +38,57 @@ type Engram struct {
 	Status EngramStatus `json:"status,omitempty"`
 }
 
+// EngramSpec defines the configuration and behavior of a specific engram instance
 type EngramSpec struct {
-	// Execution engine configuration - how to run this engram (optional; may default from template)
-	// +kubebuilder:validation:XValidation:rule="has(self.templateRef) && size(self.templateRef) > 0",message="engine.templateRef is required"
-	// +kubebuilder:validation:XValidation:rule="has(self.templateRef) ? size(self.templateRef) <= 253 : true",message="templateRef must be valid DNS name (max 253 chars)"
-	// +kubebuilder:validation:XValidation:rule="has(self.templateRef) ? self.templateRef.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$') : true",message="templateRef must be valid DNS-1123 label"
-	Engine *EngineConfig `json:"engine,omitempty"`
+	// Which template to use for this engram instance
+	// This connects the specific configuration below to a reusable component
+	// +kubebuilder:validation:Required
+	TemplateRef refs.EngramTemplateReference `json:"templateRef"`
 
-	// ABI schema definitions (optional, for validation and tooling)
-	InputSchema  *runtime.RawExtension `json:"inputSchema,omitempty"`
-	OutputSchema *runtime.RawExtension `json:"outputSchema,omitempty"`
-	ConfigSchema *runtime.RawExtension `json:"configSchema,omitempty"`
+	// Mode specifies how the Engram should be run.
+	// Supported values are "job", "deployment", "statefulset".
+	// If not specified, it defaults to the template's supported mode or "job".
+	// +kubebuilder:validation:Enum=job;deployment;statefulset
+	Mode enums.WorkloadMode `json:"mode,omitempty"`
 
-	// Generic configuration / parameters for this Engram instance (validated by template/schema)
+	// How to configure this specific engram instance
+	// This data gets validated against the EngramTemplate's configSchema
+	// +kubebuilder:pruning:PreserveUnknownFields
 	With *runtime.RawExtension `json:"with,omitempty"`
 
-	// Retry and timeout policies
-	Retry   *RetryPolicy `json:"retry,omitempty"`
-	Timeout string       `json:"timeout,omitempty"`
+	// Secrets maps template secret definitions to actual Kubernetes secrets.
+	Secrets map[string]string `json:"secrets,omitempty"`
 
-	// Resource requirements
-	Resources *WorkloadResources `json:"resources,omitempty"`
+	// ExecutionPolicy defines the execution configuration for this Engram.
+	// These settings override any defaults from the EngramTemplate.
+	// +optional
+	ExecutionPolicy *ExecutionPolicy `json:"executionPolicy,omitempty"`
 
-	// Security configuration
-	Security *WorkloadSecurity `json:"security,omitempty"`
+	// Overrides allows for fine-tuning of execution behavior.
+	Overrides *ExecutionOverrides `json:"overrides,omitempty"`
 }
 
-// All shared types (EngineConfig, RetryPolicy, WorkloadResources, WorkloadSecurity, etc.)
-// are defined in workload_types.go to ensure consistency between Engrams and Impulses
-
+// EngramStatus defines the observed state of Engram
 type EngramStatus struct {
+	// ObservedGeneration is the most recent generation observed for this Engram.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// This will indicate if the Engram's syntax is valid and its template is resolved.
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Current workload status - what's actually running.
+	// These fields are ONLY populated for Engrams running as a Deployment or StatefulSet.
+	// For job-based engrams, these will be empty.
+	Replicas      int32       `json:"replicas,omitempty"`      // How many pods are currently running
+	ReadyReplicas int32       `json:"readyReplicas,omitempty"` // How many pods are actually ready to serve traffic
+	Phase         enums.Phase `json:"phase,omitempty"`         // Overall state: Pending, Running, Succeeded, Failed
+
+	// Additional useful information for debugging and monitoring
+	LastExecutionTime *metav1.Time `json:"lastExecutionTime,omitempty"` // When did this last run (for jobs)
+	TotalExecutions   int32        `json:"totalExecutions,omitempty"`   // How many times has this run
+	FailedExecutions  int32        `json:"failedExecutions,omitempty"`  // How many executions failed
 }
 
 // +kubebuilder:object:root=true

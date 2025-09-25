@@ -1,7 +1,8 @@
-resources:
-- manager.yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+resources:
+- manager.yaml
+- operator-config.yaml
 images:
 - name: controller
   newName: bobrapet

@@ -5,6 +5,7 @@ KIND_IMAGE ?= kindest/node:v1.32.3
 KIND_WAIT_TIMEOUT ?= 300s
 KIND_CONFIG ?= $(CURDIR)/hack/kind-config.yaml
 BOBRAPET_IMAGE ?= bobrapet:latest
+KUBECONFIG ?= $(HOME)/.kube/config
 
 # COG images.
 HTTP_TRANSPORT_IMAGE ?= bubustack/http-transport:latest
@@ -27,6 +28,11 @@ kind-delete: ## Delete the kind cluster
 	@kind delete cluster --name $(KIND_CLUSTER_NAME)
 	@echo "Kind cluster '$(KIND_CLUSTER_NAME)' deleted."
 
+.PHONY: kind-get-kubeconfig
+kind-get-kubeconfig: ## Get the kubeconfig for the kind cluster
+	@kind get kubeconfig --name $(KIND_CLUSTER_NAME) > $(KUBECONFIG)
+	@echo "Kubeconfig saved to $(KUBECONFIG)"
+
 .PHONY: kind-load-image
 kind-load-image: ## Load Docker image into kind cluster. Usage: make kind-load-image IMAGE=your-image:tag
 ifndef IMAGE
@@ -34,6 +40,7 @@ ifndef IMAGE
 endif
 	@echo "Loading image $(IMAGE) into kind cluster '$(KIND_CLUSTER_NAME)'..."
 	@kind load docker-image $(IMAGE) --name $(KIND_CLUSTER_NAME)
+	@kind load docker-image docker.io/library/$(IMAGE) --name $(KIND_CLUSTER_NAME)
 	@echo "Image loaded successfully!"
 
 .PHONY: kind-load-controller
@@ -42,12 +49,7 @@ kind-load-controller: ## Build and load the controller image into kind
 	@$(MAKE) docker-build
 	@echo "Loading controller image into kind..."
 	@$(MAKE) kind-load-image IMAGE=$(IMG)
-
-
-.PHONY: kind-load-http-transport
-kind-load-http-transport: ## Load the http transport image into kind
-	@echo "Loading http transport image into kind..."
-	@$(MAKE) kind-load-image IMAGE=$(HTTP_TRANSPORT_IMAGE)
+	@kubectl --context kind-$(KIND_CLUSTER_NAME) rollout restart deployment bobrapet-controller-manager -n bobrapet-system
 
 .PHONY: kind-status
 kind-status: ## Check status of kind cluster
@@ -59,17 +61,3 @@ kind-status: ## Check status of kind cluster
 		echo "\nPods:"; \
 		kubectl --context kind-$(KIND_CLUSTER_NAME) get pods -A; \
 	fi
-
-.PHONY: kind-port-forward
-kind-port-forward: ## Forward local port to service in kind. Usage: make kind-port-forward SERVICE=namespace/service-name LOCAL_PORT=8080 REMOTE_PORT=80
-ifndef SERVICE
-	$(error SERVICE is not set. Please specify the service, e.g., make kind-port-forward SERVICE=default/myservice LOCAL_PORT=8080 REMOTE_PORT=80)
-endif
-ifndef LOCAL_PORT
-	$(error LOCAL_PORT is not set. Please specify the local port)
-endif
-ifndef REMOTE_PORT
-	$(error REMOTE_PORT is not set. Please specify the remote port)
-endif
-	@echo "Forwarding local port $(LOCAL_PORT) to $(SERVICE):$(REMOTE_PORT)..."
-	@kubectl --context kind-$(KIND_CLUSTER_NAME) port-forward service/$(SERVICE) $(LOCAL_PORT):$(REMOTE_PORT)

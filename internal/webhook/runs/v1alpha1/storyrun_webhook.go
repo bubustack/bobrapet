@@ -66,7 +66,9 @@ func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj runtime.
 	}
 	storyrunlog.Info("Validation for StoryRun upon creation", "name", storyrun.GetName())
 
-	return v.validateStoryRun(storyrun)
+	// TODO(user): fill in your validation logic upon object creation.
+
+	return nil, nil
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
@@ -77,7 +79,9 @@ func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newO
 	}
 	storyrunlog.Info("Validation for StoryRun upon update", "name", storyrun.GetName())
 
-	return v.validateStoryRun(storyrun)
+	// TODO(user): fill in your validation logic upon object update.
+
+	return nil, nil
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
@@ -90,12 +94,5 @@ func (v *StoryRunCustomValidator) ValidateDelete(ctx context.Context, obj runtim
 
 	// TODO(user): fill in your validation logic upon object deletion.
 
-	return nil, nil
-}
-
-func (v *StoryRunCustomValidator) validateStoryRun(sr *runsv1alpha1.StoryRun) (admission.Warnings, error) {
-	if sr.Spec.StoryRef == "" {
-		return nil, fmt.Errorf("spec.storyRef is required")
-	}
 	return nil, nil
 }

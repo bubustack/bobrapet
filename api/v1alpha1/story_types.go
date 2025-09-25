@@ -17,20 +17,33 @@ limitations under the License.
 package v1alpha1
 
 import (
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
+// Story represents a workflow definition - a sequence of steps that accomplish a business goal
 //
-// Story
+// Stories are the main workflows in your system. Think of them like:
+// - GitHub Actions workflows
+// - Jenkins pipelines
+// - Zapier automations
+// - Any business process you want to automate
 //
-
+// Stories orchestrate Engrams (the workers) to create powerful workflows:
+// - CI/CD pipeline: checkout → test → build → deploy
+// - Data processing: extract → transform → load → notify
+// - E-commerce: validate order → charge payment → ship → update inventory
+// - Content moderation: analyze → classify → approve/reject → notify
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=story
-// +kubebuilder:printcolumn:name="Steps",type=integer,JSONPath=.spec.stepsCount
-// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
+// +kubebuilder:resource:scope=Namespaced,shortName=story,categories={bubu,ai,workflows}
+// +kubebuilder:printcolumn:name="Steps",type=integer,JSONPath=".status.stepsTotal"
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 type Story struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -39,242 +52,152 @@ type Story struct {
 	Status StoryStatus `json:"status,omitempty"`
 }
 
-// Enforce policy.concurrency at the spec level to avoid cross-struct references
-// +kubebuilder:validation:XValidation:rule="!has(self.policy) || !has(self.policy.concurrency) || (self.policy.concurrency >= 1 && self.policy.concurrency <= 1000)",message="policy.concurrency must be 1-1000"
-// +kubebuilder:validation:XValidation:rule="!has(self.policy) || !has(self.policy.timeouts) || !has(self.policy.timeouts.story) || self.policy.timeouts.story.matches('^[0-9]+(\\\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$')",message="policy.timeouts.story must be valid duration"
-// +kubebuilder:validation:XValidation:rule="!has(self.policy) || !has(self.policy.timeouts) || !has(self.policy.timeouts.step) || self.policy.timeouts.step.matches('^[0-9]+(\\\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$')",message="policy.timeouts.step must be valid duration"
+// StorySpec defines what the workflow does and how it should run
 type StorySpec struct {
-	// Optional JSON schema strings for inputs/outputs (opaque for MVP)
-	InputsSchema *string `json:"inputsSchema,omitempty"`
-	OutputSchema *string `json:"outputSchema,omitempty"`
+	// Pattern defines the execution strategy for this Story.
+	// 'batch' (default): Runs the story as a series of ephemeral jobs. Good for asynchronous tasks.
+	// 'streaming': Deploys the story as a persistent pipeline of services for real-time, low-latency workloads.
+	// +kubebuilder:validation:Enum=batch;streaming
+	// +kubebuilder:default=batch
+	Pattern enums.StoryPattern `json:"pattern,omitempty"`
 
-	// Minimal step list: either a built-in Type or a Ref (image)
+	// What inputs does this Story expect?
+	// Define the data structure that triggers (Impulses) or users need to provide
+	// Example: {"repository": "string", "branch": "string", "commit": "string"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	InputsSchema *runtime.RawExtension `json:"inputsSchema,omitempty"`
+
+	// What outputs does this Story produce?
+	// Define the data structure this workflow will return upon completion
+	// Example: {"buildArtifact": "string", "testResults": "object", "deploymentUrl": "string"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	OutputSchema *runtime.RawExtension `json:"outputSchema,omitempty"`
+
+	// The actual workflow steps - this is where the magic happens!
+	// Steps run in sequence unless you use parallel/condition logic
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=100
 	Steps []Step `json:"steps"`
 
-	// Simple policy placeholder (MVP)
+	// How should this Story behave? (timeouts, retries, storage, etc.)
 	Policy *StoryPolicy `json:"policy,omitempty"`
 }
 
-// StoryPolicy captures workflow-wide behavior knobs for a Story
-type StoryPolicy struct {
-	Timeouts     *Timeouts     `json:"timeouts,omitempty"`
-	Retries      *Retries      `json:"retries,omitempty"`
-	ShortCircuit *ShortCircuit `json:"shortCircuit,omitempty"`
-
-	// Story-level concurrency cap (max in-flight steps)
-	Concurrency *int32 `json:"concurrency,omitempty"`
-	// Dead-letter handling target (e.g., step name or sink ref)
-	DLQ *string `json:"dlq,omitempty"`
-	// Enable effectively-once semantics when possible
-	Idempotency *bool `json:"idempotency,omitempty"`
-	// Artifact store policy and TTL
-	Artifacts *ArtifactPolicy `json:"artifacts,omitempty"`
-}
-
-// +kubebuilder:validation:XValidation:rule="(has(self.type) && size(self.type) > 0) != (has(self.ref) && size(self.ref) > 0)",message="Exactly one of type or ref must be set"
+// Step represents a single action in a story
+// Steps are the building blocks of stories - each step does one specific thing
 type Step struct {
+	// Human-readable name for this step
+	// Examples: "fetch-data", "process-payment", "send-notification"
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 	Name string `json:"name"`
-	ID   string `json:"id,omitempty"` // Step ID for GitHub Actions-style references
 
-	// Exactly one of Type or Ref must be set
-	// +kubebuilder:validation:Enum=condition;loop;parallel;sleep;stop;switch;filter;transform;wait;throttle;batch;executeStory;gate;setData;mergeData
-	Type *string `json:"type,omitempty"` // built-ins: condition|loop|parallel|sleep|stop|switch|filter|transform|wait|throttle|batch|executeStory|gate|setData|mergeData
-	Ref  *string `json:"ref,omitempty"`  // external Engram reference
+	// Optional unique identifier for referencing this step's outputs
+	// Useful for complex stories where later steps need data from specific earlier steps
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	ID string `json:"id,omitempty"`
 
-	// Control flow with nested structures (natural workflow definition)
-	If       *string               `json:"if,omitempty"`       // CEL expression for condition
-	Then     *apiextensionsv1.JSON `json:"then,omitempty"`     // steps to execute if condition is true (flexible schema)
-	Else     *apiextensionsv1.JSON `json:"else,omitempty"`     // steps to execute if condition is false (flexible schema)
-	Items    *string               `json:"items,omitempty"`    // CEL expression for loop items
-	Body     *apiextensionsv1.JSON `json:"body,omitempty"`     // steps to execute in loop body (flexible schema)
-	Branches *apiextensionsv1.JSON `json:"branches,omitempty"` // parallel branches (flexible schema)
+	// What type of action should this step perform?
+	// Use built-in types for common patterns, or reference an Engram for custom logic
+	//
+	// Built-in primitive types:
+	// - condition: if/then/else logic
+	// - loop: iterate over arrays or repeat N times
+	// - parallel: run multiple steps simultaneously
+	// - sleep: wait for a specified duration
+	// - stop: halt story execution (success or failure)
+	// - switch: multi-way branching like switch/case
+	// - filter: filter arrays or objects based on conditions
+	// - transform: modify data structure or format
+	// - wait: wait for external conditions or events
+	// - throttle: rate limiting and flow control
+	// - batch: group operations for efficiency
+	// - executeStory: run another story as a sub-story
+	// - setData: set variables or update context
+	// - mergeData: combine data from multiple sources
+	Type *enums.StepType `json:"type,omitempty"`
 
-	// Gate specific
-	Gate *GateConfig `json:"gate,omitempty"`
+	// Reference to an Engram for custom logic (alternative to Type)
+	// Use this when you need functionality that's not covered by built-in types
+	Ref *refs.EngramReference `json:"ref,omitempty"`
 
-	// Policies
-	BranchPolicy *BranchPolicy `json:"branchPolicy,omitempty"` // for parallel execution
+	// When should this step run? (CEL expression)
+	// Examples: "inputs.environment == 'production'", "steps.validate.outputs.success == true"
+	If *string `json:"if,omitempty"`
 
-	// Pause/Resume control
-	PausePolicy *PausePolicy `json:"pausePolicy,omitempty"` // when to pause execution
-
-	// Stop specific
-	Mode   *string               `json:"mode,omitempty"`   // return|fail|cancel|break|continue
-	Output *runtime.RawExtension `json:"output,omitempty"` // output for stop
-
-	// Switch specific (multi-way branching)
-	Cases   []SwitchCase          `json:"cases,omitempty"`   // conditions and their associated steps
-	Default *apiextensionsv1.JSON `json:"default,omitempty"` // default case for switch (flexible schema)
-
-	// Filter/Transform specific
-	Filter    *string `json:"filter,omitempty"`    // CEL expression for filtering
-	Transform *string `json:"transform,omitempty"` // CEL expression for transformation
-
-	// Wait specific
-	Event     *string `json:"event,omitempty"`     // event type to wait for
-	Duration  *string `json:"duration,omitempty"`  // duration to wait
-	Condition *string `json:"condition,omitempty"` // condition to wait for
-
-	// Throttle specific
-	Rate   *string `json:"rate,omitempty"`   // requests per time period
-	Burst  *int    `json:"burst,omitempty"`  // burst capacity
-	Window *string `json:"window,omitempty"` // time window
-
-	// Batch specific
-	Size         *int    `json:"size,omitempty"`         // batch size
-	BatchTimeout *string `json:"batchTimeout,omitempty"` // batch timeout
-	MaxWait      *string `json:"maxWait,omitempty"`      // max wait for batch
-
-	// Sub-workflow execution
-	StoryRef  *string               `json:"storyRef,omitempty"`  // reference to another story
-	SubInputs *runtime.RawExtension `json:"subInputs,omitempty"` // inputs for sub-story
-
-	// Generic step configuration
+	// How to configure this step (works for both built-in types and Engrams)
+	// The structure depends on what Type or Ref you're using
+	// +kubebuilder:pruning:PreserveUnknownFields
 	With *runtime.RawExtension `json:"with,omitempty"`
 
-	// Step-level policies (override Story defaults)
-	Retry   *Retries `json:"retry,omitempty"`
-	Timeout *string  `json:"timeout,omitempty"`
+	// Maps template secret definitions to actual Kubernetes secrets for this step
+	// Example: {"apiKey": "openai-credentials", "database": "postgres-creds"}
+	Secrets map[string]string `json:"secrets,omitempty"`
 
-	// Continue on error (GitHub Actions inspiration)
-	ContinueOnError bool `json:"continueOnError,omitempty"`
+	// Launch another story as a sub-story (using same 'with' pattern for arguments)
+	// Useful for breaking complex stories into smaller, reusable pieces
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=^([a-z0-9]([-a-z0-9]*[a-z0-9])?/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	StoryRef *string `json:"storyRef,omitempty"`
 
-	// Dependencies (GitHub Actions needs)
-	Needs []string `json:"needs,omitempty"` // step dependencies
-
-	// Parallel execution hints
-	MaxConcurrency *int32 `json:"maxConcurrency,omitempty"` // Max parallel instances of this step
+	// Override execution settings for this specific step
+	// Use sparingly - most configuration should be at the story or engram level
+	Execution *ExecutionOverrides `json:"execution,omitempty"`
 }
 
-// GateConfig defines metadata for manual approvals
-type GateConfig struct {
-	Approvers []string `json:"approvers,omitempty"`
-	SLA       string   `json:"sla,omitempty"`
+// Simplified StoryPolicy focused on essential workflow controls
+type StoryPolicy struct {
+	// Timeouts
+	Timeouts *StoryTimeouts `json:"timeouts,omitempty"`
+
+	// Retry behavior
+	Retries *StoryRetries `json:"retries,omitempty"`
+
+	// Concurrency limits
+	Concurrency *int32 `json:"concurrency,omitempty"`
+
+	// Storage configuration
+	Storage *StoragePolicy `json:"storage,omitempty"`
+
+	// Default execution settings (can be overridden at step level)
+	Execution *ExecutionPolicy `json:"execution,omitempty"`
 }
 
-// SwitchCase represents a case in a switch statement
-type SwitchCase struct {
-	When  string                `json:"when"`  // CEL expression for this case
-	Steps *apiextensionsv1.JSON `json:"steps"` // steps to execute if when condition is true (flexible schema)
+type StoryTimeouts struct {
+	// Total time for the entire story
+	Story *string `json:"story,omitempty"`
+
+	// Default timeout for individual steps
+	Step *string `json:"step,omitempty"`
 }
 
-// PausePolicy defines when and how a step should pause
-type PausePolicy struct {
-	// +kubebuilder:validation:Enum=onFailure;onCondition;manual
-	// +kubebuilder:default="onFailure"
-	Trigger string `json:"trigger,omitempty"` // onFailure|onCondition|manual
+type StoryRetries struct {
+	// Default retry policy for steps
+	StepRetryPolicy *RetryPolicy `json:"stepRetryPolicy,omitempty"`
 
-	// CEL expression for conditional pausing (when trigger=onCondition)
-	Condition *string `json:"condition,omitempty"`
-
-	// How to resume: manual, timeout, or external trigger
-	// +kubebuilder:validation:Enum=manual;timeout;external
-	// +kubebuilder:default="manual"
-	ResumeMode string `json:"resumeMode,omitempty"`
-
-	// Timeout for automatic resume (when resumeMode=timeout)
-	ResumeTimeout *string `json:"resumeTimeout,omitempty"`
-
-	// External trigger configuration (when resumeMode=external)
-	ExternalTrigger *ExternalTrigger `json:"externalTrigger,omitempty"`
-}
-
-// ExternalTrigger defines external resume triggers
-type ExternalTrigger struct {
-	// Reference to an Engram that handles the external trigger
-	EngramRef string `json:"engramRef"`
-
-	// Configuration passed to the external trigger engram
-	Config *runtime.RawExtension `json:"config,omitempty"`
-}
-
-// InputSchema defines the schema for story inputs with type support
-type InputSchema struct {
-	// Schema properties for different input types
-	Properties map[string]InputProperty `json:"properties,omitempty"`
-
-	// Required input fields
-	Required []string `json:"required,omitempty"`
-}
-
-// InputProperty defines a single input property with type information
-type InputProperty struct {
-	// Data type: text, voice, image, file, binary, json, number, boolean
-	Type string `json:"type"`
-
-	// Human-readable description
-	Description string `json:"description,omitempty"`
-
-	// Whether this input is required
-	Required bool `json:"required,omitempty"`
-
-	// MIME types accepted (for file/voice/image inputs)
-	AcceptedTypes []string `json:"acceptedTypes,omitempty"`
-
-	// Maximum size for file inputs (in bytes)
-	MaxSize int64 `json:"maxSize,omitempty"`
-
-	// Processing hints for the input
-	Processing *InputProcessing `json:"processing,omitempty"`
-}
-
-// InputProcessing defines how inputs should be processed
-type InputProcessing struct {
-	// For voice inputs: transcription settings
-	Transcription *TranscriptionConfig `json:"transcription,omitempty"`
-
-	// For image inputs: vision processing settings
-	Vision *VisionConfig `json:"vision,omitempty"`
-
-	// For file inputs: parsing settings
-	FileProcessing *FileProcessingConfig `json:"fileProcessing,omitempty"`
-}
-
-// TranscriptionConfig for voice input processing
-type TranscriptionConfig struct {
-	// Provider: openai, deepgram, assemblyai
-	Provider string `json:"provider,omitempty"`
-
-	// Language hint
-	Language string `json:"language,omitempty"`
-
-	// Include timestamps
-	Timestamps bool `json:"timestamps,omitempty"`
-}
-
-// VisionConfig for image input processing
-type VisionConfig struct {
-	// Provider: openai, anthropic, google
-	Provider string `json:"provider,omitempty"`
-
-	// Analysis type: describe, ocr, analyze, custom
-	AnalysisType string `json:"analysisType,omitempty"`
-
-	// Custom prompt for vision analysis
-	CustomPrompt string `json:"customPrompt,omitempty"`
-}
-
-// FileProcessingConfig for file input processing
-type FileProcessingConfig struct {
-	// Auto-detect file type and parse accordingly
-	AutoParse bool `json:"autoParse,omitempty"`
-
-	// Specific parser: pdf, docx, csv, excel, json, xml
-	Parser string `json:"parser,omitempty"`
-
-	// Extract text content
-	ExtractText bool `json:"extractText,omitempty"`
+	// Whether to continue story on step failure
+	ContinueOnStepFailure *bool `json:"continueOnStepFailure,omitempty"`
 }
 
 type StoryStatus struct {
+	// observedGeneration is the most recent generation observed for this Story. It corresponds to the
+	// Story's generation, which is updated on mutation by the API Server.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Standard Kubernetes conditions for detailed status tracking (e.g., "Ready", "Validated")
+	// This will indicate if the Story's syntax is valid and all referenced Engrams exist.
+	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Derived count for UX (moved from spec)
-	StepsCount int `json:"stepsCount,omitempty"`
-
-	// Compilation results
-	CompiledAt    *metav1.Time `json:"compiledAt,omitempty"`
-	CompiledSteps int          `json:"compiledSteps,omitempty"`
+	// StepsTotal reflects the total number of steps defined in the story's specification.
+	// This provides a quick way to understand the complexity of the story.
+	// +optional
+	StepsTotal int32 `json:"stepsTotal,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -286,53 +209,4 @@ type StoryList struct {
 
 func init() {
 	SchemeBuilder.Register(&Story{}, &StoryList{})
-}
-
-// BranchPolicy defines behavior for parallel branches
-type BranchPolicy struct {
-	// +kubebuilder:default={"return","fail"}
-	On []string `json:"on,omitempty"` // Which outcomes trigger the action
-	// +kubebuilder:default="cancelSiblings"
-	Action string `json:"action,omitempty"` // cancelSiblings|waitAll|ignore
-}
-
-// ShortCircuit controls early termination behavior
-type ShortCircuit struct {
-	// +kubebuilder:default={"return","fail"}
-	On []string `json:"on,omitempty"`
-	// +kubebuilder:default="cancelInFlight"
-	Action string `json:"action,omitempty"` // cancelInFlight|waitAll|ignore
-}
-
-// ArtifactPolicy configures artifact persistence behavior
-type ArtifactPolicy struct {
-	// Store name or class (e.g., s3, minio, gcs)
-	Store string `json:"store,omitempty"`
-	// Time-to-live for artifacts (e.g., "24h")
-	TTL string `json:"ttl,omitempty"`
-	// Max inline size for outputs kept in status (e.g., "256Ki")
-	MaxInlineSize string `json:"maxInlineSize,omitempty"`
-}
-
-type Timeouts struct {
-	// +kubebuilder:default="30m"
-	Story string `json:"story,omitempty"`
-	// +kubebuilder:default="5m"
-	Step string `json:"step,omitempty"`
-}
-
-type Retries struct {
-	// +kubebuilder:default=3
-	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=100
-	MaxRetries int `json:"maxRetries,omitempty"`
-	// +kubebuilder:default="exponential"
-	// +kubebuilder:validation:Enum=exponential;linear;fixed
-	Backoff string `json:"backoff,omitempty"`
-	// +kubebuilder:default="2s"
-	// +kubebuilder:validation:Pattern=`^[0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h)$`
-	BaseDelay string `json:"baseDelay,omitempty"`
-	// +kubebuilder:default="1m"
-	// +kubebuilder:validation:Pattern=`^[0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h)$`
-	MaxDelay string `json:"maxDelay,omitempty"`
 }

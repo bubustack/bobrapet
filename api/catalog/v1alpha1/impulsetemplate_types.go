@@ -21,11 +21,28 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+// ImpulseTemplate defines a reusable "trigger" component that launches stories
+//
+// Think of ImpulseTemplates as event listeners or sensors that know how to handle specific types of events:
+// - "github-webhook": Handles GitHub webhook events (push, PR, release, etc.)
+// - "slack-handler": Processes Slack events (mentions, slash commands, reactions)
+// - "file-watcher": Monitors file uploads/changes in cloud storage
+// - "cron-scheduler": Triggers stories on schedules (like GitHub Actions cron)
+// - "kafka-consumer": Consumes messages from Kafka topics
+//
+// Templates are cluster-scoped because they're meant to be shared across teams and namespaces.
+// They define WHAT events can be handled, while Impulses define HOW to configure and use them.
+//
+// The relationship is:
+// ImpulseTemplate (defines trigger capabilities) → Impulse (configured trigger) → Launches Stories
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster,shortName=itpl
-// +kubebuilder:printcolumn:name="Category",type=string,JSONPath=.spec.uiHints.category
+// +kubebuilder:resource:scope=Cluster,shortName=itpl,categories={bubu,ai,catalog}
+// +kubebuilder:printcolumn:name="Description",type=string,JSONPath=.spec.description
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=.spec.version
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=.status.usageCount
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=.status.validationStatus
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 type ImpulseTemplate struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -35,20 +52,21 @@ type ImpulseTemplate struct {
 	Status ImpulseTemplateStatus `json:"status,omitempty"`
 }
 
+// ImpulseTemplateSpec defines the capabilities and contract of a trigger component
 type ImpulseTemplateSpec struct {
-	// Shared template fields
+	// Common template fields (version, description, image, etc.)
 	TemplateSpec `json:",inline"`
 
-	// Impulse-specific schema fields
-	// JSON Schema for trigger context/payload (optional, for validation and tooling)
+	// What data does this trigger provide when events occur?
+	// This defines the structure of the event context that will be available for mapping to Story inputs
+	// Examples:
+	// - GitHub webhook: {"repository": "object", "ref": "string", "commits": "array", "sender": "object"}
+	// - File watcher: {"bucket": "string", "objectKey": "string", "size": "integer", "timestamp": "string"}
+	// - Slack event: {"channel": "string", "user": "object", "message": "string", "timestamp": "string"}
+	// - Cron trigger: {"scheduledTime": "string", "timezone": "string", "schedule": "string"}
+	// +kubebuilder:pruning:PreserveUnknownFields
 	ContextSchema *runtime.RawExtension `json:"contextSchema,omitempty"`
-
-	// JSON Schema for context mapping configuration (optional, for validation and tooling)
-	MappingSchema *runtime.RawExtension `json:"mappingSchema,omitempty"`
 }
-
-// All shared types (UIHints, Example, ResourceHints, SecurityHints, TemplateStatus)
-// are defined in template_types.go to ensure consistency between EngramTemplate and ImpulseTemplate
 
 type ImpulseTemplateStatus struct {
 	TemplateStatus `json:",inline"`

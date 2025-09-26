@@ -316,6 +316,41 @@ spec:
                   This allows subsequent steps to reference the outputs of prior steps.
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
+              stepStates:
+                additionalProperties:
+                  description: StepState holds the detailed status of a single step
+                    within a StoryRun.
+                  properties:
+                    message:
+                      description: Message provides a human-readable summary of the
+                        step's status.
+                      type: string
+                    phase:
+                      description: Phase is the current execution phase of the step.
+                      enum:
+                      - Pending
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Compensated
+                      - Paused
+                      - Blocked
+                      - Scheduling
+                      - Timeout
+                      - Aborted
+                      type: string
+                    subStoryRunName:
+                      description: For 'executeStory' steps, this tracks the name
+                        of the created sub-StoryRun.
+                      type: string
+                  required:
+                  - phase
+                  type: object
+                description: |-
+                  StepStates provides a detailed, real-time status for each step in the Story.
+                  The key is the step name.
+                type: object
               stepsComplete:
                 format: int32
                 type: integer

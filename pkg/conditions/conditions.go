@@ -46,6 +46,9 @@ const (
 	// Impulse-specific conditions
 	ConditionListening     = "Listening"     // Impulse is listening for triggers
 	ConditionStoryResolved = "StoryResolved" // Story reference resolved successfully
+
+	// Transport-specific conditions
+	ConditionTransportReady = "TransportReady" // Transport is configured and ready
 )
 
 // Standard condition reasons
@@ -86,6 +89,11 @@ const (
 	ReasonCleaningUp        = "CleaningUp"
 	ReasonInputTooLarge     = "InputTooLarge"
 	ReasonOutputTooLarge    = "OutputTooLarge"
+
+	// Transport-specific reasons
+	ReasonTransportReady  = "TransportReady"
+	ReasonTransportFailed = "TransportFailed"
+	ReasonReconciling     = "Reconciling"
 )
 
 // ConditionManager provides standard condition management

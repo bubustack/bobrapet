@@ -18,15 +18,11 @@ package runs
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"regexp"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -39,11 +35,6 @@ import (
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/logging"
 	"github.com/bubustack/bobrapet/pkg/patch"
-
-	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-
-	refs "github.com/bubustack/bobrapet/pkg/refs"
 )
 
 const (
@@ -54,6 +45,8 @@ const (
 // StoryRunReconciler reconciles a StoryRun object
 type StoryRunReconciler struct {
 	config.ControllerDependencies
+	rbacManager   *RBACManager
+	dagReconciler *DAGReconciler
 }
 
 //+kubebuilder:rbac:groups=runs.bubu.sh,resources=storyruns,verbs=get;list;watch;create;update;patch;delete
@@ -88,8 +81,10 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	if err := r.ensureEngramRBAC(ctx, &srun); err != nil {
-		log.Error(err, "Failed to ensure Engram RBAC")
+	if err := r.rbacManager.Reconcile(ctx, &srun); err != nil {
+		log.Error(err, "Failed to reconcile RBAC")
+		// We can choose to fail hard here or just log and continue.
+		// For now, let's fail hard as RBAC is critical for engrams to run.
 		return ctrl.Result{}, err
 	}
 
@@ -103,6 +98,10 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	if story.Spec.Pattern == enums.StreamingPattern {
+		return r.reconcileStreamingStoryRun(ctx, &srun, story)
+	}
+
 	if srun.Status.Phase == "" {
 		err := r.setStoryRunPhase(ctx, &srun, enums.PhaseRunning, "Starting StoryRun execution")
 		if err != nil {
@@ -112,100 +111,65 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// List all StepRuns for this StoryRun to determine the current state of the DAG
-	var stepRunList runsv1alpha1.StepRunList
-	if err := r.ControllerDependencies.Client.List(ctx, &stepRunList, client.InNamespace(srun.Namespace), client.MatchingLabels{"bubu.sh/storyrun": srun.Name}); err != nil {
-		log.Error(err, "Failed to list StepRuns")
-		return ctrl.Result{}, err
-	}
+	// Re-evaluate the entire DAG based on the current state.
+	return r.dagReconciler.Reconcile(ctx, &srun, story)
+}
 
-	// Build the current state from the list of StepRuns
-	completedSteps := make(map[string]bool)
-	runningSteps := make(map[string]bool)
-	failedSteps := make(map[string]bool)
-	needsStatusUpdate := false
+func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story) (ctrl.Result, error) {
+	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", srun.Name)
 
-	if srun.Status.StepOutputs == nil {
-		srun.Status.StepOutputs = make(map[string]*runtime.RawExtension)
-	}
+	if story.Spec.StreamingStrategy == enums.StreamingStrategyPerStoryRun {
+		log.Info("Reconciling streaming StoryRun with PerStoryRun strategy")
 
-	for _, sr := range stepRunList.Items {
-		stepID := sr.Spec.StepID
-		if sr.Status.Phase == enums.PhaseSucceeded {
-			completedSteps[stepID] = true
-			if sr.Status.Output != nil {
-				// Check if this is a new, un-persisted output
-				if _, exists := srun.Status.StepOutputs[stepID]; !exists {
-					srun.Status.StepOutputs[stepID] = sr.Status.Output
-					log.Info("Found new output from successful StepRun", "stepID", stepID)
-					needsStatusUpdate = true
-				}
+		// For each step in the story, create a dedicated Engram owned by this StoryRun
+		for _, step := range story.Spec.Steps {
+			if step.Ref == nil {
+				continue
 			}
-		} else if sr.Status.Phase == enums.PhaseFailed || sr.Status.Phase == enums.PhaseCanceled {
-			failedSteps[stepID] = true
-		} else if sr.Status.Phase == enums.PhaseRunning || sr.Status.Phase == enums.PhasePending {
-			runningSteps[stepID] = true
+
+			// Get the original engram definition
+			originalEngram := &bubushv1alpha1.Engram{}
+			originalEngramKey := step.Ref.ToNamespacedName(story)
+			if err := r.ControllerDependencies.Client.Get(ctx, originalEngramKey, originalEngram); err != nil {
+				if errors.IsNotFound(err) {
+					return ctrl.Result{}, fmt.Errorf("step '%s' references engram '%s' which does not exist", step.Name, originalEngram.Name)
+				}
+				return ctrl.Result{}, fmt.Errorf("failed to get engram for step '%s': %w", step.Name, err)
+			}
+
+			// Create or update the run-specific engram
+			runEngram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("%s-%s", srun.Name, step.Name),
+					Namespace: srun.Namespace,
+				},
+			}
+
+			_, err := controllerutil.CreateOrUpdate(ctx, r.ControllerDependencies.Client, runEngram, func() error {
+				// Copy the spec from the original engram
+				runEngram.Spec = *originalEngram.Spec.DeepCopy()
+				// Ensure the mode is a long-running one
+				if runEngram.Spec.Mode != enums.WorkloadModeDeployment && runEngram.Spec.Mode != enums.WorkloadModeStatefulSet {
+					log.Info("Engram for streaming step is not in a long-running mode, defaulting to 'deployment'", "step", step.Name, "originalMode", runEngram.Spec.Mode)
+					runEngram.Spec.Mode = enums.WorkloadModeDeployment
+				}
+				// Set the StoryRun as the owner
+				return controllerutil.SetControllerReference(srun, runEngram, r.ControllerDependencies.Scheme)
+			})
+
+			if err != nil {
+				log.Error(err, "Failed to create or update run-specific Engram", "step", step.Name)
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
-	if needsStatusUpdate {
-		err := patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, &srun, func(obj client.Object) {
-			sr := obj.(*runsv1alpha1.StoryRun)
-			if sr.Status.StepOutputs == nil {
-				sr.Status.StepOutputs = make(map[string]*runtime.RawExtension)
-			}
-			// This re-iterates, but it's inside the patch function, which is correct.
-			for _, stepRun := range stepRunList.Items {
-				if stepRun.Status.Phase == enums.PhaseSucceeded && stepRun.Status.Output != nil {
-					stepID := stepRun.Spec.StepID
-					if _, exists := sr.Status.StepOutputs[stepID]; !exists {
-						sr.Status.StepOutputs[stepID] = stepRun.Status.Output
-					}
-				}
-			}
-		})
-
-		if err != nil {
-			log.Error(err, "Failed to update StoryRun status with new outputs")
+	// For PerStory strategy, we don't need to do anything. The engrams are expected to be running.
+	// We can now mark the StoryRun as running.
+	if srun.Status.Phase == enums.PhasePending {
+		if err := r.setStoryRunPhase(ctx, srun, enums.PhaseRunning, "Streaming StoryRun is active"); err != nil {
 			return ctrl.Result{}, err
 		}
-		log.Info("Successfully updated StoryRun status with new outputs, requeueing for DAG re-evaluation.")
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	// Check failure policy
-	if len(failedSteps) > 0 && r.shouldFailFast(story) {
-		log.Info("A step failed and fail-fast policy is enabled. Failing StoryRun.")
-		err := r.setStoryRunPhase(ctx, &srun, enums.PhaseFailed, fmt.Sprintf("step %s failed", getFirstKey(failedSteps)))
-		return ctrl.Result{}, err
-	}
-
-	// Build dependency graphs
-	dependencies, dependents := r.buildDependencyGraphs(story.Spec.Steps)
-
-	// Find steps that are ready to run
-	readySteps := r.findReadySteps(story.Spec.Steps, completedSteps, runningSteps, dependencies)
-
-	// Launch ready steps
-	for _, step := range readySteps {
-		if err := r.executeEngramStep(ctx, &srun, story, step, dependents); err != nil {
-			log.Error(err, "Failed to execute step", "step", step.Name)
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Check for completion
-	if len(completedSteps) == len(story.Spec.Steps) && len(failedSteps) == 0 {
-		log.Info("All steps completed successfully.")
-		err := r.setStoryRunPhase(ctx, &srun, enums.PhaseSucceeded, "All steps completed successfully")
-		return ctrl.Result{}, err
-	}
-
-	// If no steps are ready and none are running, but not all are complete, we are stuck.
-	if len(readySteps) == 0 && len(runningSteps) == 0 && len(completedSteps) < len(story.Spec.Steps) {
-		log.Info("Workflow is stuck. No steps are running or ready to run.")
-		err := r.setStoryRunPhase(ctx, &srun, enums.PhaseFailed, "Workflow stuck: circular dependency or unresolved step failure.")
-		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -261,15 +225,6 @@ func (r *StoryRunReconciler) getStoryForRun(ctx context.Context, srun *runsv1alp
 	return &story, nil
 }
 
-func (r *StoryRunReconciler) shouldFailFast(story *bubushv1alpha1.Story) bool {
-	if story.Spec.Policy != nil &&
-		story.Spec.Policy.Retries != nil &&
-		story.Spec.Policy.Retries.ContinueOnStepFailure != nil {
-		return !*story.Spec.Policy.Retries.ContinueOnStepFailure
-	}
-	return true // Default to failing fast
-}
-
 func (r *StoryRunReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1alpha1.StoryRun, phase enums.Phase, message string) error {
 	return patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, srun, func(obj client.Object) {
 		sr := obj.(*runsv1alpha1.StoryRun)
@@ -308,316 +263,12 @@ func (r *StoryRunReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1a
 	})
 }
 
-func (r *StoryRunReconciler) buildDependencyGraphs(steps []bubushv1alpha1.Step) (map[string]map[string]bool, map[string]map[string]bool) {
-	dependencies := make(map[string]map[string]bool)
-	dependents := make(map[string]map[string]bool)
-	// Support both dot and bracket notation; allow hyphens or underscores in IDs
-	stepNameRegex := regexp.MustCompile(`steps\.([a-zA-Z0-9_\-]+)\.|steps\s*\[\s*['\"]([a-zA-Z0-9_\-]+)['\"]\s*\]`)
-
-	// Build a map of normalized aliases (underscores) back to real step names
-	aliasToReal := make(map[string]string)
-	for _, s := range steps {
-		alias := normalizeStepIdentifier(s.Name)
-		if alias != s.Name {
-			aliasToReal[alias] = s.Name
-		}
-	}
-
-	for _, step := range steps {
-		if dependencies[step.Name] == nil {
-			dependencies[step.Name] = make(map[string]bool)
-		}
-		if dependents[step.Name] == nil {
-			dependents[step.Name] = make(map[string]bool)
-		}
-
-		if step.If != nil {
-			matches := stepNameRegex.FindAllStringSubmatch(*step.If, -1)
-			for _, match := range matches {
-				var depName string
-				if len(match) > 2 && match[2] != "" {
-					depName = match[2]
-				} else if len(match) > 1 {
-					depName = match[1]
-				}
-				if depName == "" {
-					continue
-				}
-				// Map normalized alias back to real step name if needed
-				if real, ok := aliasToReal[depName]; ok {
-					depName = real
-				}
-				dependencies[step.Name][depName] = true
-				if dependents[depName] == nil {
-					dependents[depName] = make(map[string]bool)
-				}
-				dependents[depName][step.Name] = true
-			}
-		}
-	}
-	return dependencies, dependents
-}
-
-func (r *StoryRunReconciler) findReadySteps(steps []bubushv1alpha1.Step, completed, running map[string]bool, dependencies map[string]map[string]bool) []*bubushv1alpha1.Step {
-	var ready []*bubushv1alpha1.Step
-	for i := range steps {
-		step := &steps[i]
-		if completed[step.Name] || running[step.Name] {
-			continue
-		}
-
-		deps := dependencies[step.Name]
-		allDepsMet := true
-		for dep := range deps {
-			if !completed[dep] {
-				allDepsMet = false
-				break
-			}
-		}
-
-		if allDepsMet {
-			ready = append(ready, step)
-		}
-	}
-	return ready
-}
-
-func (r *StoryRunReconciler) executeEngramStep(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story, step *bubushv1alpha1.Step, dependents map[string]map[string]bool) error {
-	stepName := fmt.Sprintf("%s-%s", srun.Name, step.Name)
-	var stepRun runsv1alpha1.StepRun
-	err := r.ControllerDependencies.Client.Get(ctx, types.NamespacedName{Name: stepName, Namespace: srun.Namespace}, &stepRun)
-
-	if err != nil && errors.IsNotFound(err) {
-		downstreamTargets := r.findDownstreamTargets(ctx, srun, story, step.Name, dependents)
-
-		// Get the engram to merge the 'with' blocks
-		var engram bubushv1alpha1.Engram
-		if step.Ref != nil {
-			if err := r.ControllerDependencies.Client.Get(ctx, types.NamespacedName{Name: step.Ref.Name, Namespace: srun.Namespace}, &engram); err != nil {
-				return fmt.Errorf("failed to get engram '%s' for step '%s': %w", step.Ref.Name, step.Name, err)
-			}
-		}
-
-		mergedWith, err := r.mergeWithBlocks(engram.Spec.With, step.With)
-		if err != nil {
-			return fmt.Errorf("failed to merge 'with' blocks for step '%s': %w", step.Name, err)
-		}
-
-		stepRun = runsv1alpha1.StepRun{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      stepName,
-				Namespace: srun.Namespace,
-				Labels: map[string]string{
-					"bubu.sh/storyrun":   srun.Name,
-					"bubu.sh/story-name": story.Name,
-				},
-			},
-			Spec: runsv1alpha1.StepRunSpec{
-				StoryRunRef: refs.StoryRunReference{
-					ObjectReference: refs.ObjectReference{Name: srun.Name},
-				},
-				StepID:            step.Name,
-				EngramRef:         step.Ref,
-				Input:             mergedWith,
-				DownstreamTargets: downstreamTargets,
-			},
-		}
-		if err := controllerutil.SetControllerReference(srun, &stepRun, r.ControllerDependencies.Scheme); err != nil {
-			return err
-		}
-		return r.ControllerDependencies.Client.Create(ctx, &stepRun)
-	}
-	return err // Return other errors or nil if found
-}
-
-// mergeWithBlocks combines the 'with' blocks from an Engram and a Step.
-// The Step's values take precedence.
-func (r *StoryRunReconciler) mergeWithBlocks(engramWith, stepWith *runtime.RawExtension) (*runtime.RawExtension, error) {
-	if engramWith == nil {
-		return stepWith, nil
-	}
-	if stepWith == nil {
-		return engramWith, nil
-	}
-
-	var engramMap, stepMap map[string]interface{}
-	if err := json.Unmarshal(engramWith.Raw, &engramMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal engram 'with' block: %w", err)
-	}
-	if err := json.Unmarshal(stepWith.Raw, &stepMap); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal step 'with' block: %w", err)
-	}
-
-	// Start with the engram's values and overwrite with the step's values.
-	for k, v := range stepMap {
-		engramMap[k] = v
-	}
-
-	mergedBytes, err := json.Marshal(engramMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal merged 'with' block: %w", err)
-	}
-
-	return &runtime.RawExtension{Raw: mergedBytes}, nil
-}
-
-func (r *StoryRunReconciler) findDownstreamTargets(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story, stepName string, dependents map[string]map[string]bool) []runsv1alpha1.DownstreamTarget {
-	var targets []runsv1alpha1.DownstreamTarget
-	nextSteps := dependents[stepName]
-
-	if len(nextSteps) == 0 {
-		return []runsv1alpha1.DownstreamTarget{{
-			Terminate: &runsv1alpha1.TerminateTarget{StopMode: enums.StopModeSuccess},
-		}}
-	}
-
-	for nextStepName := range nextSteps {
-		var stepSpec *bubushv1alpha1.Step
-		for i := range story.Spec.Steps {
-			if story.Spec.Steps[i].Name == nextStepName {
-				stepSpec = &story.Spec.Steps[i]
-				break
-			}
-		}
-
-		if stepSpec == nil || stepSpec.Ref == nil {
-			continue
-		}
-
-		var nextEngram bubushv1alpha1.Engram
-		engramKey := types.NamespacedName{Namespace: srun.Namespace, Name: stepSpec.Ref.Name}
-		if err := r.ControllerDependencies.Client.Get(ctx, engramKey, &nextEngram); err != nil {
-			continue
-		}
-
-		if nextEngram.Spec.Mode != "" &&
-			(nextEngram.Spec.Mode == enums.WorkloadModeDeployment || nextEngram.Spec.Mode == enums.WorkloadModeStatefulSet) {
-			endpoint := fmt.Sprintf("engram-%s.%s.svc:9000", stepSpec.Ref.Name, srun.Namespace)
-			targets = append(targets, runsv1alpha1.DownstreamTarget{
-				GRPCTarget: &runsv1alpha1.GRPCTarget{Endpoint: endpoint},
-			})
-		}
-	}
-
-	if len(targets) == 0 {
-		return []runsv1alpha1.DownstreamTarget{{
-			Terminate: &runsv1alpha1.TerminateTarget{StopMode: enums.StopModeSuccess},
-		}}
-	}
-	return targets
-}
-
-func getFirstKey(m map[string]bool) string {
-	for k := range m {
-		return k
-	}
-	return ""
-}
-
-// StepState holds the status of a single step.
-type StepState struct {
-	Phase      enums.Phase
-	IsTerminal bool
-	Output     *runtime.RawExtension
-}
-
-func (r *StoryRunReconciler) ensureEngramRBAC(ctx context.Context, storyRun *runsv1alpha1.StoryRun) error {
-	log := logging.NewReconcileLogger(ctx, "storyrun")
-
-	story, err := r.getStoryForRun(ctx, storyRun)
-	if err != nil {
-		// If the story isn't found, we can't determine the storage policy, but we can still proceed
-		// with the basic RBAC setup. The error will be handled in the main reconcile loop.
-		log.Error(err, "Could not get parent story for RBAC setup, proceeding without storage policy")
-	}
-
-	saName := fmt.Sprintf("%s-engram-runner", storyRun.Name)
-	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      saName,
-			Namespace: storyRun.Namespace,
-		},
-	}
-
-	_, err = controllerutil.CreateOrUpdate(ctx, r.ControllerDependencies.Client, sa, func() error {
-		if sa.Annotations == nil {
-			sa.Annotations = make(map[string]string)
-		}
-
-		if story != nil && story.Spec.Policy != nil && story.Spec.Policy.Storage != nil && story.Spec.Policy.Storage.S3 != nil &&
-			story.Spec.Policy.Storage.S3.Authentication.ServiceAccountAnnotations != nil {
-			log.Info("Applying S3 ServiceAccount annotations from StoragePolicy")
-			for k, v := range story.Spec.Policy.Storage.S3.Authentication.ServiceAccountAnnotations {
-				sa.Annotations[k] = v
-			}
-		}
-
-		return controllerutil.SetOwnerReference(storyRun, sa, r.ControllerDependencies.Scheme)
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to create or update ServiceAccount: %w", err)
-	}
-
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      saName,
-			Namespace: storyRun.Namespace,
-		},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{"runs.bubu.sh"},
-				Resources: []string{"stepruns"},
-				Verbs:     []string{"get", "watch"},
-			},
-			{
-				APIGroups: []string{"runs.bubu.sh"},
-				Resources: []string{"stepruns/status"},
-				Verbs:     []string{"patch", "update"},
-			},
-		},
-	}
-	if err := controllerutil.SetOwnerReference(storyRun, role, r.ControllerDependencies.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on Role: %w", err)
-	}
-	if err := r.ControllerDependencies.Client.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create Role: %w", err)
-	} else if err == nil {
-		log.Info("Created Role for Engram runner", "role", role.Name)
-	}
-
-	rb := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      saName,
-			Namespace: storyRun.Namespace,
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      saName,
-				Namespace: storyRun.Namespace,
-			},
-		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "Role",
-			Name:     saName,
-		},
-	}
-	if err := controllerutil.SetOwnerReference(storyRun, rb, r.ControllerDependencies.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on RoleBinding: %w", err)
-	}
-	if err := r.ControllerDependencies.Client.Create(ctx, rb); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create RoleBinding: %w", err)
-	} else if err == nil {
-		log.Info("Created RoleBinding for Engram runner", "roleBinding", rb.Name)
-	}
-
-	return nil
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *StoryRunReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
+	r.rbacManager = NewRBACManager(mgr.GetClient(), mgr.GetScheme())
+	stepExecutor := NewStepExecutor(mgr.GetClient(), mgr.GetScheme())
+	r.dagReconciler = NewDAGReconciler(mgr.GetClient(), &r.ControllerDependencies.CELEvaluator, stepExecutor, r.ControllerDependencies.ConfigResolver)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&runsv1alpha1.StoryRun{}).
 		WithOptions(opts).

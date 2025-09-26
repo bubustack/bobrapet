@@ -8,13 +8,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -28,15 +28,18 @@ import (
 	"github.com/bubustack/bobrapet/pkg/patch"
 )
 
+const (
+	// RealtimeEngramFinalizer is the finalizer for Engrams in deployment/statefulset mode.
+	RealtimeEngramFinalizer = "engram.bubu.sh/realtime-finalizer"
+)
+
 // RealtimeEngramReconciler reconciles an Engram object for real-time workloads
 type RealtimeEngramReconciler struct {
-	client.Client
-	Scheme           *runtime.Scheme
-	ConfigResolver   *config.Resolver
-	ControllerConfig config.ControllerConfig
+	config.ControllerDependencies
 }
 
-//+kubebuilder:rbac:groups=bubu.sh,resources=engrams,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=bubu.sh,resources=engrams,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=bubu.sh,resources=engrams/finalizers,verbs=update
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -48,6 +51,33 @@ func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	var engram v1alpha1.Engram
 	if err := r.Get(ctx, req.NamespacedName, &engram); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	// This reconciler only handles non-job modes.
+	// If the engram is not in a realtime mode, we should ensure our finalizer is removed and then stop.
+	if engram.Spec.Mode != enums.WorkloadModeDeployment && engram.Spec.Mode != enums.WorkloadModeStatefulSet {
+		if controllerutil.ContainsFinalizer(&engram, RealtimeEngramFinalizer) {
+			controllerutil.RemoveFinalizer(&engram, RealtimeEngramFinalizer)
+			if err := r.Update(ctx, &engram); err != nil {
+				log.Error(err, "Failed to remove realtime finalizer from job-mode Engram")
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Handle deletion
+	if !engram.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &engram)
+	}
+
+	// Add finalizer if it doesn't exist
+	if !controllerutil.ContainsFinalizer(&engram, RealtimeEngramFinalizer) {
+		controllerutil.AddFinalizer(&engram, RealtimeEngramFinalizer)
+		if err := r.Update(ctx, &engram); err != nil {
+			log.Error(err, "Failed to add realtime finalizer")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Get the referenced EngramTemplate
@@ -94,8 +124,7 @@ func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// This reconciler only handles non-job modes.
 	if mode == enums.WorkloadModeJob {
-		// Potentially clean up any lingering service workloads if the mode was changed.
-		// For now, we just ignore it. The StepRun controller will handle job-mode engrams.
+		// This case is handled by the check at the beginning of the function.
 		return ctrl.Result{}, nil
 	}
 
@@ -141,6 +170,51 @@ func (r *RealtimeEngramReconciler) getEngramTemplate(ctx context.Context, engram
 	}
 
 	return template, nil
+}
+
+func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *v1alpha1.Engram) (ctrl.Result, error) {
+	log := logging.NewReconcileLogger(ctx, "realtime-engram").WithValues("engram", engram.Name)
+	log.Info("Reconciling deletion for realtime Engram")
+
+	// Delete owned Deployment
+	deployment := &appsv1.Deployment{}
+	err := r.Get(ctx, types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}, deployment)
+	if err == nil {
+		if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
+			log.Error(err, "Failed to delete owned Deployment")
+			return ctrl.Result{}, err
+		}
+		log.Info("Deleted owned Deployment")
+	} else if !errors.IsNotFound(err) {
+		log.Error(err, "Failed to get owned Deployment for deletion")
+		return ctrl.Result{}, err
+	}
+
+	// Delete owned Service
+	service := &corev1.Service{}
+	err = r.Get(ctx, types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}, service)
+	if err == nil {
+		if err := r.Delete(ctx, service); err != nil && !errors.IsNotFound(err) {
+			log.Error(err, "Failed to delete owned Service")
+			return ctrl.Result{}, err
+		}
+		log.Info("Deleted owned Service")
+	} else if !errors.IsNotFound(err) {
+		log.Error(err, "Failed to get owned Service for deletion")
+		return ctrl.Result{}, err
+	}
+
+	// All owned resources are deleted, remove the finalizer
+	if controllerutil.ContainsFinalizer(engram, RealtimeEngramFinalizer) {
+		controllerutil.RemoveFinalizer(engram, RealtimeEngramFinalizer)
+		if err := r.Update(ctx, engram); err != nil {
+			log.Error(err, "Failed to remove finalizer")
+			return ctrl.Result{}, err
+		}
+		log.Info("Removed finalizer")
+	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engram *v1alpha1.Engram, execConfig *config.ResolvedExecutionConfig) error {
@@ -222,7 +296,7 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(engram *v1alpha1.Engram, 
 				Name:            "engram",
 				ImagePullPolicy: config.ImagePullPolicy,
 				Ports: []corev1.ContainerPort{{
-					ContainerPort: int32(r.ControllerConfig.DefaultEngramGRPCPort),
+					ContainerPort: int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
 					Name:          "grpc",
 				}},
 				Env: []corev1.EnvVar{
@@ -292,7 +366,7 @@ func (r *RealtimeEngramReconciler) serviceForEngram(engram *v1alpha1.Engram, con
 			Selector: labels,
 			Ports: []corev1.ServicePort{{
 				Protocol:   corev1.ProtocolTCP,
-				Port:       int32(r.ControllerConfig.DefaultEngramGRPCPort),
+				Port:       int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
 				TargetPort: intstr.FromString("grpc"),
 			}},
 			Type: corev1.ServiceTypeClusterIP,

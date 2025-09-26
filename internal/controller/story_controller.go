@@ -24,10 +24,15 @@ import (
 	"github.com/bubustack/bobrapet/pkg/conditions"
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/patch"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
@@ -93,20 +98,144 @@ func (r *StoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{RequeueAfter: 1 * time.Minute}, nil
 	}
 
-	// Handle streaming pattern infrastructure
-	if story.Spec.Pattern == enums.StreamingPattern {
-		// Reconcile Deployments/StatefulSets for each step
-		log.FromContext(ctx).Info("Reconciling workloads for streaming Story")
-		// TODO: Implement the logic to iterate through story.Spec.Steps
-		// and create/update a Deployment or StatefulSet for each engram ref.
+	// Handle streaming pattern infrastructure for PerStory strategy
+	if story.Spec.Pattern == enums.StreamingPattern && story.Spec.StreamingStrategy == enums.StreamingStrategyPerStory {
+		return r.reconcilePerStoryStreaming(ctx, &story)
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *StoryReconciler) validateEngramReferences(ctx context.Context, story *bubuv1alpha1.Story) error {
+func (r *StoryReconciler) reconcilePerStoryStreaming(ctx context.Context, story *bubuv1alpha1.Story) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+	log.Info("Reconciling workloads for streaming Story with PerStory strategy")
+
 	for _, step := range story.Spec.Steps {
-		if step.Ref != nil {
+		if step.Ref == nil {
+			continue // This step is not an engram, so nothing to deploy.
+		}
+
+		// Fetch the Engram to get its spec
+		var engram bubuv1alpha1.Engram
+		engramKey := step.Ref.ToNamespacedName(story)
+		if err := r.ControllerDependencies.Client.Get(ctx, engramKey, &engram); err != nil {
+			log.Error(err, "Failed to get Engram for streaming step", "engram", engramKey.Name)
+			return ctrl.Result{}, err // Requeue and try again
+		}
+
+		// We can reuse the logic from the RealtimeEngramReconciler, but we need the full config.
+		// A full implementation would require getting the template and resolving the config here.
+		// For now, we will create a placeholder deployment. A real implementation would need the config resolver.
+		// This is a simplified example; a full implementation needs the resolved execution config.
+		deployment := r.deploymentForStreamingStep(story, &step, &engram)
+		if err := r.reconcileOwnedDeployment(ctx, story, deployment); err != nil {
+			return ctrl.Result{}, err
+		}
+
+		service := r.serviceForStreamingStep(story, &step, &engram)
+		if err := r.reconcileOwnedService(ctx, story, service); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	return ctrl.Result{}, nil
+}
+
+func (r *StoryReconciler) reconcileOwnedDeployment(ctx context.Context, owner *bubuv1alpha1.Story, desired *appsv1.Deployment) error {
+	log := log.FromContext(ctx)
+	existing := &appsv1.Deployment{}
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+	if err != nil && errors.IsNotFound(err) {
+		if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
+			return err
+		}
+		log.Info("Creating Deployment for streaming Story step", "deployment", desired.Name)
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+	// TODO: Add update logic if the spec differs.
+	return nil
+}
+
+func (r *StoryReconciler) reconcileOwnedService(ctx context.Context, owner *bubuv1alpha1.Story, desired *corev1.Service) error {
+	log := log.FromContext(ctx)
+	existing := &corev1.Service{}
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+	if err != nil && errors.IsNotFound(err) {
+		if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
+			return err
+		}
+		log.Info("Creating Service for streaming Story step", "service", desired.Name)
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+	// TODO: Add update logic if the spec differs.
+	return nil
+}
+
+func (r *StoryReconciler) deploymentForStreamingStep(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, engram *bubuv1alpha1.Engram) *appsv1.Deployment {
+	name := fmt.Sprintf("%s-%s", story.Name, step.Name)
+	labels := map[string]string{
+		"app.kubernetes.io/name":       "bobrapet-streaming-engram",
+		"app.kubernetes.io/managed-by": "story-controller",
+		"bubu.sh/story":                story.Name,
+		"bubu.sh/step":                 step.Name,
+	}
+	replicas := int32(1)
+
+	// NOTE: This is a simplified spec. A real implementation would need to fetch the
+	// EngramTemplate and use the config resolver to get the correct image, resources, etc.
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: story.Namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:  "engram",
+						Image: "busybox", // Placeholder - should come from resolved config
+						Args:  []string{"sleep", "3600"},
+					}},
+				},
+			},
+		},
+	}
+}
+
+func (r *StoryReconciler) serviceForStreamingStep(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, engram *bubuv1alpha1.Engram) *corev1.Service {
+	name := fmt.Sprintf("%s-%s", story.Name, step.Name)
+	labels := map[string]string{
+		"bubu.sh/story": story.Name,
+		"bubu.sh/step":  step.Name,
+	}
+
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: story.Namespace,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Ports: []corev1.ServicePort{{
+				Protocol:   corev1.ProtocolTCP,
+				Port:       80, // Placeholder
+				TargetPort: intstr.FromInt(8080),
+			}},
+		},
+	}
+}
+
+func (r *StoryReconciler) validateEngramReferences(ctx context.Context, story *bubuv1alpha1.Story) error {
+	for i, step := range story.Spec.Steps {
+		if step.Ref != nil { // This is an Engram step.
 			var engram bubuv1alpha1.Engram
 			key := step.Ref.ToNamespacedName(story)
 			if err := r.ControllerDependencies.Client.Get(ctx, key, &engram); err != nil {
@@ -115,7 +244,21 @@ func (r *StoryReconciler) validateEngramReferences(ctx context.Context, story *b
 				}
 				return fmt.Errorf("failed to get engram for step '%s': %w", step.Name, err)
 			}
+			// If this is a streaming story with a PerStory strategy, the engram must be a long-running type.
+			if story.Spec.Pattern == enums.StreamingPattern && story.Spec.StreamingStrategy == enums.StreamingStrategyPerStory {
+				if engram.Spec.Mode != enums.WorkloadModeDeployment && engram.Spec.Mode != enums.WorkloadModeStatefulSet {
+					return fmt.Errorf("step '%s' references engram '%s' with mode '%s', but streaming stories with a PerStory strategy require 'deployment' or 'statefulset' mode", step.Name, engram.Name, engram.Spec.Mode)
+				}
+			}
+		} else if step.Type == "" { // Not an Engram step, so it must have a Type.
+			return fmt.Errorf("step %d ('%s') must have a 'type' or a 'ref'", i, step.Name)
 		}
+
+		// Add validation for other primitive types here as they are implemented.
+		// For example:
+		// if step.Type == enums.StepTypeExecuteStory {
+		//   // validate the 'with' block for executeStory
+		// }
 	}
 	return nil
 }

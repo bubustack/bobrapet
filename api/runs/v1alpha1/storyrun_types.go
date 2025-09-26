@@ -135,6 +135,11 @@ type StoryRunStatus struct {
 	// +kubebuilder:pruning:PreserveUnknownFields
 	StepOutputs map[string]*runtime.RawExtension `json:"stepOutputs,omitempty"`
 
+	// StepStates provides a detailed, real-time status for each step in the Story.
+	// The key is the step name.
+	// +optional
+	StepStates map[string]StepState `json:"stepStates,omitempty"`
+
 	// If the story failed, what was the error?
 	// Contains structured error information for debugging
 	// Examples:
@@ -151,6 +156,18 @@ type StoryRunStatus struct {
 	StepsComplete int32 `json:"stepsComplete,omitempty"` // Number of steps that completed successfully
 	StepsFailed   int32 `json:"stepsFailed,omitempty"`   // Number of steps that failed
 	StepsSkipped  int32 `json:"stepsSkipped,omitempty"`  // Number of steps that were skipped
+}
+
+// StepState holds the detailed status of a single step within a StoryRun.
+type StepState struct {
+	// Phase is the current execution phase of the step.
+	Phase enums.Phase `json:"phase"`
+	// Message provides a human-readable summary of the step's status.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// For 'executeStory' steps, this tracks the name of the created sub-StoryRun.
+	// +optional
+	SubStoryRunName string `json:"subStoryRunName,omitempty"`
 }
 
 // +kubebuilder:object:root=true

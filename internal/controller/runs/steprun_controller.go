@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -496,14 +495,6 @@ func (r *StepRunReconciler) getPriorStepOutputs(ctx context.Context, srun *runsv
 
 	// 4. Return the map.
 	return outputs, nil
-}
-
-// normalizeStepIdentifier creates a CEL-friendly identifier from a step name.
-// Currently it replaces hyphens with underscores. Extend as needed.
-func normalizeStepIdentifier(stepName string) string {
-	// Replace '-' with '_'
-	normalized := regexp.MustCompile("-").ReplaceAllString(stepName, "_")
-	return normalized
 }
 
 // getStoryRunInputs fetches the initial inputs from the parent StoryRun.

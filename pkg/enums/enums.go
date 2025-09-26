@@ -123,7 +123,7 @@ const (
 // BubuStack provides built-in primitives for common workflow patterns,
 // reducing the need for custom code in many scenarios.
 //
-// +kubebuilder:validation:Enum=condition;loop;parallel;sleep;stop;switch;filter;transform;wait;throttle;batch;executeStory;setData;mergeData;gate
+// +kubebuilder:validation:Enum=condition;loop;parallel;sleep;stop;switch;filter;transform;wait;throttle;batch;executeStory;setData;mergeData
 type StepType string
 
 const (
@@ -208,6 +208,16 @@ const (
 	// Best for: Stateful services, persistent storage, ordered deployment.
 	// Characteristics: Stable network identity, persistent storage, ordered scaling.
 	WorkloadModeStatefulSet WorkloadMode = "statefulset"
+)
+
+// StreamingStrategy defines the deployment strategy for long-running engrams in a streaming story.
+type StreamingStrategy string
+
+const (
+	// StreamingStrategyPerStory creates a single, shared set of long-running engrams for the Story.
+	StreamingStrategyPerStory StreamingStrategy = "PerStory"
+	// StreamingStrategyPerStoryRun creates a dedicated set of long-running engrams for each StoryRun.
+	StreamingStrategyPerStoryRun StreamingStrategy = "PerStoryRun"
 )
 
 // BackoffStrategy defines retry backoff strategies for failed operations.

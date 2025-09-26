@@ -54,24 +54,29 @@ type Story struct {
 
 // StorySpec defines what the workflow does and how it should run
 type StorySpec struct {
-	// Pattern defines the execution strategy for this Story.
-	// 'batch' (default): Runs the story as a series of ephemeral jobs. Good for asynchronous tasks.
-	// 'streaming': Deploys the story as a persistent pipeline of services for real-time, low-latency workloads.
+	// Pattern specifies the execution model for the Story.
+	// "batch" stories are run to completion via a StoryRun.
+	// "streaming" stories create long-running workloads that process data continuously.
 	// +kubebuilder:validation:Enum=batch;streaming
 	// +kubebuilder:default=batch
 	Pattern enums.StoryPattern `json:"pattern,omitempty"`
 
-	// What inputs does this Story expect?
-	// Define the data structure that triggers (Impulses) or users need to provide
-	// Example: {"repository": "string", "branch": "string", "commit": "string"}
-	// +kubebuilder:pruning:PreserveUnknownFields
+	// StreamingStrategy defines the deployment strategy for long-running engrams in a streaming story.
+	// "PerStory" creates a single, shared set of long-running engrams for the Story.
+	// "PerStoryRun" creates a dedicated set of long-running engrams for each StoryRun.
+	// This field is only applicable when `pattern` is "streaming".
+	// +kubebuilder:validation:Enum=PerStory;PerStoryRun
+	// +kubebuilder:default=PerStory
+	// +optional
+	StreamingStrategy enums.StreamingStrategy `json:"streamingStrategy,omitempty"`
+
+	// InputsSchema defines the schema for the data required to start a StoryRun.
+	// +optional
 	InputsSchema *runtime.RawExtension `json:"inputsSchema,omitempty"`
 
-	// What outputs does this Story produce?
-	// Define the data structure this workflow will return upon completion
-	// Example: {"buildArtifact": "string", "testResults": "object", "deploymentUrl": "string"}
-	// +kubebuilder:pruning:PreserveUnknownFields
-	OutputSchema *runtime.RawExtension `json:"outputSchema,omitempty"`
+	// OutputsSchema defines the schema for the data this Story is expected to produce.
+	// +optional
+	OutputsSchema *runtime.RawExtension `json:"outputsSchema,omitempty"`
 
 	// The actual workflow steps - this is where the magic happens!
 	// Steps run in sequence unless you use parallel/condition logic
@@ -84,25 +89,34 @@ type StorySpec struct {
 	Policy *StoryPolicy `json:"policy,omitempty"`
 }
 
-// Step represents a single action in a story
-// Steps are the building blocks of stories - each step does one specific thing
+// Step defines a single unit of work within a Story.
+// Steps are the building blocks of stories, defining everything from custom logic
+// to control flow like loops, conditions, and parallel execution.
 type Step struct {
-	// Human-readable name for this step
-	// Examples: "fetch-data", "process-payment", "send-notification"
+	// Name is a human-readable identifier for the step.
+	// It's used to reference this step's outputs in other steps.
+	// e.g., '{{ steps.my-step-name.outputs.some_field }}'
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 	Name string `json:"name"`
 
-	// Optional unique identifier for referencing this step's outputs
-	// Useful for complex stories where later steps need data from specific earlier steps
+	// ID is an optional, unique identifier for a step instance.
+	// While 'name' identifies the step in logs and outputs, 'id' can be used
+	// programmatically to reference a specific node in the workflow graph.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	// +optional
 	ID string `json:"id,omitempty"`
 
-	// What type of action should this step perform?
-	// Use built-in types for common patterns, or reference an Engram for custom logic
+	// Needs explicitly defines a list of step names that must be completed before this step can run.
+	// This is used to create an execution order for steps that don't have an implicit data dependency.
+	// +optional
+	Needs []string `json:"needs,omitempty"`
+
+	// Type determines the kind of operation this step performs.
+	// Use built-in types for common patterns. If omitted and 'ref' is present, the step is an 'engram' step.
 	//
 	// Built-in primitive types:
 	// - condition: if/then/else logic
@@ -113,36 +127,41 @@ type Step struct {
 	// - switch: multi-way branching like switch/case
 	// - filter: filter arrays or objects based on conditions
 	// - transform: modify data structure or format
-	// - wait: wait for external conditions or events
-	// - throttle: rate limiting and flow control
-	// - batch: group operations for efficiency
 	// - executeStory: run another story as a sub-story
 	// - setData: set variables or update context
 	// - mergeData: combine data from multiple sources
-	Type *enums.StepType `json:"type,omitempty"`
+	// - wait: wait for external conditions
+	// - throttle: rate limiting
+	// - batch: group operations
+	// +optional
+	Type enums.StepType `json:"type,omitempty"`
 
-	// Reference to an Engram for custom logic (alternative to Type)
-	// Use this when you need functionality that's not covered by built-in types
-	Ref *refs.EngramReference `json:"ref,omitempty"`
-
-	// When should this step run? (CEL expression)
-	// Examples: "inputs.environment == 'production'", "steps.validate.outputs.success == true"
+	// If provides a condition for executing this step.
+	// The step is only executed if the CEL expression evaluates to true.
+	// +optional
 	If *string `json:"if,omitempty"`
 
-	// How to configure this step (works for both built-in types and Engrams)
-	// The structure depends on what Type or Ref you're using
+	// Ref points to an Engram to execute.
+	// This is a shortcut for a step of type 'engram'.
+	// If 'ref' is used, 'type' should be omitted.
+	// +optional
+	Ref *refs.EngramReference `json:"ref,omitempty"`
+
+	// With provides the configuration for the step. The expected structure of this block
+	// is determined by the step 'type'. For example:
+	// - for 'engram': the inputs to the engram.
+	// - for 'executeStory': contains 'storyRef', 'waitForCompletion', and 'with'.
+	// - for 'loop': contains 'items' and 'template'.
+	// The structure is validated at runtime by the controller.
 	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
 	With *runtime.RawExtension `json:"with,omitempty"`
 
-	// Maps template secret definitions to actual Kubernetes secrets for this step
+	// Secrets maps template secret definitions to actual Kubernetes secrets for this step.
+	// This is only applicable to 'engram' steps and overrides any secret mappings on the Engram itself.
 	// Example: {"apiKey": "openai-credentials", "database": "postgres-creds"}
+	// +optional
 	Secrets map[string]string `json:"secrets,omitempty"`
-
-	// Launch another story as a sub-story (using same 'with' pattern for arguments)
-	// Useful for breaking complex stories into smaller, reusable pieces
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=^([a-z0-9]([-a-z0-9]*[a-z0-9])?/)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-	StoryRef *string `json:"storyRef,omitempty"`
 
 	// Override execution settings for this specific step
 	// Use sparingly - most configuration should be at the story or engram level
@@ -154,6 +173,10 @@ type StoryPolicy struct {
 	// Timeouts
 	Timeouts *StoryTimeouts `json:"timeouts,omitempty"`
 
+	// With provides the inputs for the sub-story, mirroring the 'with' field in an Engram step.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	With *runtime.RawExtension `json:"with,omitempty"`
 	// Retry behavior
 	Retries *StoryRetries `json:"retries,omitempty"`
 
@@ -183,9 +206,9 @@ type StoryRetries struct {
 	ContinueOnStepFailure *bool `json:"continueOnStepFailure,omitempty"`
 }
 
+// StoryStatus defines the observed state of a Story.
 type StoryStatus struct {
-	// observedGeneration is the most recent generation observed for this Story. It corresponds to the
-	// Story's generation, which is updated on mutation by the API Server.
+	// ObservedGeneration is the most recent generation observed for this Story.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 

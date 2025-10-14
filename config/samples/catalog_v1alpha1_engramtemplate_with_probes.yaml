@@ -1,0 +1,208 @@
+---
+# Example: EngramTemplate with HTTP health check probes
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: web-api-server
+spec:
+  description: A web API server that exposes HTTP endpoints with health checks
+  version: 1.0.0
+  image: my-web-api:latest
+  supportedModes:
+    - deployment
+    - statefulset
+  
+  execution:
+    # Service configuration
+    service:
+      ports:
+        - name: http
+          protocol: TCP
+          port: 8080
+          targetPort: 8080
+    
+    # Health check probes using standard Kubernetes format
+    probes:
+      # Liveness probe - checks if container is alive
+      # If this fails, Kubernetes will restart the container
+      liveness:
+        httpGet:
+          path: /healthz
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 15
+        periodSeconds: 20
+        timeoutSeconds: 5
+        successThreshold: 1
+        failureThreshold: 3
+      
+      # Readiness probe - checks if container is ready to serve traffic
+      # If this fails, pod is removed from service endpoints
+      readiness:
+        httpGet:
+          path: /ready
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+        successThreshold: 1
+        failureThreshold: 3
+      
+      # Startup probe - checks if application has started
+      # All other probes are disabled until this succeeds
+      # Useful for slow-starting containers
+      startup:
+        httpGet:
+          path: /startup
+          port: 8080
+          scheme: HTTP
+        initialDelaySeconds: 0
+        periodSeconds: 5
+        timeoutSeconds: 3
+        successThreshold: 1
+        failureThreshold: 30  # Allow 150s for startup (30 * 5s)
+    
+    resources:
+      recommendedCpuRequest: "100m"
+      recommendedMemoryRequest: "128Mi"
+      recommendedCpuLimit: "500m"
+      recommendedMemoryLimit: "512Mi"
+
+---
+# Example: EngramTemplate with TCP socket probe
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: grpc-service
+spec:
+  description: A gRPC service with TCP socket health checks
+  version: 1.0.0
+  image: my-grpc-service:latest
+  supportedModes:
+    - deployment
+  
+  execution:
+    service:
+      ports:
+        - name: grpc
+          protocol: TCP
+          port: 9090
+          targetPort: 9090
+    
+    probes:
+      liveness:
+        tcpSocket:
+          port: 9090
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        timeoutSeconds: 3
+      
+      readiness:
+        tcpSocket:
+          port: 9090
+        initialDelaySeconds: 5
+        periodSeconds: 10
+        timeoutSeconds: 3
+
+---
+# Example: EngramTemplate with exec probe
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: database-processor
+spec:
+  description: A database processor with custom health check script
+  version: 1.0.0
+  image: my-db-processor:latest
+  supportedModes:
+    - statefulset
+  
+  execution:
+    probes:
+      liveness:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - /app/health-check.sh
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        timeoutSeconds: 10
+        failureThreshold: 3
+      
+      readiness:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - /app/ready-check.sh
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        timeoutSeconds: 5
+
+---
+# Example: EngramTemplate with gRPC probe (Kubernetes 1.24+)
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: grpc-health-check
+spec:
+  description: A gRPC service using native gRPC health check protocol
+  version: 1.0.0
+  image: my-grpc-app:latest
+  supportedModes:
+    - deployment
+  
+  execution:
+    service:
+      ports:
+        - name: grpc
+          protocol: TCP
+          port: 9090
+          targetPort: 9090
+    
+    probes:
+      liveness:
+        grpc:
+          port: 9090
+          service: myapp.HealthService
+        initialDelaySeconds: 10
+        periodSeconds: 10
+      
+      readiness:
+        grpc:
+          port: 9090
+          service: myapp.HealthService
+        initialDelaySeconds: 5
+        periodSeconds: 5
+
+---
+# Example: EngramTemplate for batch jobs with probes
+# Note: Probes are less common for jobs but supported
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: long-running-job
+spec:
+  description: A long-running batch job that reports health during execution
+  version: 1.0.0
+  image: my-batch-job:latest
+  supportedModes:
+    - job
+  
+  execution:
+    job:
+      recommendedRestartPolicy: OnFailure
+      recommendedBackoffLimit: 3
+    
+    # Even jobs can have probes to monitor health during execution
+    probes:
+      liveness:
+        httpGet:
+          path: /health
+          port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 30
+        timeoutSeconds: 5
+

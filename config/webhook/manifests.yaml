@@ -1,0 +1,172 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-bubustack-io-v1alpha1-engram
+  failurePolicy: Fail
+  name: mengram-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - engrams
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-bubustack-io-v1alpha1-impulse
+  failurePolicy: Fail
+  name: mimpulse-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - impulses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-bubustack-io-v1alpha1-story
+  failurePolicy: Fail
+  name: mstory-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stories
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-runs-bubustack-io-v1alpha1-steprun
+  failurePolicy: Fail
+  name: vsteprun-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stepruns
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-runs-bubustack-io-v1alpha1-storyrun
+  failurePolicy: Fail
+  name: vstoryrun-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storyruns
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-bubustack-io-v1alpha1-engram
+  failurePolicy: Fail
+  name: vengram-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - engrams
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-bubustack-io-v1alpha1-impulse
+  failurePolicy: Fail
+  name: vimpulse-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - impulses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-bubustack-io-v1alpha1-story
+  failurePolicy: Fail
+  name: vstory-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stories
+  sideEffects: None

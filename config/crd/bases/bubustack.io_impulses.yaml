@@ -1,0 +1,501 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: impulses.bubustack.io
+spec:
+  group: bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    kind: Impulse
+    listKind: ImpulseList
+    plural: impulses
+    shortNames:
+    - imp
+    singular: impulse
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.templateRef
+      name: Template
+      type: string
+    - jsonPath: .spec.storyRef.name
+      name: Story
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.triggersReceived
+      name: Triggers
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Impulse represents a trigger that launches Stories when events occur
+
+          Think of Impulses as the "event handlers" of your story system:
+          - GitHub webhook → trigger CI/CD Story
+          - File upload → trigger data processing Story
+          - Schedule/timer → trigger backup Story
+          - Queue message → trigger order processing Story
+          - Slack mention → trigger support Story
+
+          # Impulses are always-on services that listen for events and launch stories
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ImpulseSpec defines how to set up an event trigger that launches Stories
+
+              The flow is: External Event → Impulse (processes event) → Story (runs story)
+              For example: GitHub push → webhook impulse → CI/CD story
+            properties:
+              execution:
+                description: Fine-tune execution behavior for special cases
+                properties:
+                  automountServiceAccountToken:
+                    description: |-
+                      AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
+                      Defaults to false.
+                    type: boolean
+                  imagePullPolicy:
+                    description: Image pull policy override
+                    type: string
+                  probes:
+                    description: |-
+                      Probe overrides allow disabling template-defined probes at instance level
+                      Note: You can only disable probes, not redefine them
+                    properties:
+                      disableLiveness:
+                        description: DisableLiveness disables the liveness probe
+                        type: boolean
+                      disableReadiness:
+                        description: DisableReadiness disables the readiness probe
+                        type: boolean
+                      disableStartup:
+                        description: DisableStartup disables the startup probe
+                        type: boolean
+                    type: object
+                  retry:
+                    description: Retry policy override
+                    properties:
+                      backoff:
+                        description: |-
+                          Backoff strategy for retry delays
+                          - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                          - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                          - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                        enum:
+                        - exponential
+                        - linear
+                        - constant
+                        type: string
+                      delay:
+                        default: 1s
+                        description: |-
+                          Base delay between retries
+                          Examples: "1s", "5s", "30s"
+                        type: string
+                      maxRetries:
+                        default: 3
+                        description: Maximum number of retry attempts
+                        format: int32
+                        maximum: 10
+                        minimum: 0
+                        type: integer
+                    type: object
+                  security:
+                    description: Security context override
+                    properties:
+                      allowPrivilegeEscalation:
+                        description: Whether to allow privilege escalation
+                        type: boolean
+                      readOnlyRootFilesystem:
+                        description: Read-only root filesystem
+                        type: boolean
+                      requiredSecrets:
+                        description: Required secrets for this workload
+                        items:
+                          type: string
+                        type: array
+                      runAsNonRoot:
+                        description: Whether to run as non-root user
+                        type: boolean
+                      runAsUser:
+                        description: User ID to run as
+                        format: int64
+                        type: integer
+                    type: object
+                  serviceAccountName:
+                    description: ServiceAccount to use for the workload.
+                    type: string
+                  timeout:
+                    description: Timeout for execution
+                    type: string
+                type: object
+              mapping:
+                description: |-
+                  How to transform the trigger event into Story inputs
+                  You have complete freedom here - map any event data to any Story input
+                  Examples:
+                  - GitHub: {"repo": "{{ event.repository.name }}", "branch": "{{ event.ref }}"}
+                  - File: {"filename": "{{ event.object.key }}", "size": "{{ event.object.size }}"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              secrets:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Secrets configuration for this impulse instance
+                  Maps template secret definitions to actual Kubernetes secrets
+                  Example: {"authToken": "webhook-secret", "apiKey": "external-service-key"}
+                type: object
+              service:
+                description: |-
+                  Service controls instance-level exposure of the impulse via a Service.
+                  Ports and health come from the template; this sets type/labels/annotations.
+                  If omitted, defaults to ClusterIP with template-defined ports.
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: Additional annotations to attach to the Service
+                    type: object
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: Additional labels to attach to the Service
+                    type: object
+                  type:
+                    description: Type of Service to create (ClusterIP default, NodePort,
+                      LoadBalancer)
+                    type: string
+                type: object
+              storyRef:
+                description: |-
+                  Which Story to launch when an event is received
+                  This is the story that will run in response to the trigger
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced Story for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      When a controller resolves this reference, it stores the target's UID.
+                      On subsequent reconciliations, if the UID has changed, it indicates
+                      the target was deleted and recreated, which may require special handling.
+                    type: string
+                required:
+                - name
+                type: object
+              templateRef:
+                description: |-
+                  Which template to use for handling events
+                  Examples: "github-webhook", "slack-handler", "file-watcher", "cron-scheduler"
+                properties:
+                  name:
+                    description: Name of the referenced ImpulseTemplate.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UID of the referenced ImpulseTemplate for drift detection.
+                    type: string
+                required:
+                - name
+                type: object
+              with:
+                description: |-
+                  How to configure this specific trigger instance
+                  Examples:
+                  - Webhook: {"port": 8080, "path": "/webhook"}
+                  - File watcher: {"bucket": "my-bucket", "prefix": "uploads/"}
+                  - Scheduler: {"schedule": "0 2 * * *", "timezone": "UTC"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              workload:
+                description: |-
+                  How to run this impulse (deployment or statefulset only - must be always-on)
+                  Impulses can't be jobs because they need to continuously listen for events
+                properties:
+                  job:
+                    description: Job-specific settings (only applies when mode=job)
+                    properties:
+                      activeDeadlineSeconds:
+                        description: Time after which job is considered failed
+                        format: int64
+                        type: integer
+                      backoffLimit:
+                        description: Number of retries before marking as failed
+                        format: int32
+                        type: integer
+                      completions:
+                        description: Number of successful completions needed
+                        format: int32
+                        type: integer
+                      parallelism:
+                        description: Number of pods to run in parallel
+                        format: int32
+                        type: integer
+                      ttlSecondsAfterFinished:
+                        description: TTL for cleanup after completion
+                        format: int32
+                        type: integer
+                    type: object
+                  mode:
+                    default: job
+                    description: |-
+                      How to run this workload - the fundamental execution pattern
+                      - job: Run once and complete (like a batch script or CI job)
+                      - deployment: Always-on stateless service (like a web API or webhook listener)
+                      - statefulset: Always-on stateful service (like a database or file processor with persistent storage)
+                    enum:
+                    - job
+                    - deployment
+                    - statefulset
+                    type: string
+                  resources:
+                    description: Resource requirements (CPU, memory, etc.)
+                    properties:
+                      limits:
+                        description: ResourceLimits defines maximum allowed resources
+                        properties:
+                          cpu:
+                            type: string
+                          ephemeralStorage:
+                            type: string
+                          memory:
+                            type: string
+                        type: object
+                      nodeSelector:
+                        additionalProperties:
+                          type: string
+                        description: Scheduling constraints
+                        type: object
+                      requests:
+                        description: Resource requests and limits
+                        properties:
+                          cpu:
+                            type: string
+                          ephemeralStorage:
+                            type: string
+                          memory:
+                            type: string
+                        type: object
+                      tolerations:
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                  statefulSet:
+                    description: StatefulSet-specific settings (only applies when
+                      mode=statefulset)
+                    properties:
+                      podManagementPolicy:
+                        description: Pod management policy
+                        type: string
+                      serviceName:
+                        description: Service name for StatefulSet
+                        type: string
+                    required:
+                    - serviceName
+                    type: object
+                  updateStrategy:
+                    description: How to handle updates/upgrades
+                    properties:
+                      rollingUpdate:
+                        description: Rolling update configuration (only applies when
+                          type=RollingUpdate)
+                        properties:
+                          maxSurge:
+                            description: |-
+                              Maximum number of pods that can be created above desired replicas during update
+                              Only for Deployment (not StatefulSet)
+                            type: string
+                          maxUnavailable:
+                            description: |-
+                              Maximum number of pods that can be unavailable during update
+                              Can be absolute number (ex: 5) or percentage (ex: 25%)
+                            type: string
+                        type: object
+                      type:
+                        description: |-
+                          Type of update strategy
+                          - RollingUpdate: Gradually replace old pods with new ones
+                          - Recreate: Delete all old pods before creating new ones
+                        enum:
+                        - RollingUpdate
+                        - Recreate
+                        type: string
+                    type: object
+                type: object
+            required:
+            - storyRef
+            - templateRef
+            type: object
+          status:
+            description: ImpulseStatus shows the current state and activity of this
+              trigger
+            properties:
+              conditions:
+                description: Standard Kubernetes conditions (Ready, Available, etc.)
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              failedTriggers:
+                format: int64
+                type: integer
+              lastSuccess:
+                format: date-time
+                type: string
+              lastTrigger:
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this Impulse. It corresponds to the
+                  Impulse's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase represents the current execution phase of a resource.
+                  This enum is used consistently across all execution resources (Stories, StoryRuns, StepRuns)
+                  to provide a unified view of execution state.
+
+                  The phase progression typically follows:
+                  Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
+
+                  Some resources may also support Paused for manual intervention scenarios.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Canceled
+                - Compensated
+                - Paused
+                - Blocked
+                - Scheduling
+                - Timeout
+                - Aborted
+                type: string
+              readyReplicas:
+                format: int32
+                type: integer
+              replicas:
+                description: Current workload status - how many trigger instances
+                  are running (managed by KEDA/HPA)
+                format: int32
+                type: integer
+              storiesLaunched:
+                format: int64
+                type: integer
+              triggersReceived:
+                description: Event processing statistics - useful for monitoring and
+                  debugging
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

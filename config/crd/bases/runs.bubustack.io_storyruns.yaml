@@ -1,0 +1,361 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: storyruns.runs.bubustack.io
+spec:
+  group: runs.bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    - runs
+    kind: StoryRun
+    listKind: StoryRunList
+    plural: storyruns
+    shortNames:
+    - srun
+    singular: storyrun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storyRef.name
+      name: Story
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.startedAt
+      name: Started
+      type: date
+    - jsonPath: .status.duration
+      name: Duration
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StoryRun represents an actual execution instance of a Story
+
+          Think of the relationship like this:
+          - Story = A movie script (defines what should happen)
+          - StoryRun = Actually filming the movie (executing the script with specific actors and locations)
+
+          Every time a Story is triggered (by an Impulse, manual trigger, or another Story),
+          a new StoryRun is created to track that specific execution.
+
+          StoryRuns are the "run history" of your automation - they show:
+          - When each story execution started and finished
+          - What inputs were provided
+          - Which steps succeeded or failed
+          - What outputs were produced
+          - Any errors that occurred
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StoryRunSpec defines what Story to run and with what inputs
+            properties:
+              impulseRef:
+                description: |-
+                  Which Impulse triggered this StoryRun, if any
+                  This provides a clear audit trail from an event trigger to its corresponding workflow execution
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                required:
+                - name
+                type: object
+              inputs:
+                description: |-
+                  Input data for this specific story execution
+                  This data gets validated against the Story's inputsSchema
+                  Examples:
+                  - CI pipeline: {"repository": "my-app", "branch": "main", "commit": "abc123"}
+                  - Data processing: {"filename": "data.csv", "format": "csv", "destination": "warehouse"}
+                  - Deployment: {"environment": "production", "version": "v1.2.3", "rollback": false}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              storyRef:
+                description: |-
+                  Which Story to execute
+                  References can be same-namespace (name only) or cross-namespace with explicit namespace
+                  Examples: "ci-pipeline", cross-ns: {"name": "deploy-app", "namespace": "production"}
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced Story for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      When a controller resolves this reference, it stores the target's UID.
+                      On subsequent reconciliations, if the UID has changed, it indicates
+                      the target was deleted and recreated, which may require special handling.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - storyRef
+            type: object
+          status:
+            description: StoryRunStatus tracks the current state and results of this
+              story execution
+            properties:
+              active:
+                description: List of steps that are currently executing
+                items:
+                  type: string
+                type: array
+              completed:
+                description: List of steps that have completed successfully
+                items:
+                  type: string
+                type: array
+              conditions:
+                description: Standard Kubernetes conditions for detailed status tracking
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              duration:
+                description: How long did this execution take? (calculated field)
+                type: string
+              error:
+                description: |-
+                  If the story failed, what was the error?
+                  Contains structured error information for debugging
+                  Examples:
+                  - Step failure: {"failedStep": "deploy", "reason": "timeout", "details": "..."}
+                  - Validation error: {"type": "input_validation", "field": "url", "message": "Invalid URL"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              finishedAt:
+                format: date-time
+                type: string
+              message:
+                description: Human-readable message about the story's status
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this StoryRun. It corresponds to the
+                  StoryRun's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
+              output:
+                description: |-
+                  What data did this story produce upon completion?
+                  For small outputs (< 1MB), stored inline here
+                  For large outputs, automatically stored in shared storage (if enabled) and path referenced here
+                  This gets validated against the Story's outputSchema
+                  Examples:
+                  - CI pipeline: {"buildArtifact": "app-v1.2.3.tar.gz", "testResults": {...}, "deploymentUrl": "https://..."}
+                  - Data processing: {"processedRows": 1000, "outputFile": "processed-data.json", "errors": 5}
+                  - Large output: {"result": "success", "outputPath": "/shared/storage/story-123/final-output.json"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              phase:
+                description: |-
+                  Current execution phase
+                  - Pending: StoryRun created but not yet started
+                  - Running: Story is actively executing steps
+                  - Succeeded: All steps completed successfully
+                  - Failed: A step failed and the story cannot continue
+                  - Canceled: Execution was canceled by user or system
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Canceled
+                - Compensated
+                - Paused
+                - Blocked
+                - Scheduling
+                - Timeout
+                - Aborted
+                type: string
+              primitiveChildren:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: |-
+                  Tracks the child StepRuns created by primitive steps (e.g., parallel branches, loop iterations)
+                  Key: Name of the parent primitive step (e.g., "my-parallel-step")
+                  Value: List of child StepRun names created by that primitive
+                type: object
+              startedAt:
+                description: Execution timing
+                format: date-time
+                type: string
+              stepStates:
+                additionalProperties:
+                  description: StepState holds the detailed status of a single step
+                    within a StoryRun.
+                  properties:
+                    message:
+                      description: Message provides a human-readable summary of the
+                        step's status.
+                      type: string
+                    phase:
+                      description: Phase is the current execution phase of the step.
+                      enum:
+                      - Pending
+                      - Running
+                      - Succeeded
+                      - Failed
+                      - Canceled
+                      - Compensated
+                      - Paused
+                      - Blocked
+                      - Scheduling
+                      - Timeout
+                      - Aborted
+                      type: string
+                    subStoryRunName:
+                      description: For 'executeStory' steps, this tracks the name
+                        of the created sub-StoryRun.
+                      type: string
+                  required:
+                  - phase
+                  type: object
+                description: |-
+                  StepStates provides a detailed, real-time status for each step in the Story.
+                  The key is the step name.
+                type: object
+              stepsComplete:
+                format: int32
+                type: integer
+              stepsFailed:
+                format: int32
+                type: integer
+              stepsSkipped:
+                format: int32
+                type: integer
+              stepsTotal:
+                description: Step execution summary for quick overview
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

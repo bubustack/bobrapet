@@ -1,0 +1,168 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bubustack.io
+  resources:
+  - engrams
+  - impulses
+  - stories
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bubustack.io
+  resources:
+  - engrams/finalizers
+  - impulses/finalizers
+  - stories/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - bubustack.io
+  resources:
+  - engrams/status
+  - impulses/status
+  - stories/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - catalog.bubustack.io
+  resources:
+  - engramtemplates
+  - impulsetemplates
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - catalog.bubustack.io
+  resources:
+  - engramtemplates/finalizers
+  - impulsetemplates/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - catalog.bubustack.io
+  resources:
+  - engramtemplates/status
+  - impulsetemplates/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - runs.bubustack.io
+  resources:
+  - stepruns
+  - storyruns
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - runs.bubustack.io
+  resources:
+  - stepruns/finalizers
+  - storyruns/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - runs.bubustack.io
+  resources:
+  - stepruns/status
+  - storyruns/status
+  verbs:
+  - get
+  - patch
+  - update

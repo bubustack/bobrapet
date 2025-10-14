@@ -1,0 +1,392 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: engrams.bubustack.io
+spec:
+  group: bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    kind: Engram
+    listKind: EngramList
+    plural: engrams
+    shortNames:
+    - engram
+    singular: engram
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.templateRef.name
+      name: Template
+      type: string
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: EngramSpec defines the configuration and behavior of a specific
+              engram instance
+            properties:
+              executionPolicy:
+                description: |-
+                  ExecutionPolicy defines the execution configuration for this Engram.
+                  These settings override any defaults from the EngramTemplate.
+                properties:
+                  job:
+                    description: Job configuration
+                    properties:
+                      backoffLimit:
+                        description: Backoff limit for jobs
+                        format: int32
+                        type: integer
+                      restartPolicy:
+                        description: Restart policy
+                        type: string
+                      ttlSecondsAfterFinished:
+                        description: TTL for job cleanup
+                        format: int32
+                        type: integer
+                    type: object
+                  resources:
+                    description: Resource configuration (actual values, not defaults)
+                    properties:
+                      cpuLimit:
+                        description: CPU limit
+                        type: string
+                      cpuRequest:
+                        description: CPU request
+                        type: string
+                      memoryLimit:
+                        description: Memory limit
+                        type: string
+                      memoryRequest:
+                        description: Memory request
+                        type: string
+                    type: object
+                  retry:
+                    description: Retry configuration
+                    properties:
+                      backoff:
+                        description: |-
+                          Backoff strategy for retry delays
+                          - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                          - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                          - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                        enum:
+                        - exponential
+                        - linear
+                        - constant
+                        type: string
+                      delay:
+                        default: 1s
+                        description: |-
+                          Base delay between retries
+                          Examples: "1s", "5s", "30s"
+                        type: string
+                      maxRetries:
+                        default: 3
+                        description: Maximum number of retry attempts
+                        format: int32
+                        maximum: 10
+                        minimum: 0
+                        type: integer
+                    type: object
+                  security:
+                    description: Security configuration
+                    properties:
+                      allowPrivilegeEscalation:
+                        description: Whether to allow privilege escalation
+                        type: boolean
+                      readOnlyRootFilesystem:
+                        description: Read-only root filesystem
+                        type: boolean
+                      runAsNonRoot:
+                        description: Whether to run as non-root user
+                        type: boolean
+                      runAsUser:
+                        description: User ID to run as
+                        format: int64
+                        type: integer
+                    type: object
+                  serviceAccountName:
+                    description: ServiceAccount to use for workloads created from
+                      this policy.
+                    type: string
+                  timeout:
+                    description: Timeout configuration
+                    type: string
+                type: object
+              mode:
+                allOf:
+                - enum:
+                  - job
+                  - deployment
+                  - statefulset
+                - enum:
+                  - job
+                  - deployment
+                  - statefulset
+                description: |-
+                  Mode specifies how the Engram should be run.
+                  Supported values are "job", "deployment", "statefulset".
+                  If not specified, it defaults to the template's supported mode or "job".
+                type: string
+              overrides:
+                description: Overrides allows for fine-tuning of execution behavior.
+                properties:
+                  automountServiceAccountToken:
+                    description: |-
+                      AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
+                      Defaults to false.
+                    type: boolean
+                  imagePullPolicy:
+                    description: Image pull policy override
+                    type: string
+                  probes:
+                    description: |-
+                      Probe overrides allow disabling template-defined probes at instance level
+                      Note: You can only disable probes, not redefine them
+                    properties:
+                      disableLiveness:
+                        description: DisableLiveness disables the liveness probe
+                        type: boolean
+                      disableReadiness:
+                        description: DisableReadiness disables the readiness probe
+                        type: boolean
+                      disableStartup:
+                        description: DisableStartup disables the startup probe
+                        type: boolean
+                    type: object
+                  retry:
+                    description: Retry policy override
+                    properties:
+                      backoff:
+                        description: |-
+                          Backoff strategy for retry delays
+                          - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                          - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                          - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                        enum:
+                        - exponential
+                        - linear
+                        - constant
+                        type: string
+                      delay:
+                        default: 1s
+                        description: |-
+                          Base delay between retries
+                          Examples: "1s", "5s", "30s"
+                        type: string
+                      maxRetries:
+                        default: 3
+                        description: Maximum number of retry attempts
+                        format: int32
+                        maximum: 10
+                        minimum: 0
+                        type: integer
+                    type: object
+                  security:
+                    description: Security context override
+                    properties:
+                      allowPrivilegeEscalation:
+                        description: Whether to allow privilege escalation
+                        type: boolean
+                      readOnlyRootFilesystem:
+                        description: Read-only root filesystem
+                        type: boolean
+                      requiredSecrets:
+                        description: Required secrets for this workload
+                        items:
+                          type: string
+                        type: array
+                      runAsNonRoot:
+                        description: Whether to run as non-root user
+                        type: boolean
+                      runAsUser:
+                        description: User ID to run as
+                        format: int64
+                        type: integer
+                    type: object
+                  serviceAccountName:
+                    description: ServiceAccount to use for the workload.
+                    type: string
+                  timeout:
+                    description: Timeout for execution
+                    type: string
+                type: object
+              secrets:
+                additionalProperties:
+                  type: string
+                description: Secrets maps template secret definitions to actual Kubernetes
+                  secrets.
+                type: object
+              templateRef:
+                description: |-
+                  Which template to use for this engram instance
+                  This connects the specific configuration below to a reusable component
+                properties:
+                  name:
+                    description: Name of the referenced EngramTemplate.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: UID of the referenced EngramTemplate for drift detection.
+                    type: string
+                required:
+                - name
+                type: object
+              with:
+                description: |-
+                  How to configure this specific engram instance
+                  This data gets validated against the EngramTemplate's configSchema
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+            required:
+            - templateRef
+            type: object
+          status:
+            description: EngramStatus defines the observed state of Engram
+            properties:
+              conditions:
+                description: This will indicate if the Engram's syntax is valid and
+                  its template is resolved.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              failedExecutions:
+                format: int32
+                type: integer
+              lastExecutionTime:
+                description: Additional useful information for debugging and monitoring
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation observed
+                  for this Engram.
+                format: int64
+                type: integer
+              phase:
+                description: |-
+                  Phase represents the current execution phase of a resource.
+                  This enum is used consistently across all execution resources (Stories, StoryRuns, StepRuns)
+                  to provide a unified view of execution state.
+
+                  The phase progression typically follows:
+                  Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
+
+                  Some resources may also support Paused for manual intervention scenarios.
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Canceled
+                - Compensated
+                - Paused
+                - Blocked
+                - Scheduling
+                - Timeout
+                - Aborted
+                type: string
+              readyReplicas:
+                format: int32
+                type: integer
+              replicas:
+                description: |-
+                  Current workload status - what's actually running.
+                  These fields are ONLY populated for Engrams running as a Deployment or StatefulSet.
+                  For job-based engrams, these will be empty.
+                format: int32
+                type: integer
+              totalExecutions:
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,440 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: stepruns.runs.bubustack.io
+spec:
+  group: runs.bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    - runs
+    kind: StepRun
+    listKind: StepRunList
+    plural: stepruns
+    shortNames:
+    - step
+    singular: steprun
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storyRunRef.name
+      name: StoryRun
+      type: string
+    - jsonPath: .spec.stepId
+      name: Step
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.retries
+      name: Retries
+      type: integer
+    - jsonPath: .status.duration
+      name: Duration
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          StepRun represents the execution of a single step within a StoryRun
+
+          Think of the relationship like this:
+          - Story = A recipe (defines the cooking process)
+          - StoryRun = Actually cooking the dish (following the recipe)
+          - StepRun = Each individual cooking step (chopping vegetables, heating oil, etc.)
+
+          StepRuns are the atomic units of execution. They represent:
+          - Running a single Engram with specific inputs
+          - Executing a built-in primitive action (condition, loop, etc.)
+          - Launching a sub-story
+
+          StepRuns provide detailed execution tracking:
+          - Exactly when each step started and finished
+          - What inputs were provided and outputs produced
+          - Resource usage and performance metrics
+          - Detailed error information for debugging
+          - Retry attempts and circuit breaker status
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: StepRunSpec defines exactly how to execute this specific
+              step
+            properties:
+              downstreamTargets:
+                description: |-
+                  DownstreamTargets instructs the Engram's SDK what to do with the output.
+                  This is populated by the storyrun-controller to enable direct Engram-to-Engram communication.
+                  Can be a list to support fanning out to multiple parallel steps.
+                items:
+                  description: |-
+                    DownstreamTarget defines the destination for an Engram's output in real-time execution mode.
+                    Exactly one of the fields must be set.
+                  properties:
+                    grpc:
+                      description: GRPCTarget specifies the connection details for
+                        the next Engram in the chain.
+                      properties:
+                        endpoint:
+                          description: Endpoint is the address of the downstream service
+                            (e.g., "engram-b.default.svc:9000").
+                          type: string
+                      required:
+                      - endpoint
+                      type: object
+                    terminate:
+                      description: Terminate indicates that this is the last step
+                        in the flow.
+                      properties:
+                        stopMode:
+                          description: StopMode defines the final phase of the StoryRun
+                            (e.g., success, failure).
+                          enum:
+                          - success
+                          - failure
+                          - cancel
+                          type: string
+                      required:
+                      - stopMode
+                      type: object
+                  type: object
+                type: array
+              engramRef:
+                description: |-
+                  What should this step execute?
+                  Always references an Engram (for custom logic) or uses built-in primitive type
+                  Primitive types: condition, loop, parallel, sleep, stop, switch, filter, transform, etc.
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                required:
+                - name
+                type: object
+              executionOverrides:
+                description: |-
+                  Last-minute overrides for special situations
+                  This has the highest priority in the configuration hierarchy
+                properties:
+                  backoffLimit:
+                    description: Job behavior overrides
+                    format: int32
+                    type: integer
+                  cpuLimit:
+                    type: string
+                  cpuRequest:
+                    description: Resource overrides - only the essentials
+                    type: string
+                  memoryLimit:
+                    type: string
+                  memoryRequest:
+                    type: string
+                  restartPolicy:
+                    type: string
+                  ttlSecondsAfterFinished:
+                    format: int32
+                    type: integer
+                type: object
+              input:
+                description: |-
+                  What data should be passed to this step?
+                  This is the resolved input after CEL evaluation and data flow from previous steps
+                  Examples:
+                  - HTTP request: {"url": "https://api.example.com", "method": "GET", "headers": {...}}
+                  - OpenAI call: {"prompt": "Summarize this text: ...", "model": "gpt-4", "temperature": 0.7}
+                  - Condition: {"expression": "{{ steps.http_check.output.status == 200 }}"}
+                  - Loop: {"items": ["file1.txt", "file2.txt"], "concurrency": 3}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              retry:
+                description: |-
+                  What to do if this step fails?
+                  Priority: StepRun > Story.steps[].execution.retry > Engram.execution.retry > Template.execution.retry
+                properties:
+                  backoff:
+                    description: |-
+                      Backoff strategy for retry delays
+                      - exponential: 1s, 2s, 4s, 8s... (doubles each time)
+                      - linear: 1s, 2s, 3s, 4s... (increases by delay each time)
+                      - constant: 1s, 1s, 1s, 1s... (same delay each time)
+                    enum:
+                    - exponential
+                    - linear
+                    - constant
+                    type: string
+                  delay:
+                    default: 1s
+                    description: |-
+                      Base delay between retries
+                      Examples: "1s", "5s", "30s"
+                    type: string
+                  maxRetries:
+                    default: 3
+                    description: Maximum number of retry attempts
+                    format: int32
+                    maximum: 10
+                    minimum: 0
+                    type: integer
+                type: object
+              stepId:
+                description: |-
+                  Which step in the Story is this executing?
+                  References the step name/ID from the original Story definition
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+              storyRunRef:
+                description: |-
+                  Which StoryRun does this step belong to?
+                  Used to track the parent execution and coordinate step ordering
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced StoryRun for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      StoryRun drift detection helps maintain execution integrity and
+                      enables proper cleanup of orphaned StepRuns.
+                    type: string
+                required:
+                - name
+                type: object
+              timeout:
+                description: |-
+                  Execution timing constraints (inherited from Story → Engram → Template hierarchy)
+                  How long to wait before considering this step failed?
+                  Examples: "30s", "5m", "1h"
+                  Priority: StepRun > Story.steps[].execution.timeout > Engram.execution.timeout > Template.execution.timeout
+                type: string
+            required:
+            - stepId
+            - storyRunRef
+            type: object
+          status:
+            description: StepRunStatus tracks the detailed execution state of this
+              individual step
+            properties:
+              conditions:
+                description: Conditions provide a standard way to convey the state
+                  of the StepRun.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              duration:
+                type: string
+              error:
+                description: |-
+                  If the step failed, what was the error?
+                  Contains structured error information for debugging
+                  Examples:
+                  - HTTP error: {"type": "http_error", "status": 404, "message": "Not Found", "url": "..."}
+                  - Timeout: {"type": "timeout", "duration": "30s", "stage": "execution"}
+                  - Validation: {"type": "validation_error", "field": "url", "message": "Invalid URL format"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              exitClass:
+                description: |-
+                  ExitClass defines how container exit codes should be interpreted.
+                  This enables intelligent retry logic based on the type of failure.
+                enum:
+                - success
+                - retry
+                - terminal
+                - rateLimited
+                type: string
+              exitCode:
+                description: Process execution details
+                format: int32
+                type: integer
+              finishedAt:
+                format: date-time
+                type: string
+              lastFailureMsg:
+                type: string
+              needs:
+                description: |-
+                  Step coordination - which steps must complete before this one can start
+                  Uses the same "needs" terminology as our Story API for consistency
+                items:
+                  type: string
+                type: array
+              nextRetryAt:
+                format: date-time
+                type: string
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this StepRun. It corresponds to the
+                  StepRun's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
+              output:
+                description: |-
+                  What did this step produce?
+                  For small outputs (< 1MB), stored inline here
+                  For large outputs, automatically stored in shared storage (if enabled) and path referenced here
+                  This gets validated against the Engram's outputSchema (if applicable)
+                  Examples:
+                  - HTTP client: {"status": 200, "body": "...", "headers": {...}, "responseTime": 150}
+                  - OpenAI: {"response": "Summary text...", "usage": {"tokens": 250}, "model": "gpt-4"}
+                  - Large file: {"result": "success", "outputPath": "/shared/storage/story-123/step-fetch/response.json"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              phase:
+                description: |-
+                  Current execution phase
+                  - Pending: StepRun created but not yet started (waiting for dependencies)
+                  - Running: Step is actively executing
+                  - Succeeded: Step completed successfully
+                  - Failed: Step failed and will not be retried
+                  - Canceled: Step was canceled by user or system
+                  - Paused: Step is paused waiting for external input or approval
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                - Canceled
+                - Compensated
+                - Paused
+                - Blocked
+                - Scheduling
+                - Timeout
+                - Aborted
+                type: string
+              podName:
+                type: string
+              retries:
+                description: Retry tracking (aligned with our Story/Engram/Template
+                  retry design)
+                format: int32
+                type: integer
+              startedAt:
+                description: Execution timing and metadata
+                format: date-time
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

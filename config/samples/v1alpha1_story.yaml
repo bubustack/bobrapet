@@ -1,0 +1,41 @@
+---
+apiVersion: bubustack.io/v1alpha1
+kind: Story
+metadata:
+  name: summarize-website-story
+spec:
+  inputsSchema:
+    type: object
+    properties:
+      url:
+        type: string
+  outputsSchema:
+    type: object
+    properties:
+      summary:
+        type: string
+      url:
+        type: string
+  pattern: batch
+  policy:
+    storage:
+      s3:
+        authentication:
+          secretRef:
+            name: minio-credentials
+        bucket: summaries
+        endpoint: http://minio.default.svc.cluster.local:9000
+  steps:
+  - name: fetch-content
+    ref: 
+      name: http-request-engram
+    with:
+      url: '{{ inputs.url }}'
+  - if: steps["fetch-content"].outputs.statusCode == 200
+    name: summarize
+    ref: 
+      name: openai-summarizer-engram
+    needs:
+    - fetch-content
+    with:
+      userPrompt: '{{ steps["fetch-content"].outputs.body }}'

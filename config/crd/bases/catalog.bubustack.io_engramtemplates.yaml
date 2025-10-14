@@ -1,0 +1,877 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: engramtemplates.catalog.bubustack.io
+spec:
+  group: catalog.bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    - catalog
+    kind: EngramTemplate
+    listKind: EngramTemplateList
+    plural: engramtemplates
+    shortNames:
+    - etpl
+    singular: engramtemplate
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.description
+      name: Description
+      type: string
+    - jsonPath: .spec.version
+      name: Version
+      type: string
+    - jsonPath: .status.usageCount
+      name: Usage
+      type: integer
+    - jsonPath: .status.validationStatus
+      name: Status
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          EngramTemplate defines a reusable "worker" component for stories
+
+          Think of EngramTemplates as specialized tools in a toolbox:
+          - "http-client": Makes HTTP requests with retry and timeout support
+          - "openai-chat": Integrates with OpenAI's GPT models
+          - "postgres-query": Executes SQL queries against PostgreSQL
+          - "slack-notify": Sends messages to Slack channels
+          - "image-resize": Processes and resizes images
+
+          Templates are cluster-scoped because they're meant to be shared across teams and namespaces.
+          They define WHAT can be done, while Engrams define HOW to configure and run them.
+
+          The relationship is:
+          EngramTemplate (defines capabilities) → Engram (configured instance) → Used in Story steps
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: EngramTemplateSpec defines the capabilities and contract
+              of a worker component
+            properties:
+              configSchema:
+                description: |-
+                  JSON Schema defining how users can configure this template
+                  This validates the "with" field when users create Engrams/Impulses
+                  Example: {"timeout": {"type": "string"}, "retries": {"type": "integer"}}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              description:
+                description: |-
+                  Human-readable description of what this template does
+                  Examples: "HTTP client with retry and timeout support", "OpenAI GPT integration"
+                type: string
+              execution:
+                description: |-
+                  Default execution settings that template authors recommend
+                  These provide sensible defaults but can be overridden by users
+                properties:
+                  images:
+                    description: Image handling recommendations (pull policies, etc.)
+                    properties:
+                      pullPolicy:
+                        description: Default image pull policy for this template (Always,
+                          Never, IfNotPresent)
+                        type: string
+                    type: object
+                  job:
+                    description: Job-specific recommendations (for templates that
+                      run as jobs)
+                    properties:
+                      recommendedBackoffLimit:
+                        description: Recommended backoff limit for this template
+                        format: int32
+                        type: integer
+                      recommendedRestartPolicy:
+                        description: Recommended restart policy for this template
+                        type: string
+                      recommendedTtlSecondsAfterFinished:
+                        description: Recommended TTL after finished for this template
+                        format: int32
+                        type: integer
+                    type: object
+                  probes:
+                    description: |-
+                      Health check probes (liveness, readiness, startup)
+                      These are defined using standard Kubernetes probe format
+                    properties:
+                      liveness:
+                        description: |-
+                          Liveness probe checks if the container is alive
+                          If this probe fails, the container will be restarted
+                        properties:
+                          exec:
+                            description: Exec specifies a command to execute in the
+                              container.
+                            properties:
+                              command:
+                                description: |-
+                                  Command is the command line to execute inside the container, the working directory for the
+                                  command  is root ('/') in the container's filesystem. The command is simply exec'd, it is
+                                  not run inside a shell, so traditional shell instructions ('|', etc) won't work. To use
+                                  a shell, you need to explicitly call out to that shell.
+                                  Exit status of 0 is treated as live/healthy and non-zero is unhealthy.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            type: object
+                          failureThreshold:
+                            description: |-
+                              Minimum consecutive failures for the probe to be considered failed after having succeeded.
+                              Defaults to 3. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          grpc:
+                            description: GRPC specifies a GRPC HealthCheckRequest.
+                            properties:
+                              port:
+                                description: Port number of the gRPC service. Number
+                                  must be in the range 1 to 65535.
+                                format: int32
+                                type: integer
+                              service:
+                                default: ""
+                                description: |-
+                                  Service is the name of the service to place in the gRPC HealthCheckRequest
+                                  (see https://github.com/grpc/grpc/blob/master/doc/health-checking.md).
+
+                                  If this is not specified, the default behavior is defined by gRPC.
+                                type: string
+                            required:
+                            - port
+                            type: object
+                          httpGet:
+                            description: HTTPGet specifies an HTTP GET request to
+                              perform.
+                            properties:
+                              host:
+                                description: |-
+                                  Host name to connect to, defaults to the pod IP. You probably want to set
+                                  "Host" in httpHeaders instead.
+                                type: string
+                              httpHeaders:
+                                description: Custom headers to set in the request.
+                                  HTTP allows repeated headers.
+                                items:
+                                  description: HTTPHeader describes a custom header
+                                    to be used in HTTP probes
+                                  properties:
+                                    name:
+                                      description: |-
+                                        The header field name.
+                                        This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                      type: string
+                                    value:
+                                      description: The header field value
+                                      type: string
+                                  required:
+                                  - name
+                                  - value
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              path:
+                                description: Path to access on the HTTP server.
+                                type: string
+                              port:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Name or number of the port to access on the container.
+                                  Number must be in the range 1 to 65535.
+                                  Name must be an IANA_SVC_NAME.
+                                x-kubernetes-int-or-string: true
+                              scheme:
+                                description: |-
+                                  Scheme to use for connecting to the host.
+                                  Defaults to HTTP.
+                                type: string
+                            required:
+                            - port
+                            type: object
+                          initialDelaySeconds:
+                            description: |-
+                              Number of seconds after the container has started before liveness probes are initiated.
+                              More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
+                            format: int32
+                            type: integer
+                          periodSeconds:
+                            description: |-
+                              How often (in seconds) to perform the probe.
+                              Default to 10 seconds. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          successThreshold:
+                            description: |-
+                              Minimum consecutive successes for the probe to be considered successful after having failed.
+                              Defaults to 1. Must be 1 for liveness and startup. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          tcpSocket:
+                            description: TCPSocket specifies a connection to a TCP
+                              port.
+                            properties:
+                              host:
+                                description: 'Optional: Host name to connect to, defaults
+                                  to the pod IP.'
+                                type: string
+                              port:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Number or name of the port to access on the container.
+                                  Number must be in the range 1 to 65535.
+                                  Name must be an IANA_SVC_NAME.
+                                x-kubernetes-int-or-string: true
+                            required:
+                            - port
+                            type: object
+                          terminationGracePeriodSeconds:
+                            description: |-
+                              Optional duration in seconds the pod needs to terminate gracefully upon probe failure.
+                              The grace period is the duration in seconds after the processes running in the pod are sent
+                              a termination signal and the time when the processes are forcibly halted with a kill signal.
+                              Set this value longer than the expected cleanup time for your process.
+                              If this value is nil, the pod's terminationGracePeriodSeconds will be used. Otherwise, this
+                              value overrides the value provided by the pod spec.
+                              Value must be non-negative integer. The value zero indicates stop immediately via
+                              the kill signal (no opportunity to shut down).
+                              This is a beta field and requires enabling ProbeTerminationGracePeriod feature gate.
+                              Minimum value is 1. spec.terminationGracePeriodSeconds is used if unset.
+                            format: int64
+                            type: integer
+                          timeoutSeconds:
+                            description: |-
+                              Number of seconds after which the probe times out.
+                              Defaults to 1 second. Minimum value is 1.
+                              More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
+                            format: int32
+                            type: integer
+                        type: object
+                      readiness:
+                        description: |-
+                          Readiness probe checks if the container is ready to serve traffic
+                          If this probe fails, the pod will be removed from service endpoints
+                        properties:
+                          exec:
+                            description: Exec specifies a command to execute in the
+                              container.
+                            properties:
+                              command:
+                                description: |-
+                                  Command is the command line to execute inside the container, the working directory for the
+                                  command  is root ('/') in the container's filesystem. The command is simply exec'd, it is
+                                  not run inside a shell, so traditional shell instructions ('|', etc) won't work. To use
+                                  a shell, you need to explicitly call out to that shell.
+                                  Exit status of 0 is treated as live/healthy and non-zero is unhealthy.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            type: object
+                          failureThreshold:
+                            description: |-
+                              Minimum consecutive failures for the probe to be considered failed after having succeeded.
+                              Defaults to 3. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          grpc:
+                            description: GRPC specifies a GRPC HealthCheckRequest.
+                            properties:
+                              port:
+                                description: Port number of the gRPC service. Number
+                                  must be in the range 1 to 65535.
+                                format: int32
+                                type: integer
+                              service:
+                                default: ""
+                                description: |-
+                                  Service is the name of the service to place in the gRPC HealthCheckRequest
+                                  (see https://github.com/grpc/grpc/blob/master/doc/health-checking.md).
+
+                                  If this is not specified, the default behavior is defined by gRPC.
+                                type: string
+                            required:
+                            - port
+                            type: object
+                          httpGet:
+                            description: HTTPGet specifies an HTTP GET request to
+                              perform.
+                            properties:
+                              host:
+                                description: |-
+                                  Host name to connect to, defaults to the pod IP. You probably want to set
+                                  "Host" in httpHeaders instead.
+                                type: string
+                              httpHeaders:
+                                description: Custom headers to set in the request.
+                                  HTTP allows repeated headers.
+                                items:
+                                  description: HTTPHeader describes a custom header
+                                    to be used in HTTP probes
+                                  properties:
+                                    name:
+                                      description: |-
+                                        The header field name.
+                                        This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                      type: string
+                                    value:
+                                      description: The header field value
+                                      type: string
+                                  required:
+                                  - name
+                                  - value
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              path:
+                                description: Path to access on the HTTP server.
+                                type: string
+                              port:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Name or number of the port to access on the container.
+                                  Number must be in the range 1 to 65535.
+                                  Name must be an IANA_SVC_NAME.
+                                x-kubernetes-int-or-string: true
+                              scheme:
+                                description: |-
+                                  Scheme to use for connecting to the host.
+                                  Defaults to HTTP.
+                                type: string
+                            required:
+                            - port
+                            type: object
+                          initialDelaySeconds:
+                            description: |-
+                              Number of seconds after the container has started before liveness probes are initiated.
+                              More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
+                            format: int32
+                            type: integer
+                          periodSeconds:
+                            description: |-
+                              How often (in seconds) to perform the probe.
+                              Default to 10 seconds. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          successThreshold:
+                            description: |-
+                              Minimum consecutive successes for the probe to be considered successful after having failed.
+                              Defaults to 1. Must be 1 for liveness and startup. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          tcpSocket:
+                            description: TCPSocket specifies a connection to a TCP
+                              port.
+                            properties:
+                              host:
+                                description: 'Optional: Host name to connect to, defaults
+                                  to the pod IP.'
+                                type: string
+                              port:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Number or name of the port to access on the container.
+                                  Number must be in the range 1 to 65535.
+                                  Name must be an IANA_SVC_NAME.
+                                x-kubernetes-int-or-string: true
+                            required:
+                            - port
+                            type: object
+                          terminationGracePeriodSeconds:
+                            description: |-
+                              Optional duration in seconds the pod needs to terminate gracefully upon probe failure.
+                              The grace period is the duration in seconds after the processes running in the pod are sent
+                              a termination signal and the time when the processes are forcibly halted with a kill signal.
+                              Set this value longer than the expected cleanup time for your process.
+                              If this value is nil, the pod's terminationGracePeriodSeconds will be used. Otherwise, this
+                              value overrides the value provided by the pod spec.
+                              Value must be non-negative integer. The value zero indicates stop immediately via
+                              the kill signal (no opportunity to shut down).
+                              This is a beta field and requires enabling ProbeTerminationGracePeriod feature gate.
+                              Minimum value is 1. spec.terminationGracePeriodSeconds is used if unset.
+                            format: int64
+                            type: integer
+                          timeoutSeconds:
+                            description: |-
+                              Number of seconds after which the probe times out.
+                              Defaults to 1 second. Minimum value is 1.
+                              More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
+                            format: int32
+                            type: integer
+                        type: object
+                      startup:
+                        description: |-
+                          Startup probe checks if the application has started
+                          All other probes are disabled until this succeeds
+                          Useful for slow-starting containers
+                        properties:
+                          exec:
+                            description: Exec specifies a command to execute in the
+                              container.
+                            properties:
+                              command:
+                                description: |-
+                                  Command is the command line to execute inside the container, the working directory for the
+                                  command  is root ('/') in the container's filesystem. The command is simply exec'd, it is
+                                  not run inside a shell, so traditional shell instructions ('|', etc) won't work. To use
+                                  a shell, you need to explicitly call out to that shell.
+                                  Exit status of 0 is treated as live/healthy and non-zero is unhealthy.
+                                items:
+                                  type: string
+                                type: array
+                                x-kubernetes-list-type: atomic
+                            type: object
+                          failureThreshold:
+                            description: |-
+                              Minimum consecutive failures for the probe to be considered failed after having succeeded.
+                              Defaults to 3. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          grpc:
+                            description: GRPC specifies a GRPC HealthCheckRequest.
+                            properties:
+                              port:
+                                description: Port number of the gRPC service. Number
+                                  must be in the range 1 to 65535.
+                                format: int32
+                                type: integer
+                              service:
+                                default: ""
+                                description: |-
+                                  Service is the name of the service to place in the gRPC HealthCheckRequest
+                                  (see https://github.com/grpc/grpc/blob/master/doc/health-checking.md).
+
+                                  If this is not specified, the default behavior is defined by gRPC.
+                                type: string
+                            required:
+                            - port
+                            type: object
+                          httpGet:
+                            description: HTTPGet specifies an HTTP GET request to
+                              perform.
+                            properties:
+                              host:
+                                description: |-
+                                  Host name to connect to, defaults to the pod IP. You probably want to set
+                                  "Host" in httpHeaders instead.
+                                type: string
+                              httpHeaders:
+                                description: Custom headers to set in the request.
+                                  HTTP allows repeated headers.
+                                items:
+                                  description: HTTPHeader describes a custom header
+                                    to be used in HTTP probes
+                                  properties:
+                                    name:
+                                      description: |-
+                                        The header field name.
+                                        This will be canonicalized upon output, so case-variant names will be understood as the same header.
+                                      type: string
+                                    value:
+                                      description: The header field value
+                                      type: string
+                                  required:
+                                  - name
+                                  - value
+                                  type: object
+                                type: array
+                                x-kubernetes-list-type: atomic
+                              path:
+                                description: Path to access on the HTTP server.
+                                type: string
+                              port:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Name or number of the port to access on the container.
+                                  Number must be in the range 1 to 65535.
+                                  Name must be an IANA_SVC_NAME.
+                                x-kubernetes-int-or-string: true
+                              scheme:
+                                description: |-
+                                  Scheme to use for connecting to the host.
+                                  Defaults to HTTP.
+                                type: string
+                            required:
+                            - port
+                            type: object
+                          initialDelaySeconds:
+                            description: |-
+                              Number of seconds after the container has started before liveness probes are initiated.
+                              More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
+                            format: int32
+                            type: integer
+                          periodSeconds:
+                            description: |-
+                              How often (in seconds) to perform the probe.
+                              Default to 10 seconds. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          successThreshold:
+                            description: |-
+                              Minimum consecutive successes for the probe to be considered successful after having failed.
+                              Defaults to 1. Must be 1 for liveness and startup. Minimum value is 1.
+                            format: int32
+                            type: integer
+                          tcpSocket:
+                            description: TCPSocket specifies a connection to a TCP
+                              port.
+                            properties:
+                              host:
+                                description: 'Optional: Host name to connect to, defaults
+                                  to the pod IP.'
+                                type: string
+                              port:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  Number or name of the port to access on the container.
+                                  Number must be in the range 1 to 65535.
+                                  Name must be an IANA_SVC_NAME.
+                                x-kubernetes-int-or-string: true
+                            required:
+                            - port
+                            type: object
+                          terminationGracePeriodSeconds:
+                            description: |-
+                              Optional duration in seconds the pod needs to terminate gracefully upon probe failure.
+                              The grace period is the duration in seconds after the processes running in the pod are sent
+                              a termination signal and the time when the processes are forcibly halted with a kill signal.
+                              Set this value longer than the expected cleanup time for your process.
+                              If this value is nil, the pod's terminationGracePeriodSeconds will be used. Otherwise, this
+                              value overrides the value provided by the pod spec.
+                              Value must be non-negative integer. The value zero indicates stop immediately via
+                              the kill signal (no opportunity to shut down).
+                              This is a beta field and requires enabling ProbeTerminationGracePeriod feature gate.
+                              Minimum value is 1. spec.terminationGracePeriodSeconds is used if unset.
+                            format: int64
+                            type: integer
+                          timeoutSeconds:
+                            description: |-
+                              Number of seconds after which the probe times out.
+                              Defaults to 1 second. Minimum value is 1.
+                              More info: https://kubernetes.io/docs/concepts/workloads/pods/pod-lifecycle#container-probes
+                            format: int32
+                            type: integer
+                        type: object
+                    type: object
+                  resources:
+                    description: Resource recommendations (how much CPU/memory this
+                      typically needs)
+                    properties:
+                      minCpuRequest:
+                        description: Minimum resource requirements for this template
+                        type: string
+                      minMemoryRequest:
+                        type: string
+                      recommendedCpuLimit:
+                        description: Recommended CPU limit for this template
+                        type: string
+                      recommendedCpuRequest:
+                        description: Recommended CPU request for this template
+                        type: string
+                      recommendedMemoryLimit:
+                        description: Recommended memory limit for this template
+                        type: string
+                      recommendedMemoryRequest:
+                        description: Recommended memory request for this template
+                        type: string
+                    type: object
+                  retry:
+                    description: Retry behavior recommendations
+                    properties:
+                      recommendedBackoff:
+                        description: Recommended backoff strategy for this template
+                        type: string
+                      recommendedBaseDelay:
+                        description: Recommended base delay for this template
+                        type: string
+                      recommendedMaxDelay:
+                        description: Recommended max delay for this template
+                        type: string
+                      recommendedMaxRetries:
+                        description: Recommended max retries for this template
+                        type: integer
+                    type: object
+                  security:
+                    description: Security requirements and recommendations
+                    properties:
+                      recommendedRunAsUser:
+                        description: Recommended user ID for this template
+                        format: int64
+                        type: integer
+                      requiresNoPrivilegeEscalation:
+                        description: Whether this template requires no privilege escalation
+                        type: boolean
+                      requiresNonRoot:
+                        description: Whether this template requires running as non-root
+                        type: boolean
+                      requiresReadOnlyRoot:
+                        description: Whether this template requires read-only root
+                          filesystem
+                        type: boolean
+                    type: object
+                  service:
+                    description: Service exposure defaults for realtime components
+                      (and impulses)
+                    properties:
+                      ports:
+                        description: Ports defines external service ports and their
+                          target container ports
+                        items:
+                          description: TemplateServicePort maps a Service port to
+                            a target container port
+                          properties:
+                            name:
+                              type: string
+                            port:
+                              format: int32
+                              type: integer
+                            protocol:
+                              type: string
+                            targetPort:
+                              format: int32
+                              type: integer
+                          required:
+                          - port
+                          - targetPort
+                          type: object
+                        type: array
+                    type: object
+                  timeout:
+                    description: Default timeout recommendation
+                    type: string
+                type: object
+              image:
+                description: |-
+                  Container image that implements this template's functionality
+                  This is the actual code that runs when someone uses this template
+                maxLength: 512
+                type: string
+              inputSchema:
+                description: |-
+                  What data does this engram expect as input?
+                  This defines the contract for the data flowing INTO this component
+                  Examples:
+                  - HTTP client: {"url": "string", "method": "string", "headers": "object"}
+                  - OpenAI: {"prompt": "string", "model": "string", "temperature": "number"}
+                  - Database: {"query": "string", "parameters": "object"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              outputSchema:
+                description: |-
+                  What data does this engram produce as output?
+                  This defines the contract for the data flowing OUT of this component
+                  Examples:
+                  - HTTP client: {"status": "integer", "body": "string", "headers": "object"}
+                  - OpenAI: {"response": "string", "usage": "object", "model": "string"}
+                  - Database: {"rows": "array", "rowCount": "integer", "duration": "number"}
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              secretSchema:
+                additionalProperties:
+                  description: |-
+                    SecretDefinition defines the structure and requirements of a secret
+                    This handles both simple key-value secrets and complex structured secrets
+                  properties:
+                    description:
+                      description: |-
+                        Human-readable description of what this secret is used for
+                        Example: "API key for OpenAI authentication", "Database connection credentials"
+                      type: string
+                    envPrefix:
+                      description: |-
+                        For env mounting: what environment variable prefix to use
+                        If not specified, uses secret name in uppercase
+                        Example: "DATABASE" -> DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD
+                      type: string
+                    expectedKeys:
+                      description: |-
+                        Expected keys in this secret (for validation and documentation)
+                        Example: ["host", "username", "password"] or ["api-key", "org-id"]
+                      items:
+                        type: string
+                      type: array
+                    mountPath:
+                      description: |-
+                        For file mounting: where to mount the secret files
+                        Example: "/etc/secrets/database", "/opt/certs"
+                      type: string
+                    mountType:
+                      description: |-
+                        How this secret should be mounted and accessed
+                        - env: As environment variables (default for simple secrets)
+                        - file: As mounted files (better for certificates, config files)
+                        - both: Available as both env vars and files
+                      enum:
+                      - env
+                      - file
+                      - both
+                      type: string
+                    required:
+                      description: Whether this secret is required for the template
+                        to function
+                      type: boolean
+                  type: object
+                description: |-
+                  Secret definitions that this template can use
+                  Defines what secrets this template expects and how they should be structured
+                  Users must provide corresponding secrets when creating Engrams/Impulses
+                type: object
+              supportedModes:
+                description: |-
+                  Which Kubernetes workload types this template supports
+                  - job: One-shot tasks (like batch processing, CI builds)
+                  - deployment: Always-on stateless services (like APIs, webhooks)
+                  - statefulset: Always-on stateful services (like databases, file processors)
+                items:
+                  description: |-
+                    WorkloadMode defines how a workload should be executed in Kubernetes.
+                    This determines the fundamental execution pattern and lifecycle management.
+                  enum:
+                  - job
+                  - deployment
+                  - statefulset
+                  type: string
+                maxItems: 3
+                minItems: 1
+                type: array
+              version:
+                description: |-
+                  Version of this template package (use semantic versioning like "1.2.3")
+                  This allows users to pin to specific versions or upgrade safely
+                type: string
+            required:
+            - supportedModes
+            - version
+            type: object
+          status:
+            description: EngramTemplateStatus defines the observed state of EngramTemplate
+            properties:
+              conditions:
+                description: Standard Kubernetes conditions (Ready, Available, etc.)
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: |-
+                  observedGeneration is the most recent generation observed for this Template. It corresponds to the
+                  Template's generation, which is updated on mutation by the API Server.
+                format: int64
+                type: integer
+              usageCount:
+                description: |-
+                  How many Engrams/Impulses are currently using this template
+                  Useful for understanding template popularity and impact of changes
+                format: int32
+                type: integer
+              validationErrors:
+                description: |-
+                  If validation failed, what were the specific errors?
+                  Helps template authors fix issues with their schemas or configuration
+                items:
+                  type: string
+                type: array
+              validationStatus:
+                description: Whether this template passed validation checks
+                enum:
+                - valid
+                - invalid
+                - unknown
+                - pending
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

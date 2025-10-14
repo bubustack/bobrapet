@@ -1,0 +1,25 @@
+---
+apiVersion: bubustack.io/v1alpha1
+kind: Engram
+metadata:
+  name: http-request-engram
+spec:
+  mode: job
+  templateRef: 
+    name: http-request
+---
+apiVersion: bubustack.io/v1alpha1
+kind: Engram
+metadata:
+  name: openai-summarizer-engram
+spec:
+  mode: job
+  secrets:
+    openai: openai-credentials
+  templateRef: 
+    name: openai-chat
+  with:
+    model: gpt-5
+    systemPrompt: |
+      You are an expert at summarizing technical content. Given the body
+      of a webpage, provide a concise, one-paragraph summary.

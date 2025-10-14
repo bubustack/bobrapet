@@ -1,0 +1,116 @@
+---
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: http-request
+spec:
+  description: Makes an HTTP request to a specified URL.
+  execution:
+    job:
+      recommendedRestartPolicy: Never
+  image: http-request:latest
+  inputSchema:
+    properties:
+      body:
+        description: The request body (for POST, PUT, etc.).
+        type: string
+      headers:
+        additionalProperties:
+          type: string
+        description: A map of HTTP headers to send with the request.
+        type: object
+      method:
+        default: GET
+        description: The HTTP method to use (GET, POST, etc.).
+        type: string
+      url:
+        description: The URL to send the request to.
+        type: string
+        required: true
+    type: object
+  outputSchema:
+    properties:
+      body:
+        description: The response body.
+        type: string
+      headers:
+        description: A map of the response headers.
+        type: object
+      status:
+        description: The HTTP status text of the response.
+        type: string
+      statusCode:
+        description: The HTTP status code of the response.
+        type: integer
+    type: object
+  supportedModes:
+  - job
+  version: 0.1.0
+---
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: EngramTemplate
+metadata:
+  name: openai-chat
+spec:
+  configSchema:
+    properties:
+      model:
+        default: gpt-3.5-turbo
+        description: The OpenAI chat model to use (e.g., gpt-4, gpt-3.5-turbo).
+        type: string
+      systemPrompt:
+        default: You are a helpful assistant.
+        description: The initial system message to guide the model's behavior.
+        type: string
+      temperature:
+        default: 0.7
+        description: Controls randomness in the model's output.
+        type: number
+    type: object
+  description: A conversational LLM engram using OpenAI's chat models.
+  image: openai-chat:latest
+  inputSchema:
+    properties:
+      history:
+        items:
+          properties:
+            content:
+              type: string
+            role:
+              enum:
+              - user
+              - assistant
+              type: string
+          type: object
+        type: array
+      text:
+        description: The user's latest message.
+        required: true
+        type: string
+    type: object
+  outputSchema:
+    properties:
+      actionRequest:
+        description: An optional structured request to trigger another story.
+        properties:
+          inputs:
+            type: object
+          storyName:
+            type: string
+        type: object
+      text:
+        description: The model's text response.
+        type: string
+    type: object
+  secretSchema:
+    openai:
+      description: API key for OpenAI authentication.
+      envPrefix: OPENAI_
+      expectedKeys:
+      - API_KEY
+      mountType: env
+      required: true
+  supportedModes:
+  - deployment
+  - job
+  version: 1.0.0

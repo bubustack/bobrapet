@@ -1,0 +1,78 @@
+---
+# Example: Engram that uses a template with probes (probes enabled by default)
+apiVersion: bubustack.io/v1alpha1
+kind: Engram
+metadata:
+  name: my-web-api-default
+  namespace: default
+spec:
+  templateRef:
+    name: web-api-server  # References template with HTTP probes defined
+  mode: deployment
+  # Probes from template will be applied automatically
+
+---
+# Example: Engram that disables specific probes
+apiVersion: bubustack.io/v1alpha1
+kind: Engram
+metadata:
+  name: my-web-api-no-startup
+  namespace: default
+spec:
+  templateRef:
+    name: web-api-server  # References template with HTTP probes defined
+  mode: deployment
+  overrides:
+    probes:
+      # Disable startup probe (liveness and readiness still active)
+      disableStartup: true
+
+---
+# Example: Engram that disables all probes
+apiVersion: bubustack.io/v1alpha1
+kind: Engram
+metadata:
+  name: my-web-api-no-probes
+  namespace: default
+spec:
+  templateRef:
+    name: web-api-server  # References template with HTTP probes defined
+  mode: deployment
+  overrides:
+    probes:
+      # Disable all health checks
+      disableLiveness: true
+      disableReadiness: true
+      disableStartup: true
+
+---
+# Example: Impulse that uses template probes
+apiVersion: bubustack.io/v1alpha1
+kind: Impulse
+metadata:
+  name: webhook-handler-with-probes
+  namespace: default
+spec:
+  templateRef:
+    name: github-webhook  # Assume this template has probes defined
+  storyRef:
+    name: ci-pipeline
+  # Probes from template will be applied
+
+---
+# Example: Impulse that disables readiness probe
+apiVersion: bubustack.io/v1alpha1
+kind: Impulse
+metadata:
+  name: webhook-handler-no-readiness
+  namespace: default
+spec:
+  templateRef:
+    name: github-webhook
+  storyRef:
+    name: ci-pipeline
+  execution:
+    probes:
+      # Disable readiness probe during development/testing
+      disableReadiness: true
+

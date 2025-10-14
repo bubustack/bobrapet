@@ -1,0 +1,120 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - name: Release Please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+
+      # Build and push Docker images when release is created
+      - name: Checkout code
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        if: ${{ steps.release.outputs.release_created }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ steps.release.outputs.release_created }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        if: ${{ steps.release.outputs.release_created }}
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.release.outputs.tag_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.tag_name }}
+            type=semver,pattern={{major}},value=${{ steps.release.outputs.tag_name }}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        if: ${{ steps.release.outputs.release_created }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.release.outputs.tag_name }}
+            COMMIT=${{ github.sha }}
+
+      - name: Set up Go
+        if: ${{ steps.release.outputs.release_created }}
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Generate installer manifests
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          make build-installer IMG=${{ env.GHCR_IMAGE }}:${{ steps.release.outputs.tag_name }}
+
+      - name: Upload installer manifests to release
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload ${{ steps.release.outputs.tag_name }} dist/install.yaml
+
+      - name: Create release summary
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          {
+            echo "## Release ${{ steps.release.outputs.tag_name }} 🚀"
+            echo
+            echo "The new version has been released and is available at:"
+            echo "- **GitHub Release**: https://github.com/${{ github.repository }}/releases/tag/${{ steps.release.outputs.tag_name }}"
+            echo "- **GitHub Container Registry**: \`${{ env.GHCR_IMAGE }}:${{ steps.release.outputs.tag_name }}\`"
+            echo
+            echo "### Installation"
+            echo '```bash'
+            echo "# Install using the manifest (GHCR image reference)"
+            echo "kubectl apply -f https://github.com/${{ github.repository }}/releases/download/${{ steps.release.outputs.tag_name }}/install.yaml"
+            echo '```'
+            echo
+            echo "### Pull the image"
+            echo '```bash'
+            echo "# From GitHub Container Registry"
+            echo "docker pull ${{ env.GHCR_IMAGE }}:${{ steps.release.outputs.tag_name }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+

@@ -58,18 +58,18 @@ type StepRunReconciler struct {
 	Recorder record.EventRecorder
 }
 
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns/finalizers,verbs=update
-//+kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch
-//+kubebuilder:rbac:groups=bubustack.io,resources=engrams/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
-//+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
-//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
-//+kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns/finalizers,verbs=update
+// +kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch
+// +kubebuilder:rbac:groups=bubustack.io,resources=engrams/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups=core,resources=pods/log,verbs=get
 
 func (r *StepRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := logging.NewReconcileLogger(ctx, "steprun").WithValues("steprun", req.NamespacedName)
@@ -79,7 +79,7 @@ func (r *StepRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	}()
 
 	// Bound reconcile duration
-	timeout := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -93,7 +93,7 @@ func (r *StepRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 
 	stepLogger := log.WithStepRun(&stepRun)
 
-	if !stepRun.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !stepRun.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &stepRun)
 	}
 
@@ -101,7 +101,7 @@ func (r *StepRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 	if !controllerutil.ContainsFinalizer(&stepRun, StepRunFinalizer) {
 		beforePatch := stepRun.DeepCopy()
 		controllerutil.AddFinalizer(&stepRun, StepRunFinalizer)
-		if err := r.ControllerDependencies.Client.Patch(ctx, &stepRun, client.MergeFrom(beforePatch)); err != nil {
+		if err := r.Patch(ctx, &stepRun, client.MergeFrom(beforePatch)); err != nil {
 			stepLogger.Error(err, "Failed to add StepRun finalizer")
 			return ctrl.Result{}, err
 		}
@@ -143,7 +143,7 @@ func (r *StepRunReconciler) reconcileNormal(ctx context.Context, step *runsv1alp
 
 	// Default to "job" mode if not specified
 	mode := enums.WorkloadModeJob
-	if engram != nil && engram.Spec.Mode != "" { //nolint:staticcheck
+	if engram != nil && engram.Spec.Mode != "" {
 		mode = engram.Spec.Mode
 	}
 
@@ -175,7 +175,7 @@ func (r *StepRunReconciler) reconcileJobExecution(ctx context.Context, step *run
 	stepLogger := logging.NewReconcileLogger(ctx, "steprun").WithStepRun(step)
 
 	job := &batchv1.Job{}
-	err := r.ControllerDependencies.Client.Get(ctx, types.NamespacedName{Name: step.Name, Namespace: step.Namespace}, job)
+	err := r.Get(ctx, types.NamespacedName{Name: step.Name, Namespace: step.Namespace}, job)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			stepLogger.Info("Job not found, creating a new one")
@@ -189,7 +189,7 @@ func (r *StepRunReconciler) reconcileJobExecution(ctx context.Context, step *run
 				stepLogger.Error(err, "Failed to create Job for StepRun")
 				return ctrl.Result{}, err
 			}
-			if err := r.ControllerDependencies.Client.Create(ctx, newJob); err != nil {
+			if err := r.Create(ctx, newJob); err != nil {
 				stepLogger.Error(err, "Failed to create Job in cluster")
 				return ctrl.Result{}, err
 			}
@@ -218,7 +218,7 @@ func (r *StepRunReconciler) setStepRunPhase(ctx context.Context, step *runsv1alp
 		}
 	}
 
-	return patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, step, func(obj client.Object) {
+	return patch.RetryableStatusPatch(ctx, r.Client, step, func(obj client.Object) {
 		s := obj.(*runsv1alpha1.StepRun)
 		s.Status.Phase = phase
 		s.Status.ObservedGeneration = s.Generation
@@ -271,11 +271,11 @@ func (r *StepRunReconciler) updateEngramStatus(ctx context.Context, step *runsv1
 
 	engram := &v1alpha1.Engram{}
 	engramKey := client.ObjectKey{Namespace: step.Namespace, Name: step.Spec.EngramRef.Name}
-	if err := r.ControllerDependencies.Client.Get(ctx, engramKey, engram); err != nil {
+	if err := r.Get(ctx, engramKey, engram); err != nil {
 		return fmt.Errorf("failed to get parent engram %s for status update: %w", step.Spec.EngramRef.Name, err)
 	}
 
-	return patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, engram, func(obj client.Object) {
+	return patch.RetryableStatusPatch(ctx, r.Client, engram, func(obj client.Object) {
 		e := obj.(*v1alpha1.Engram)
 		now := metav1.Now()
 		e.Status.LastExecutionTime = &now
@@ -292,7 +292,7 @@ func (r *StepRunReconciler) getEngramForStep(ctx context.Context, step *runsv1al
 	}
 	var engram v1alpha1.Engram
 	key := step.Spec.EngramRef.ToNamespacedName(step)
-	if err := r.ControllerDependencies.Client.Get(ctx, key, &engram); err != nil {
+	if err := r.Get(ctx, key, &engram); err != nil {
 		return nil, err
 	}
 	return &engram, nil
@@ -302,7 +302,7 @@ func (r *StepRunReconciler) getEngramTemplateForEngram(ctx context.Context, engr
 	var engramTemplate catalogv1alpha1.EngramTemplate
 	// EngramTemplates are cluster-scoped, so we must not provide a namespace.
 	key := client.ObjectKey{Name: engram.Spec.TemplateRef.Name}
-	if err := r.ControllerDependencies.Client.Get(ctx, key, &engramTemplate); err != nil {
+	if err := r.Get(ctx, key, &engramTemplate); err != nil {
 		return nil, err
 	}
 	return &engramTemplate, nil
@@ -317,7 +317,7 @@ func (r *StepRunReconciler) reconcileDelete(ctx context.Context, step *runsv1alp
 	}
 
 	job := &batchv1.Job{}
-	err := r.ControllerDependencies.Client.Get(ctx, types.NamespacedName{Name: step.Name, Namespace: step.Namespace}, job)
+	err := r.Get(ctx, types.NamespacedName{Name: step.Name, Namespace: step.Namespace}, job)
 
 	if err != nil && !errors.IsNotFound(err) {
 		stepLogger.Error(err, "Failed to get Job for cleanup check")
@@ -327,7 +327,7 @@ func (r *StepRunReconciler) reconcileDelete(ctx context.Context, step *runsv1alp
 	// If the job exists and is not being deleted, delete it.
 	if err == nil && job.DeletionTimestamp.IsZero() {
 		stepLogger.Info("Deleting owned Job")
-		if err := r.ControllerDependencies.Client.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
+		if err := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
 			stepLogger.Error(err, "Failed to delete Job during cleanup")
 			return ctrl.Result{}, err
 		}
@@ -340,7 +340,7 @@ func (r *StepRunReconciler) reconcileDelete(ctx context.Context, step *runsv1alp
 		stepLogger.Info("Owned Job is deleted, removing finalizer")
 		beforePatch := step.DeepCopy()
 		controllerutil.RemoveFinalizer(step, StepRunFinalizer)
-		if err := r.ControllerDependencies.Client.Patch(ctx, step, client.MergeFrom(beforePatch)); err != nil {
+		if err := r.Patch(ctx, step, client.MergeFrom(beforePatch)); err != nil {
 			stepLogger.Error(err, "Failed to remove finalizer")
 			return ctrl.Result{}, err
 		}
@@ -382,23 +382,23 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 	}
 
 	// Resolve inputs using the shared CEL evaluator
-	stepOutputs, err := getPriorStepOutputs(ctx, r.ControllerDependencies.Client, storyRun, nil)
+	stepOutputs, err := getPriorStepOutputs(ctx, r.Client, storyRun, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get prior step outputs: %w", err)
 	}
 
-	var with map[string]interface{}
+	var with map[string]any
 	if srun.Spec.Input != nil {
 		if err := json.Unmarshal(srun.Spec.Input.Raw, &with); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal step 'with' block: %w", err)
 		}
 	}
 
-	vars := map[string]interface{}{
+	vars := map[string]any{
 		"inputs": storyRunInputs,
 		"steps":  stepOutputs,
 	}
-	resolvedInputs, err := r.ControllerDependencies.CELEvaluator.ResolveWithInputs(ctx, with, vars)
+	resolvedInputs, err := r.CELEvaluator.ResolveWithInputs(ctx, with, vars)
 	if err != nil {
 		// This is where we detect if an upstream output is not ready.
 		// The CEL evaluator will return a compile error for an undeclared reference.
@@ -411,10 +411,7 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 	}
 
 	// Setup secrets
-	secretEnvVars, volumes, volumeMounts, envFromSources, err := r.setupSecrets(ctx, resolvedConfig, engramTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to setup secrets for step '%s': %w", srun.Name, err)
-	}
+	secretEnvVars, volumes, volumeMounts := r.setupSecrets(ctx, resolvedConfig, engramTemplate)
 
 	// Determine startedAt timestamp for accurate duration tracking
 	startedAt := metav1.Now()
@@ -432,13 +429,13 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 		{Name: "BUBU_INPUTS", Value: string(inputBytes)},
 		{Name: "BUBU_STARTED_AT", Value: startedAt.Format(time.RFC3339Nano)},
 		{Name: "BUBU_EXECUTION_MODE", Value: "batch"},
-		{Name: "BUBU_GRPC_PORT", Value: fmt.Sprintf("%d", r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort)},
-		{Name: "BUBU_MAX_INLINE_SIZE", Value: fmt.Sprintf("%d", r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultMaxInlineSize)},
-		{Name: "BUBU_STORAGE_TIMEOUT", Value: fmt.Sprintf("%ds", r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultStorageTimeoutSeconds)},
+		{Name: "BUBU_GRPC_PORT", Value: fmt.Sprintf("%d", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort)},
+		{Name: "BUBU_MAX_INLINE_SIZE", Value: fmt.Sprintf("%d", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultMaxInlineSize)},
+		{Name: "BUBU_STORAGE_TIMEOUT", Value: fmt.Sprintf("%ds", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultStorageTimeoutSeconds)},
 	}
 
 	// Add gRPC tuning parameters for consistency, even in batch mode
-	engramConfig := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig
+	engramConfig := r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig
 	envVars = append(envVars,
 		corev1.EnvVar{Name: "BUBU_GRPC_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxRecvMsgBytes)},
 		corev1.EnvVar{Name: "BUBU_GRPC_MAX_SEND_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxSendMsgBytes)},
@@ -459,7 +456,7 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 	// 2. Operator config DefaultStepTimeout
 	// 3. Fallback to 30 minutes (matches SDK default)
 	// This allows SDK to enforce timeout before Job-level activeDeadlineSeconds kills the pod
-	stepTimeout := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.DefaultStepTimeout
+	stepTimeout := r.ConfigResolver.GetOperatorConfig().Controller.DefaultStepTimeout
 	if stepTimeout == 0 {
 		stepTimeout = 30 * time.Minute // Fallback to SDK's default
 	}
@@ -522,7 +519,7 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 					RestartPolicy:                 resolvedConfig.RestartPolicy,
 					ServiceAccountName:            resolvedConfig.ServiceAccountName,
 					AutomountServiceAccountToken:  &resolvedConfig.AutomountServiceAccountToken,
-					TerminationGracePeriodSeconds: &r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultTerminationGracePeriodSeconds,
+					TerminationGracePeriodSeconds: &r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultTerminationGracePeriodSeconds,
 					SecurityContext:               resolvedConfig.ToPodSecurityContext(),
 					Containers: []corev1.Container{{
 						Name:            "engram",
@@ -560,11 +557,11 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 		if auth := &s3Config.Authentication; auth.SecretRef != nil {
 			secretName := auth.SecretRef.Name
 			stepLogger.Info("Using S3 secret reference for authentication", "secretName", secretName)
-			envFromSources = append(envFromSources, corev1.EnvFromSource{
-				SecretRef: &corev1.SecretEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-				},
-			})
+			// envFromSources = append(envFromSources, corev1.EnvFromSource{ // This line is removed
+			// 	SecretRef: &corev1.SecretEnvSource{
+			// 		LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+			// 	},
+			// })
 		}
 	}
 
@@ -572,7 +569,7 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 	job.Spec.Template.Spec.Volumes = volumes
 	job.Spec.Template.Spec.Containers[0].VolumeMounts = volumeMounts
 	job.Spec.Template.Spec.Containers[0].Env = envVars
-	job.Spec.Template.Spec.Containers[0].EnvFrom = envFromSources
+	// job.Spec.Template.Spec.Containers[0].EnvFrom = envFromSources // This line is removed
 
 	if err := controllerutil.SetControllerReference(srun, job, r.Scheme); err != nil {
 		return nil, err
@@ -582,12 +579,12 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 }
 
 // getStoryRunInputs fetches the initial inputs from the parent StoryRun.
-func (r *StepRunReconciler) getStoryRunInputs(ctx context.Context, storyRun *runsv1alpha1.StoryRun) (map[string]interface{}, error) {
+func (r *StepRunReconciler) getStoryRunInputs(_ context.Context, storyRun *runsv1alpha1.StoryRun) (map[string]any, error) {
 	if storyRun.Spec.Inputs == nil {
-		return make(map[string]interface{}), nil
+		return make(map[string]any), nil
 	}
 
-	var inputs map[string]interface{}
+	var inputs map[string]any
 	if err := json.Unmarshal(storyRun.Spec.Inputs.Raw, &inputs); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal storyrun inputs: %w", err)
 	}
@@ -597,7 +594,7 @@ func (r *StepRunReconciler) getStoryRunInputs(ctx context.Context, storyRun *run
 func (r *StepRunReconciler) getParentStoryRun(ctx context.Context, srun *runsv1alpha1.StepRun) (*runsv1alpha1.StoryRun, error) {
 	var storyRun runsv1alpha1.StoryRun
 	key := types.NamespacedName{Name: srun.Spec.StoryRunRef.Name, Namespace: srun.Namespace}
-	if err := r.ControllerDependencies.Client.Get(ctx, key, &storyRun); err != nil {
+	if err := r.Get(ctx, key, &storyRun); err != nil {
 		return nil, err
 	}
 	return &storyRun, nil
@@ -638,7 +635,7 @@ func (r *StepRunReconciler) handleJobStatus(ctx context.Context, step *runsv1alp
 				// Use the original reconcile context. If it has timed out, the patch will fail
 				// and the entire reconcile will be retried. This ensures the exit code is
 				// eventually recorded without risking a race condition from a detached context.
-				if err := patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, step, func(obj client.Object) {
+				if err := patch.RetryableStatusPatch(ctx, r.Client, step, func(obj client.Object) {
 					sr := obj.(*runsv1alpha1.StepRun)
 					sr.Status.ExitCode = int32(exitCode)
 					// Optionally set ExitClass for semantic categorization
@@ -657,7 +654,7 @@ func (r *StepRunReconciler) handleJobStatus(ctx context.Context, step *runsv1alp
 		// Use the original reconcile context. If it has timed out, the patch will fail and
 		// the entire reconcile will be retried, which is the correct and safe behavior for
 		// ensuring this terminal state is eventually recorded.
-		if err := patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, step, func(obj client.Object) {
+		if err := patch.RetryableStatusPatch(ctx, r.Client, step, func(obj client.Object) {
 			sr := obj.(*runsv1alpha1.StepRun)
 			sr.Status.Phase = enums.PhaseFailed
 			sr.Status.LastFailureMsg = "Job execution failed. Check pod logs for details."
@@ -685,7 +682,7 @@ func (r *StepRunReconciler) handleJobStatus(ctx context.Context, step *runsv1alp
 func (r *StepRunReconciler) extractPodExitCode(ctx context.Context, job *batchv1.Job) int {
 	// List pods owned by this Job
 	var podList corev1.PodList
-	if err := r.ControllerDependencies.Client.List(ctx, &podList, client.InNamespace(job.Namespace), client.MatchingLabels{"job-name": job.Name}); err != nil {
+	if err := r.List(ctx, &podList, client.InNamespace(job.Namespace), client.MatchingLabels{"job-name": job.Name}); err != nil {
 		return 0
 	}
 
@@ -742,12 +739,12 @@ func classifyExitCode(code int) enums.ExitClass {
 func (r *StepRunReconciler) getStoryForStep(ctx context.Context, step *runsv1alpha1.StepRun) (*v1alpha1.Story, error) {
 	storyRun := &runsv1alpha1.StoryRun{}
 	storyRunKey := types.NamespacedName{Name: step.Spec.StoryRunRef.Name, Namespace: step.Namespace}
-	if err := r.ControllerDependencies.Client.Get(ctx, storyRunKey, storyRun); err != nil {
+	if err := r.Get(ctx, storyRunKey, storyRun); err != nil {
 		return nil, fmt.Errorf("failed to get parent StoryRun %s: %w", step.Spec.StoryRunRef.Name, err)
 	}
 	story := &v1alpha1.Story{}
 	storyKey := storyRun.Spec.StoryRef.ToNamespacedName(storyRun)
-	if err := r.ControllerDependencies.Client.Get(ctx, storyKey, story); err != nil {
+	if err := r.Get(ctx, storyKey, story); err != nil {
 		return nil, fmt.Errorf("failed to get parent Story %s: %w", storyRun.Spec.StoryRef.Name, err)
 	}
 	return story, nil
@@ -769,7 +766,7 @@ func (r *StepRunReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.O
 func (r *StepRunReconciler) mapEngramToStepRuns(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := logging.NewReconcileLogger(ctx, "steprun-mapper").WithValues("engram", obj.GetName())
 	var stepRuns runsv1alpha1.StepRunList
-	if err := r.ControllerDependencies.Client.List(ctx, &stepRuns, client.InNamespace(obj.GetNamespace()), client.MatchingFields{"spec.engramRef": obj.GetName()}); err != nil {
+	if err := r.List(ctx, &stepRuns, client.InNamespace(obj.GetNamespace()), client.MatchingFields{"spec.engramRef": obj.GetName()}); err != nil {
 		log.Error(err, "failed to list stepruns for engram")
 		return nil
 	}
@@ -795,7 +792,7 @@ func (r *StepRunReconciler) mapEngramTemplateToStepRuns(ctx context.Context, obj
 	// 1. Find all Engrams that reference this EngramTemplate.
 	var engrams v1alpha1.EngramList
 	// Note: We list across all namespaces because Engrams in any namespace can reference a cluster-scoped template.
-	if err := r.ControllerDependencies.Client.List(ctx, &engrams, client.MatchingFields{"spec.templateRef.name": obj.GetName()}); err != nil {
+	if err := r.List(ctx, &engrams, client.MatchingFields{"spec.templateRef.name": obj.GetName()}); err != nil {
 		log.Error(err, "failed to list engrams for engramtemplate")
 		return nil
 	}
@@ -808,7 +805,7 @@ func (r *StepRunReconciler) mapEngramTemplateToStepRuns(ctx context.Context, obj
 	var allRequests []reconcile.Request
 	for _, engram := range engrams.Items {
 		var stepRuns runsv1alpha1.StepRunList
-		if err := r.ControllerDependencies.Client.List(ctx, &stepRuns, client.InNamespace(engram.GetNamespace()), client.MatchingFields{"spec.engramRef": engram.GetName()}); err != nil {
+		if err := r.List(ctx, &stepRuns, client.InNamespace(engram.GetNamespace()), client.MatchingFields{"spec.engramRef": engram.GetName()}); err != nil {
 			log.Error(err, "failed to list stepruns for engram", "engram", engram.GetName())
 			continue // Continue to the next engram
 		}
@@ -831,14 +828,14 @@ func (r *StepRunReconciler) mapEngramTemplateToStepRuns(ctx context.Context, obj
 
 // setupSecrets resolves the secret mappings from the Engram and prepares the necessary
 // volumes, volume mounts, and environment variables for the pod.
-func (r *StepRunReconciler) setupSecrets(ctx context.Context, resolvedConfig *config.ResolvedExecutionConfig, engramTemplate *catalogv1alpha1.EngramTemplate) ([]corev1.EnvVar, []corev1.Volume, []corev1.VolumeMount, []corev1.EnvFromSource, error) {
+func (r *StepRunReconciler) setupSecrets(_ context.Context, resolvedConfig *config.ResolvedExecutionConfig, engramTemplate *catalogv1alpha1.EngramTemplate) ([]corev1.EnvVar, []corev1.Volume, []corev1.VolumeMount) {
 	var envVars []corev1.EnvVar
 	var volumes []corev1.Volume
 	var volumeMounts []corev1.VolumeMount
-	var envFromSources []corev1.EnvFromSource
+	// Note: we no longer return EnvFromSource; secrets are either mounted as files or injected via explicit env vars
 
 	if resolvedConfig.Secrets == nil || engramTemplate.Spec.SecretSchema == nil {
-		return envVars, volumes, volumeMounts, envFromSources, nil
+		return envVars, volumes, volumeMounts
 	}
 
 	for logicalName, actualSecretName := range resolvedConfig.Secrets {
@@ -915,5 +912,5 @@ func (r *StepRunReconciler) setupSecrets(ctx context.Context, resolvedConfig *co
 		}
 	}
 
-	return envVars, volumes, volumeMounts, envFromSources, nil
+	return envVars, volumes, volumeMounts
 }

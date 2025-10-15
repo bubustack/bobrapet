@@ -39,17 +39,17 @@ type ExpressionResolver struct {
 }
 
 // NewExpressionResolver creates a new expression resolver
-func NewExpressionResolver(client client.Client, namespace, storyRun string) *ExpressionResolver {
+func NewExpressionResolver(k8sClient client.Client, namespace, storyRun string) *ExpressionResolver {
 	return &ExpressionResolver{
-		client:    client,
+		client:    k8sClient,
 		namespace: namespace,
 		storyRun:  storyRun,
 	}
 }
 
 // ResolveInputs resolves GitHub Actions-style expressions in step inputs
-func (r *ExpressionResolver) ResolveInputs(ctx context.Context, inputs map[string]interface{}) (map[string]interface{}, error) {
-	resolved := make(map[string]interface{})
+func (r *ExpressionResolver) ResolveInputs(ctx context.Context, inputs map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any)
 
 	for key, value := range inputs {
 		resolvedValue, err := r.resolveValue(ctx, value)
@@ -63,13 +63,13 @@ func (r *ExpressionResolver) ResolveInputs(ctx context.Context, inputs map[strin
 }
 
 // resolveValue recursively resolves expressions in any value type
-func (r *ExpressionResolver) resolveValue(ctx context.Context, value interface{}) (interface{}, error) {
+func (r *ExpressionResolver) resolveValue(ctx context.Context, value any) (any, error) {
 	switch v := value.(type) {
 	case string:
 		return r.resolveString(ctx, v)
-	case map[string]interface{}:
+	case map[string]any:
 		return r.resolveMap(ctx, v)
-	case []interface{}:
+	case []any:
 		return r.resolveArray(ctx, v)
 	default:
 		return value, nil
@@ -77,7 +77,7 @@ func (r *ExpressionResolver) resolveValue(ctx context.Context, value interface{}
 }
 
 // resolveString resolves expressions in string values
-func (r *ExpressionResolver) resolveString(ctx context.Context, str string) (interface{}, error) {
+func (r *ExpressionResolver) resolveString(ctx context.Context, str string) (any, error) {
 	// Handle ${{ steps.step-name.outputs.field }} expressions
 	if strings.Contains(str, "${{ steps.") {
 		return r.resolveStepsExpression(ctx, str)
@@ -102,8 +102,8 @@ func (r *ExpressionResolver) resolveString(ctx context.Context, str string) (int
 }
 
 // resolveMap resolves expressions in map values
-func (r *ExpressionResolver) resolveMap(ctx context.Context, m map[string]interface{}) (map[string]interface{}, error) {
-	resolved := make(map[string]interface{})
+func (r *ExpressionResolver) resolveMap(ctx context.Context, m map[string]any) (map[string]any, error) {
+	resolved := make(map[string]any)
 
 	for key, value := range m {
 		resolvedValue, err := r.resolveValue(ctx, value)
@@ -117,8 +117,8 @@ func (r *ExpressionResolver) resolveMap(ctx context.Context, m map[string]interf
 }
 
 // resolveArray resolves expressions in array values
-func (r *ExpressionResolver) resolveArray(ctx context.Context, arr []interface{}) ([]interface{}, error) {
-	resolved := make([]interface{}, len(arr))
+func (r *ExpressionResolver) resolveArray(ctx context.Context, arr []any) ([]any, error) {
+	resolved := make([]any, len(arr))
 
 	for i, value := range arr {
 		resolvedValue, err := r.resolveValue(ctx, value)
@@ -132,7 +132,7 @@ func (r *ExpressionResolver) resolveArray(ctx context.Context, arr []interface{}
 }
 
 // resolveStepsExpression resolves ${{ steps.step-name.outputs.field }} expressions
-func (r *ExpressionResolver) resolveStepsExpression(ctx context.Context, expression string) (interface{}, error) {
+func (r *ExpressionResolver) resolveStepsExpression(ctx context.Context, expression string) (any, error) {
 	// Parse expression: ${{ steps.extract-data.outputs.data }}
 	re := regexp.MustCompile(`\$\{\{\s*steps\.([^.]+)\.outputs\.([^}\s]+)\s*\}\}`)
 	matches := re.FindStringSubmatch(expression)
@@ -163,7 +163,7 @@ func (r *ExpressionResolver) resolveStepsExpression(ctx context.Context, express
 			}
 
 			// Parse output JSON
-			var output map[string]interface{}
+			var output map[string]any
 			if err := json.Unmarshal(stepRun.Status.Output.Raw, &output); err != nil {
 				return nil, fmt.Errorf("failed to parse output from step %s: %w", stepID, err)
 			}
@@ -181,7 +181,7 @@ func (r *ExpressionResolver) resolveStepsExpression(ctx context.Context, express
 }
 
 // resolveInputsExpression resolves ${{ inputs.field }} expressions
-func (r *ExpressionResolver) resolveInputsExpression(ctx context.Context, expression string) (interface{}, error) {
+func (r *ExpressionResolver) resolveInputsExpression(ctx context.Context, expression string) (any, error) {
 	// Parse expression: ${{ inputs.user_data }}
 	re := regexp.MustCompile(`\$\{\{\s*inputs\.([^}\s]+)\s*\}\}`)
 	matches := re.FindStringSubmatch(expression)
@@ -208,7 +208,7 @@ func (r *ExpressionResolver) resolveInputsExpression(ctx context.Context, expres
 	}
 
 	// Parse inputs JSON
-	var inputs map[string]interface{}
+	var inputs map[string]any
 	if err := json.Unmarshal(storyRun.Spec.Inputs.Raw, &inputs); err != nil {
 		return nil, fmt.Errorf("failed to parse StoryRun inputs: %w", err)
 	}
@@ -222,7 +222,7 @@ func (r *ExpressionResolver) resolveInputsExpression(ctx context.Context, expres
 }
 
 // resolveSecretsExpression resolves ${{ secrets.secret-name }} or ${{ secrets.secret-name.key }} expressions
-func (r *ExpressionResolver) resolveSecretsExpression(ctx context.Context, expression string) (interface{}, error) {
+func (r *ExpressionResolver) resolveSecretsExpression(ctx context.Context, expression string) (any, error) {
 	// Parse expression: ${{ secrets.api-key }} or ${{ secrets.database-creds.PASSWORD }}
 	re := regexp.MustCompile(`\$\{\{\s*secrets\.([^.}\s]+)(?:\.([^}\s]+))?\s*\}\}`)
 	matches := re.FindStringSubmatch(expression)

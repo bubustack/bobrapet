@@ -30,6 +30,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
+const strTrue = "true"
+
 // OperatorConfig holds the configuration for the operator
 type OperatorConfig struct {
 	Controller ControllerConfig `json:"controller,omitempty"`
@@ -78,9 +80,9 @@ type OperatorConfigManager struct {
 }
 
 // NewOperatorConfigManager creates a new configuration manager
-func NewOperatorConfigManager(client client.Client, namespace, configMapName string) *OperatorConfigManager {
+func NewOperatorConfigManager(k8sClient client.Client, namespace, configMapName string) *OperatorConfigManager {
 	manager := &OperatorConfigManager{
-		client:        client,
+		client:        k8sClient,
 		namespace:     namespace,
 		configMapName: configMapName,
 		defaultConfig: DefaultOperatorConfig(),
@@ -114,9 +116,7 @@ func (m *OperatorConfigManager) loadAndParseConfigMap(ctx context.Context) (*Ope
 	}
 
 	config := &OperatorConfig{}
-	if err := m.parseConfigMap(configMap, config); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal operator config: %w", err)
-	}
+	m.parseConfigMap(configMap, config)
 
 	return config, nil
 }
@@ -124,12 +124,12 @@ func (m *OperatorConfigManager) loadAndParseConfigMap(ctx context.Context) (*Ope
 // Start runs the configuration synchronization loop.
 // It implements the controller-runtime manager.Runnable interface.
 func (m *OperatorConfigManager) Start(ctx context.Context) error {
-	log := log.FromContext(ctx).WithName("config-manager")
-	log.Info("Starting operator config synchronizer")
+	logger := log.FromContext(ctx).WithName("config-manager")
+	logger.Info("Starting operator config synchronizer")
 
 	// Immediately try to sync on startup
 	if err := m.sync(ctx); err != nil {
-		log.Error(err, "Initial configuration sync failed")
+		logger.Error(err, "Initial configuration sync failed")
 		// Depending on strictness, we might want to return the error
 		// and prevent the manager from starting if the config is critical.
 	}
@@ -140,11 +140,11 @@ func (m *OperatorConfigManager) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("Stopping operator config synchronizer")
+			logger.Info("Stopping operator config synchronizer")
 			return nil
 		case <-ticker.C:
 			if err := m.sync(ctx); err != nil {
-				log.Error(err, "Failed to sync operator configuration")
+				logger.Error(err, "Failed to sync operator configuration")
 			}
 		}
 	}
@@ -152,7 +152,7 @@ func (m *OperatorConfigManager) Start(ctx context.Context) error {
 
 // sync performs a single configuration synchronization.
 func (m *OperatorConfigManager) sync(ctx context.Context) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	newConfig, err := m.loadAndParseConfigMap(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to load operator configuration: %w", err)
@@ -162,13 +162,29 @@ func (m *OperatorConfigManager) sync(ctx context.Context) error {
 	defer m.mu.Unlock()
 	m.currentConfig = newConfig
 	m.lastSyncTime = time.Now()
-	log.Info("Successfully synced operator configuration")
+	logger.Info("Successfully synced operator configuration")
 	return nil
 }
 
 // parseConfigMap parses a ConfigMap into OperatorConfig
-func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *OperatorConfig) error {
-	// Controller Configuration
+func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *OperatorConfig) {
+	parseControllerTimings(cm, config)
+	parseImageConfig(cm, config)
+	parseResourceLimits(cm, config)
+	parseRetryAndTimeouts(cm, config)
+	parseLoopConfig(cm, config)
+	parseSecurityConfig(cm, config)
+	parseJobConfig(cm, config)
+	parseCELConfig(cm, config)
+	parseTelemetryConfig(cm, config)
+	parseDebugConfig(cm, config)
+	parseEngramDefaults(cm, config)
+	parseStoryRunConfig(cm, config)
+}
+
+// --- helpers below keep parseConfigMap readable and reduce cyclomatic complexity ---
+
+func parseControllerTimings(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.max-concurrent-reconciles"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxConcurrentReconciles = parsed
@@ -204,8 +220,9 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 			config.Controller.DefaultEngramGRPCPort = parsed
 		}
 	}
+}
 
-	// Image Configuration
+func parseImageConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["images.default-engram"]; exists {
 		config.Controller.DefaultEngramImage = val
 	}
@@ -214,16 +231,17 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 	}
 	if val, exists := cm.Data["images.pull-policy"]; exists {
 		switch val {
-		case "Always":
+		case string(corev1.PullAlways):
 			config.Controller.ImagePullPolicy = corev1.PullAlways
-		case "Never":
+		case string(corev1.PullNever):
 			config.Controller.ImagePullPolicy = corev1.PullNever
-		case "IfNotPresent":
+		case string(corev1.PullIfNotPresent):
 			config.Controller.ImagePullPolicy = corev1.PullIfNotPresent
 		}
 	}
+}
 
-	// Resource Limits
+func parseResourceLimits(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["resources.engram.cpu-request"]; exists {
 		config.Controller.EngramCPURequest = val
 	}
@@ -236,8 +254,9 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 	if val, exists := cm.Data["resources.engram.memory-limit"]; exists {
 		config.Controller.EngramMemoryLimit = val
 	}
+}
 
-	// Retry and Timeout Configuration
+func parseRetryAndTimeouts(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["retry.max-retries"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
 			config.Controller.MaxRetries = parsed
@@ -273,8 +292,9 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 			config.Controller.ConditionalTimeout = parsed
 		}
 	}
+}
 
-	// Loop Processing Configuration
+func parseLoopConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["loop.max-iterations"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxLoopIterations = parsed
@@ -300,28 +320,30 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 			config.Controller.MaxConcurrencyLimit = parsed
 		}
 	}
+}
 
-	// Security Configuration
+func parseSecurityConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
+
 	if val, exists := cm.Data["security.run-as-non-root"]; exists {
-		config.Controller.RunAsNonRoot = val == "true"
+		config.Controller.RunAsNonRoot = val == strTrue
 	}
 	if val, exists := cm.Data["security.read-only-root-filesystem"]; exists {
-		config.Controller.ReadOnlyRootFilesystem = val == "true"
+		config.Controller.ReadOnlyRootFilesystem = val == strTrue
 	}
 	if val, exists := cm.Data["security.allow-privilege-escalation"]; exists {
-		config.Controller.AllowPrivilegeEscalation = val == "true"
+		config.Controller.AllowPrivilegeEscalation = val == strTrue
 	}
 	if val, exists := cm.Data["security.run-as-user"]; exists {
 		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil {
 			config.Controller.RunAsUser = parsed
 		}
 	}
-
 	if val, exists := cm.Data["security.automount-service-account-token"]; exists {
-		config.Controller.AutomountServiceAccountToken = val == "true"
+		config.Controller.AutomountServiceAccountToken = val == strTrue
 	}
+}
 
-	// Job Configuration
+func parseJobConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["job.backoff-limit"]; exists {
 		if parsed, err := strconv.ParseInt(val, 10, 32); err == nil {
 			config.Controller.JobBackoffLimit = int32(parsed)
@@ -332,8 +354,9 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 			config.Controller.TTLSecondsAfterFinished = int32(parsed)
 		}
 	}
+}
 
-	// CEL Configuration
+func parseCELConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["cel.evaluation-timeout"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.CELEvaluationTimeout = parsed
@@ -345,41 +368,43 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 		}
 	}
 	if val, exists := cm.Data["cel.enable-macros"]; exists {
-		config.Controller.CELEnableMacros = val == "true"
+		config.Controller.CELEnableMacros = val == strTrue
 	}
+}
 
-	// Telemetry Configuration
+func parseTelemetryConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["telemetry.enabled"]; exists {
-		config.Controller.TelemetryEnabled = val == "true"
+		config.Controller.TelemetryEnabled = val == strTrue
 	}
 	if val, exists := cm.Data["telemetry.trace-propagation"]; exists {
-		config.Controller.TracePropagationEnabled = val == "true"
+		config.Controller.TracePropagationEnabled = val == strTrue
 	}
+}
 
-	// Development/Debug Configuration
+func parseDebugConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["debug.enable-verbose-logging"]; exists {
-		config.Controller.EnableVerboseLogging = val == "true"
+		config.Controller.EnableVerboseLogging = val == strTrue
 	}
 	if val, exists := cm.Data["debug.enable-step-output-logging"]; exists {
-		config.Controller.EnableStepOutputLogging = val == "true"
+		config.Controller.EnableStepOutputLogging = val == strTrue
 	}
 	if val, exists := cm.Data["debug.enable-metrics"]; exists {
-		config.Controller.EnableMetrics = val == "true"
+		config.Controller.EnableMetrics = val == strTrue
 	}
+}
 
-	// Engram default inline size (bytes)
+func parseEngramDefaults(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["engram.default-max-inline-size"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.Engram.EngramControllerConfig.DefaultMaxInlineSize = parsed
 		}
 	}
+}
 
-	// StoryRun Configuration
+func parseStoryRunConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["storyrun.max-inline-inputs-size"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.StoryRun.MaxInlineInputsSize = parsed
 		}
 	}
-
-	return nil
 }

@@ -48,9 +48,9 @@ type ImpulseTemplateReconciler struct {
 	config.ControllerDependencies
 }
 
-//+kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates/finalizers,verbs=update
+// +kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates/finalizers,verbs=update
 
 // Reconcile validates and manages ImpulseTemplate lifecycle
 func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -64,7 +64,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}()
 
 	var template catalogv1alpha1.ImpulseTemplate
-	if err := r.ControllerDependencies.Client.Get(ctx, req.NamespacedName, &template); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &template); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -76,7 +76,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if template.Spec.Image == "" {
 		r.updateErrorStatus(&template, "image is required")
 		rl.ReconcileError(fmt.Errorf("image missing"), "Image is required for ImpulseTemplate")
-		if err := r.updateStatusWithRetry(ctx, &template, 3); err != nil {
+		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
 		return ctrl.Result{}, nil
@@ -85,7 +85,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if template.Spec.Version == "" {
 		r.updateErrorStatus(&template, "version is required")
 		rl.ReconcileError(fmt.Errorf("version missing"), "Version is required for ImpulseTemplate")
-		if err := r.updateStatusWithRetry(ctx, &template, 3); err != nil {
+		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
 		return ctrl.Result{}, nil
@@ -99,7 +99,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if !slices.Contains(validImpulseModes, mode) {
 			r.updateErrorStatus(&template, fmt.Sprintf("invalid supported mode '%s' for impulse template (must be deployment or statefulset)", mode))
 			rl.ReconcileError(fmt.Errorf("invalid supported mode: %s", mode), "Invalid supported mode for ImpulseTemplate")
-			if err := r.updateStatusWithRetry(ctx, &template, 3); err != nil {
+			if err := r.updateStatusWithRetry(ctx, &template); err != nil {
 				return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 			}
 			return ctrl.Result{}, nil
@@ -112,7 +112,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.validateJSONSchema(template.Spec.ContextSchema.Raw); err != nil {
 			r.updateErrorStatus(&template, fmt.Sprintf("invalid context schema: %v", err))
 			rl.ReconcileError(err, "Invalid context schema")
-			if updateErr := r.updateStatusWithRetry(ctx, &template, 3); updateErr != nil {
+			if updateErr := r.updateStatusWithRetry(ctx, &template); updateErr != nil {
 				templateLogger.Error(updateErr, "failed to update status after schema validation error")
 			}
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -124,7 +124,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.validateJSONSchema(template.Spec.ConfigSchema.Raw); err != nil {
 			r.updateErrorStatus(&template, fmt.Sprintf("invalid config schema: %v", err))
 			rl.ReconcileError(err, "Invalid config schema")
-			if updateErr := r.updateStatusWithRetry(ctx, &template, 3); updateErr != nil {
+			if updateErr := r.updateStatusWithRetry(ctx, &template); updateErr != nil {
 				templateLogger.Error(updateErr, "failed to update status after schema validation error")
 			}
 			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -144,7 +144,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		template.Status.UsageCount = int32(len(impulses.Items))
 	}
 
-	if err := r.updateStatusWithRetry(ctx, &template, 3); err != nil {
+	if err := r.updateStatusWithRetry(ctx, &template); err != nil {
 		rl.ReconcileError(err, "Failed to update ImpulseTemplate status")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}
@@ -165,7 +165,7 @@ func (r *ImpulseTemplateReconciler) validateJSONSchema(schemaBytes []byte) error
 	}
 
 	// Basic JSON validation
-	var schema interface{}
+	var schema any
 	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
@@ -191,12 +191,12 @@ func (r *ImpulseTemplateReconciler) updateReadyStatus(template *catalogv1alpha1.
 // remove custom setCondition helper; ConditionManager is used for consistency
 
 // updateStatusWithRetry performs status update with retry logic
-func (r *ImpulseTemplateReconciler) updateStatusWithRetry(ctx context.Context, template *catalogv1alpha1.ImpulseTemplate, maxRetries int) error {
+func (r *ImpulseTemplateReconciler) updateStatusWithRetry(ctx context.Context, template *catalogv1alpha1.ImpulseTemplate) error {
 	var lastErr error
-	for i := 0; i < maxRetries; i++ {
-		if err := r.ControllerDependencies.Client.Status().Update(ctx, template); err != nil {
+	for i := 0; i < 3; i++ {
+		if err := r.Status().Update(ctx, template); err != nil {
 			lastErr = err
-			if i < maxRetries-1 {
+			if i < 2 {
 				// Use a timer that respects context cancellation
 				sleepDuration := time.Duration(100*(1<<uint(i))) * time.Millisecond
 				select {
@@ -210,7 +210,7 @@ func (r *ImpulseTemplateReconciler) updateStatusWithRetry(ctx context.Context, t
 		}
 		return nil
 	}
-	return fmt.Errorf("failed to update ImpulseTemplate status after %d retries: %w", maxRetries, lastErr)
+	return fmt.Errorf("failed to update ImpulseTemplate status after %d retries: %w", 3, lastErr)
 }
 
 // SetupWithManager sets up the controller with the Manager.

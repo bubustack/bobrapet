@@ -24,6 +24,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
+const (
+	resultSuccess = "success"
+	resultError   = "error"
+)
+
 var (
 	// StoryRun metrics
 	StoryRunsTotal = prometheus.NewCounterVec(
@@ -299,9 +304,9 @@ func RecordStepRunDuration(namespace, storyRunRef, stepName, phase string, durat
 
 // RecordControllerReconcile records controller reconcile metrics
 func RecordControllerReconcile(controller string, duration time.Duration, err error) {
-	result := "success"
+	result := resultSuccess
 	if err != nil {
-		result = "error"
+		result = resultError
 		ControllerReconcileErrors.WithLabelValues(controller, classifyError(err)).Inc()
 	}
 
@@ -311,9 +316,9 @@ func RecordControllerReconcile(controller string, duration time.Duration, err er
 
 // RecordCELEvaluation records CEL evaluation metrics
 func RecordCELEvaluation(expressionType string, duration time.Duration, err error) {
-	result := "success"
+	result := resultSuccess
 	if err != nil {
-		result = "error"
+		result = resultError
 	}
 
 	CELEvaluationTotal.WithLabelValues(expressionType, result).Inc()
@@ -327,9 +332,9 @@ func RecordCELCacheHit(cacheType string) {
 
 // RecordResourceCleanup records resource cleanup metrics
 func RecordResourceCleanup(resourceType string, duration time.Duration, err error) {
-	result := "success"
+	result := resultSuccess
 	if err != nil {
-		result = "error"
+		result = resultError
 	}
 
 	ResourceCleanupTotal.WithLabelValues(resourceType, result).Inc()
@@ -409,9 +414,9 @@ func UpdateResourceQuotaLimit(namespace, resourceType string, limit float64) {
 func RecordStorageOperation(provider, operation string, duration time.Duration, err error) {
 	// This would be implemented properly in the storage package
 	// For now, just record as a generic operation
-	result := "success"
+	result := resultSuccess
 	if err != nil {
-		result = "error"
+		result = resultError
 	}
 
 	// Use existing controller metrics as placeholder
@@ -421,9 +426,9 @@ func RecordStorageOperation(provider, operation string, duration time.Duration, 
 
 // RecordArtifactOperation records artifact management operations
 func RecordArtifactOperation(operation string, duration time.Duration, err error) {
-	result := "success"
+	result := resultSuccess
 	if err != nil {
-		result = "error"
+		result = resultError
 	}
 	// Use existing controller metrics for artifact operations
 	ControllerReconcileTotal.WithLabelValues("artifact-manager", result).Inc()
@@ -432,9 +437,9 @@ func RecordArtifactOperation(operation string, duration time.Duration, err error
 
 // RecordCleanupOperation records cleanup operations
 func RecordCleanupOperation(resourceType, namespace string, deletedCount int, duration time.Duration, err error) {
-	result := "success"
+	result := resultSuccess
 	if err != nil {
-		result = "error"
+		result = resultError
 	}
 
 	// Use existing controller metrics for cleanup operations

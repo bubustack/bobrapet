@@ -30,10 +30,10 @@ type DAGReconciler struct {
 }
 
 // NewDAGReconciler creates a new DAGReconciler.
-func NewDAGReconciler(client client.Client, cel *cel.Evaluator, stepExecutor *StepExecutor, configResolver *config.Resolver) *DAGReconciler {
+func NewDAGReconciler(k8sClient client.Client, celEval *cel.Evaluator, stepExecutor *StepExecutor, configResolver *config.Resolver) *DAGReconciler {
 	return &DAGReconciler{
-		Client:         client,
-		CEL:            cel,
+		Client:         k8sClient,
+		CEL:            celEval,
 		StepExecutor:   stepExecutor,
 		ConfigResolver: configResolver,
 	}
@@ -63,9 +63,7 @@ func (r *DAGReconciler) Reconcile(ctx context.Context, srun *runsv1alpha1.StoryR
 	}
 	for i := 0; i < len(story.Spec.Steps)+1; i++ { // +1 to allow one final check after all steps are processed
 		// Sync state from synchronous sub-stories
-		if updated, err := r.checkSyncSubStories(ctx, srun, story); err != nil {
-			return ctrl.Result{}, err
-		} else if updated {
+		if updated := r.checkSyncSubStories(ctx, srun, story); updated {
 			// If a sub-story status was synced, we must re-fetch the outputs
 			// Inefficient to re-list all step runs, but acceptable for now as sub-stories are less common.
 			// A future improvement would be to only fetch the single sub-story's output and merge it in.
@@ -171,7 +169,7 @@ func (r *DAGReconciler) syncStateFromStepRuns(ctx context.Context, srun *runsv1a
 	return &stepRunList, nil
 }
 
-func (r *DAGReconciler) checkSyncSubStories(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story) (bool, error) {
+func (r *DAGReconciler) checkSyncSubStories(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story) bool {
 	log := logging.NewReconcileLogger(ctx, "storyrun-dag-substory")
 	var statusUpdated bool
 	for i := range story.Spec.Steps {
@@ -216,31 +214,25 @@ func (r *DAGReconciler) checkSyncSubStories(ctx context.Context, srun *runsv1alp
 				// Manually copy sub-story output into parent's step state.
 				// This is still risky if the sub-story output is large, but acceptable for now
 				// as it's less common than step outputs. A future enhancement should offload this.
-				if subRun.Status.Phase == enums.PhaseSucceeded && subRun.Status.Output != nil {
-					// NOTE: This does NOT write to the deprecated StepOutputs field.
-					// This output is available to subsequent steps via the on-demand resolver.
-				}
+				// Note: sub-story outputs are not propagated to StoryRun to avoid large status payloads.
+				// They are resolved on-demand by downstream evaluators using the sub-StoryRun object.
 			}
 		}
 	}
-	return statusUpdated, nil
+	return statusUpdated
 }
 
-func (r *DAGReconciler) findAndLaunchReadySteps(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, completedSteps, runningSteps map[string]bool, priorStepOutputs map[string]interface{}) ([]*bubuv1alpha1.Step, []*bubuv1alpha1.Step, error) {
+func (r *DAGReconciler) findAndLaunchReadySteps(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, completedSteps, runningSteps map[string]bool, priorStepOutputs map[string]any) ([]*bubuv1alpha1.Step, []*bubuv1alpha1.Step, error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun-dag-launcher")
 	dependencies, _ := buildDependencyGraphs(story.Spec.Steps)
 	storyRunInputs, _ := getStoryRunInputs(srun)
 
-	vars := map[string]interface{}{
+	vars := map[string]any{
 		"inputs": storyRunInputs,
 		"steps":  priorStepOutputs,
 	}
 
-	readySteps, skippedSteps, err := r.findReadySteps(ctx, story.Spec.Steps, completedSteps, runningSteps, dependencies, vars)
-	if err != nil {
-		log.Error(err, "Failed to find ready steps")
-		return nil, nil, err
-	}
+	readySteps, skippedSteps := r.findReadySteps(ctx, story.Spec.Steps, completedSteps, runningSteps, dependencies, vars)
 
 	// Handle skipped steps by updating their status.
 	for _, step := range skippedSteps {
@@ -265,9 +257,9 @@ func (r *DAGReconciler) findAndLaunchReadySteps(ctx context.Context, srun *runsv
 
 // getPriorStepOutputs fetches the outputs of all previously completed steps in the same StoryRun.
 // It serves as the single source of truth for step outputs within the DAG reconciler.
-func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha1.StoryRun, stepRunList *runsv1alpha1.StepRunList) (map[string]interface{}, error) {
+func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha1.StoryRun, stepRunList *runsv1alpha1.StepRunList) (map[string]any, error) {
 	log := logging.NewReconcileLogger(ctx, "dag-output-resolver")
-	outputs := make(map[string]interface{})
+	outputs := make(map[string]any)
 
 	// The StoryRun's status.stepOutputs field is deprecated and no longer used.
 	// Instead, we always resolve outputs by listing the child StepRun objects,
@@ -289,12 +281,12 @@ func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha
 		}
 
 		if sr.Status.Phase == enums.PhaseSucceeded && sr.Status.Output != nil {
-			var outputData map[string]interface{}
+			var outputData map[string]any
 			if err := json.Unmarshal(sr.Status.Output.Raw, &outputData); err != nil {
 				log.Error(err, "Failed to unmarshal output from prior StepRun during fallback", "step", sr.Spec.StepID)
 				continue
 			}
-			outputs[sr.Spec.StepID] = map[string]interface{}{"outputs": outputData}
+			outputs[sr.Spec.StepID] = map[string]any{"outputs": outputData}
 		}
 	}
 
@@ -313,12 +305,12 @@ func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha
 			}
 
 			if subRun.Status.Output != nil {
-				var outputData map[string]interface{}
+				var outputData map[string]any
 				if err := json.Unmarshal(subRun.Status.Output.Raw, &outputData); err != nil {
 					log.Error(err, "Failed to unmarshal output from sub-StoryRun", "step", stepID)
 					continue
 				}
-				outputs[stepID] = map[string]interface{}{"outputs": outputData}
+				outputs[stepID] = map[string]any{"outputs": outputData}
 			}
 		}
 	}
@@ -334,7 +326,7 @@ func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha
 	return outputs, nil
 }
 
-func (r *DAGReconciler) findReadySteps(ctx context.Context, steps []bubuv1alpha1.Step, completed, running map[string]bool, dependencies map[string]map[string]bool, vars map[string]interface{}) ([]*bubuv1alpha1.Step, []*bubuv1alpha1.Step, error) {
+func (r *DAGReconciler) findReadySteps(ctx context.Context, steps []bubuv1alpha1.Step, completed, running map[string]bool, dependencies map[string]map[string]bool, vars map[string]any) ([]*bubuv1alpha1.Step, []*bubuv1alpha1.Step) {
 	var ready, skipped []*bubuv1alpha1.Step
 
 	for i := range steps {
@@ -370,7 +362,7 @@ func (r *DAGReconciler) findReadySteps(ctx context.Context, steps []bubuv1alpha1
 			ready = append(ready, step)
 		}
 	}
-	return ready, skipped, nil
+	return ready, skipped
 }
 
 // finalizeSuccessfulRun evaluates the Story's output template and sets the final status.
@@ -393,12 +385,12 @@ func (r *DAGReconciler) finalizeSuccessfulRun(ctx context.Context, srun *runsv1a
 		return fmt.Errorf("failed to get prior step outputs for output evaluation: %w", err)
 	}
 
-	vars := map[string]interface{}{
+	vars := map[string]any{
 		"inputs": storyRunInputs,
 		"steps":  priorStepOutputs,
 	}
 
-	var outputTemplate map[string]interface{}
+	var outputTemplate map[string]any
 	if err := json.Unmarshal(story.Spec.Output.Raw, &outputTemplate); err != nil {
 		return fmt.Errorf("failed to unmarshal story output template: %w", err)
 	}
@@ -531,11 +523,11 @@ func buildStateMaps(states map[string]runsv1alpha1.StepState) (completed, runnin
 	return
 }
 
-func getStoryRunInputs(srun *runsv1alpha1.StoryRun) (map[string]interface{}, error) {
+func getStoryRunInputs(srun *runsv1alpha1.StoryRun) (map[string]any, error) {
 	if srun.Spec.Inputs == nil {
-		return make(map[string]interface{}), nil
+		return make(map[string]any), nil
 	}
-	var inputs map[string]interface{}
+	var inputs map[string]any
 	if err := json.Unmarshal(srun.Spec.Inputs.Raw, &inputs); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal storyrun inputs: %w", err)
 	}

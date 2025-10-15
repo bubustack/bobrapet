@@ -56,15 +56,15 @@ type StoryRunReconciler struct {
 	Recorder      record.EventRecorder
 }
 
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/finalizers,verbs=update
-//+kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;get;watch;list
-//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=create;get;watch;list
-//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create;get;watch;list
-//+kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch
-//+kubebuilder:rbac:groups=bubustack.io,resources=stories,verbs=get;list;watch
-//+kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;get;watch;list
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=create;get;watch;list
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create;get;watch;list
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=bubustack.io,resources=stories,verbs=get;list;watch
+// +kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch
 
 func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", req.NamespacedName)
@@ -74,7 +74,7 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}()
 
 	// Bound reconcile duration
-	timeout := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -82,7 +82,7 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}
 
 	var srun runsv1alpha1.StoryRun
-	if err := r.ControllerDependencies.Client.Get(ctx, req.NamespacedName, &srun); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &srun); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -137,7 +137,7 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 			if r.Recorder != nil {
 				r.Recorder.Event(&srun, "Warning", conditions.ReasonStoryNotFound, fmt.Sprintf("Waiting for Story '%s'", srun.Spec.StoryRef.ToNamespacedName(&srun).String()))
 			}
-			statusErr := patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, &srun, func(obj client.Object) {
+			statusErr := patch.RetryableStatusPatch(ctx, r.Client, &srun, func(obj client.Object) {
 				sr := obj.(*runsv1alpha1.StoryRun)
 				if sr.Status.Phase == "" {
 					sr.Status.Phase = enums.PhasePending
@@ -164,7 +164,7 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	}
 
 	if story.Spec.Pattern == enums.StreamingPattern {
-		if _, err := r.reconcileStreamingStoryRun(ctx, &srun, story); err != nil {
+		if err := r.reconcileStreamingStoryRun(ctx, &srun, story); err != nil {
 			if ctx.Err() == context.DeadlineExceeded {
 				log.Info("Reconciliation timed out, returning error to trigger failure rate limiter")
 				return ctrl.Result{}, fmt.Errorf("reconcile timed out: %w", ctx.Err())
@@ -191,7 +191,7 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	return r.dagReconciler.Reconcile(ctx, &srun, story)
 }
 
-func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story) (ctrl.Result, error) {
+func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story) error {
 	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", srun.Name)
 
 	if story.Spec.StreamingStrategy == enums.StreamingStrategyPerStoryRun {
@@ -206,11 +206,11 @@ func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, sru
 			// Get the original engram definition
 			originalEngram := &bubushv1alpha1.Engram{}
 			originalEngramKey := step.Ref.ToNamespacedName(story)
-			if err := r.ControllerDependencies.Client.Get(ctx, originalEngramKey, originalEngram); err != nil {
+			if err := r.Get(ctx, originalEngramKey, originalEngram); err != nil {
 				if errors.IsNotFound(err) {
-					return ctrl.Result{}, fmt.Errorf("step '%s' references engram '%s' which does not exist", step.Name, originalEngram.Name)
+					return fmt.Errorf("step '%s' references engram '%s' which does not exist", step.Name, originalEngram.Name)
 				}
-				return ctrl.Result{}, fmt.Errorf("failed to get engram for step '%s': %w", step.Name, err)
+				return fmt.Errorf("failed to get engram for step '%s': %w", step.Name, err)
 			}
 
 			// Create or update the run-specific engram
@@ -221,7 +221,7 @@ func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, sru
 				},
 			}
 
-			op, err := controllerutil.CreateOrUpdate(ctx, r.ControllerDependencies.Client, runEngram, func() error {
+			op, err := controllerutil.CreateOrUpdate(ctx, r.Client, runEngram, func() error {
 				// Copy the spec from the original engram
 				runEngram.Spec = *originalEngram.Spec.DeepCopy()
 				// Ensure the mode is a long-running one
@@ -230,12 +230,12 @@ func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, sru
 					runEngram.Spec.Mode = enums.WorkloadModeDeployment
 				}
 				// Set the StoryRun as the owner
-				return controllerutil.SetControllerReference(srun, runEngram, r.ControllerDependencies.Scheme)
+				return controllerutil.SetControllerReference(srun, runEngram, r.Scheme)
 			})
 
 			if err != nil {
 				log.Error(err, "Failed to create or update run-specific Engram", "step", step.Name)
-				return ctrl.Result{}, err
+				return err
 			}
 			if op != controllerutil.OperationResultNone {
 				log.Info("Reconciled run-specific engram", "engram", runEngram.Name, "operation", op)
@@ -247,11 +247,11 @@ func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, sru
 	// We can now mark the StoryRun as running.
 	if srun.Status.Phase == enums.PhasePending {
 		if err := r.setStoryRunPhase(ctx, srun, enums.PhaseRunning, "Streaming StoryRun is active"); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1alpha1.StoryRun) (ctrl.Result, error) {
@@ -260,7 +260,7 @@ func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1al
 
 	// List all StepRuns for this StoryRun
 	var stepRunList runsv1alpha1.StepRunList
-	if err := r.ControllerDependencies.Client.List(ctx, &stepRunList, client.InNamespace(srun.Namespace), client.MatchingLabels{"bubustack.io/storyrun": srun.Name}); err != nil {
+	if err := r.List(ctx, &stepRunList, client.InNamespace(srun.Namespace), client.MatchingLabels{"bubustack.io/storyrun": srun.Name}); err != nil {
 		log.Error(err, "Failed to list StepRuns for cleanup")
 		return ctrl.Result{}, err
 	}
@@ -280,11 +280,11 @@ func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1al
 	// Once all children are gone, remove the finalizer.
 	if len(stepRunList.Items) == 0 {
 		if controllerutil.ContainsFinalizer(srun, StoryRunFinalizer) {
-			patch := client.MergeFrom(srun.DeepCopy())
+			mergePatch := client.MergeFrom(srun.DeepCopy())
 			controllerutil.RemoveFinalizer(srun, StoryRunFinalizer)
 			// Use Patch for atomicity, avoiding race conditions with other updaters.
 			// This is safer than Update for modifying metadata like finalizers.
-			if err := r.Patch(ctx, srun, patch); err != nil {
+			if err := r.Patch(ctx, srun, mergePatch); err != nil {
 				log.Error(err, "Failed to remove finalizer")
 				return ctrl.Result{}, err
 			}
@@ -301,14 +301,14 @@ func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1al
 func (r *StoryRunReconciler) getStoryForRun(ctx context.Context, srun *runsv1alpha1.StoryRun) (*bubushv1alpha1.Story, error) {
 	var story bubushv1alpha1.Story
 	key := srun.Spec.StoryRef.ToNamespacedName(srun)
-	if err := r.ControllerDependencies.Client.Get(ctx, key, &story); err != nil {
+	if err := r.Get(ctx, key, &story); err != nil {
 		return nil, err
 	}
 	return &story, nil
 }
 
 func (r *StoryRunReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1alpha1.StoryRun, phase enums.Phase, message string) error {
-	return patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, srun, func(obj client.Object) {
+	return patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
 		sr := obj.(*runsv1alpha1.StoryRun)
 		sr.Status.Phase = phase
 		sr.Status.Message = message
@@ -352,8 +352,8 @@ func (r *StoryRunReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1a
 // SetupWithManager sets up the controller with the Manager.
 func (r *StoryRunReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
 	r.rbacManager = NewRBACManager(mgr.GetClient(), mgr.GetScheme())
-	stepExecutor := NewStepExecutor(mgr.GetClient(), mgr.GetScheme(), &r.ControllerDependencies.CELEvaluator)
-	r.dagReconciler = NewDAGReconciler(mgr.GetClient(), &r.ControllerDependencies.CELEvaluator, stepExecutor, r.ControllerDependencies.ConfigResolver)
+	stepExecutor := NewStepExecutor(mgr.GetClient(), mgr.GetScheme(), &r.CELEvaluator)
+	r.dagReconciler = NewDAGReconciler(mgr.GetClient(), &r.CELEvaluator, stepExecutor, r.ConfigResolver)
 	r.Recorder = mgr.GetEventRecorderFor("storyrun-controller")
 
 	return ctrl.NewControllerManagedBy(mgr).

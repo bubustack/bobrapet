@@ -42,9 +42,9 @@ type EngramTemplateReconciler struct {
 	config.ControllerDependencies
 }
 
-//+kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates/finalizers,verbs=update
+// +kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates/finalizers,verbs=update
 
 // Reconcile validates and manages EngramTemplate lifecycle
 func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -157,7 +157,7 @@ func (r *EngramTemplateReconciler) validateJSONSchema(schemaBytes []byte) error 
 	}
 
 	// Basic JSON validation
-	var schema interface{}
+	var schema any
 	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}

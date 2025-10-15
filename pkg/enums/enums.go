@@ -29,7 +29,7 @@ package enums
 // Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
 //
 // Some resources may also support Paused for manual intervention scenarios.
-//
+// nolint:lll
 // +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Canceled;Compensated;Paused;Blocked;Scheduling;Timeout;Aborted
 type Phase string
 
@@ -125,7 +125,7 @@ const (
 // StepType defines the type of step in a story workflow.
 // BubuStack provides built-in primitives for common workflow patterns,
 // reducing the need for custom code in many scenarios.
-//
+// nolint:lll
 // +kubebuilder:validation:Enum=condition;loop;parallel;sleep;stop;switch;filter;transform;wait;throttle;batch;executeStory;setData;mergeData;gate
 type StepType string
 

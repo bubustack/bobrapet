@@ -24,8 +24,8 @@ type RBACManager struct {
 }
 
 // NewRBACManager creates a new RBACManager.
-func NewRBACManager(client client.Client, scheme *runtime.Scheme) *RBACManager {
-	return &RBACManager{Client: client, Scheme: scheme}
+func NewRBACManager(k8sClient client.Client, scheme *runtime.Scheme) *RBACManager {
+	return &RBACManager{Client: k8sClient, Scheme: scheme}
 }
 
 // Reconcile ensures the necessary ServiceAccount, Role, and RoleBinding exist for the StoryRun.
@@ -88,7 +88,7 @@ func (r *RBACManager) Reconcile(ctx context.Context, storyRun *runsv1alpha1.Stor
 	if err := controllerutil.SetOwnerReference(storyRun, role, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference on Role: %w", err)
 	}
-	if err := r.Client.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create Role: %w", err)
 	} else if err == nil {
 		log.Info("Created Role for Engram runner", "role", role.Name)
@@ -115,7 +115,7 @@ func (r *RBACManager) Reconcile(ctx context.Context, storyRun *runsv1alpha1.Stor
 	if err := controllerutil.SetOwnerReference(storyRun, rb, r.Scheme); err != nil {
 		return fmt.Errorf("failed to set owner reference on RoleBinding: %w", err)
 	}
-	if err := r.Client.Create(ctx, rb); err != nil && !errors.IsAlreadyExists(err) {
+	if err := r.Create(ctx, rb); err != nil && !errors.IsAlreadyExists(err) {
 		return fmt.Errorf("failed to create RoleBinding: %w", err)
 	} else if err == nil {
 		log.Info("Created RoleBinding for Engram runner", "roleBinding", rb.Name)
@@ -132,7 +132,7 @@ func (r *RBACManager) getStoryForRun(ctx context.Context, srun *runsv1alpha1.Sto
 		Name:      srun.Spec.StoryRef.Name,
 		Namespace: srun.Spec.StoryRef.ToNamespacedName(srun).Namespace,
 	}
-	if err := r.Client.Get(ctx, key, &story); err != nil {
+	if err := r.Get(ctx, key, &story); err != nil {
 		return nil, err
 	}
 	return &story, nil

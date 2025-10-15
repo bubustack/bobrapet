@@ -27,12 +27,12 @@ type StepExecutor struct {
 }
 
 // NewStepExecutor creates a new StepExecutor.
-func NewStepExecutor(client client.Client, scheme *runtime.Scheme, cel *cel.Evaluator) *StepExecutor {
-	return &StepExecutor{Client: client, Scheme: scheme, CEL: cel}
+func NewStepExecutor(k8sClient client.Client, scheme *runtime.Scheme, celEval *cel.Evaluator) *StepExecutor {
+	return &StepExecutor{Client: k8sClient, Scheme: scheme, CEL: celEval}
 }
 
 // Execute determines the step type and calls the appropriate execution method.
-func (e *StepExecutor) Execute(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]interface{}) error {
+func (e *StepExecutor) Execute(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]any) error {
 	// An Engram step is defined by the presence of the 'ref' field.
 	if step.Ref != nil {
 		return e.executeEngramStep(ctx, srun, story, step)
@@ -62,7 +62,7 @@ func (e *StepExecutor) Execute(ctx context.Context, srun *runsv1alpha1.StoryRun,
 func (e *StepExecutor) executeEngramStep(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step) error {
 	stepName := fmt.Sprintf("%s-%s", srun.Name, step.Name)
 	var stepRun runsv1alpha1.StepRun
-	err := e.Client.Get(ctx, types.NamespacedName{Name: stepName, Namespace: srun.Namespace}, &stepRun)
+	err := e.Get(ctx, types.NamespacedName{Name: stepName, Namespace: srun.Namespace}, &stepRun)
 
 	if err != nil && errors.IsNotFound(err) {
 		if step.Ref == nil {
@@ -71,7 +71,7 @@ func (e *StepExecutor) executeEngramStep(ctx context.Context, srun *runsv1alpha1
 
 		// Get the engram to merge the 'with' blocks
 		var engram bubuv1alpha1.Engram
-		if err := e.Client.Get(ctx, step.Ref.ToNamespacedName(srun), &engram); err != nil {
+		if err := e.Get(ctx, step.Ref.ToNamespacedName(srun), &engram); err != nil {
 			return fmt.Errorf("failed to get engram '%s' for step '%s': %w", step.Ref.Name, step.Name, err)
 		}
 
@@ -101,12 +101,12 @@ func (e *StepExecutor) executeEngramStep(ctx context.Context, srun *runsv1alpha1
 		if err := controllerutil.SetControllerReference(srun, &stepRun, e.Scheme); err != nil {
 			return err
 		}
-		return e.Client.Create(ctx, &stepRun)
+		return e.Create(ctx, &stepRun)
 	}
 	return err // Return other errors or nil if found
 }
 
-func (e *StepExecutor) executeLoopStep(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]interface{}) error {
+func (e *StepExecutor) executeLoopStep(ctx context.Context, srun *runsv1alpha1.StoryRun, _ *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]any) error {
 	type loopWith struct {
 		Items    json.RawMessage   `json:"items"`
 		Template bubuv1alpha1.Step `json:"template"`
@@ -116,17 +116,17 @@ func (e *StepExecutor) executeLoopStep(ctx context.Context, srun *runsv1alpha1.S
 		return fmt.Errorf("failed to parse 'with' for loop step '%s': %w", step.Name, err)
 	}
 
-	var itemsMap interface{}
+	var itemsMap any
 	if err := json.Unmarshal(config.Items, &itemsMap); err != nil {
 		// fallback to string
 		var str string
 		if err := json.Unmarshal(config.Items, &str); err != nil {
 			return fmt.Errorf("failed to parse 'items' for loop step '%s': %w", step.Name, err)
 		}
-		itemsMap = map[string]interface{}{"value": str}
+		itemsMap = map[string]any{"value": str}
 	}
 
-	resolvedItemsRaw, err := e.CEL.ResolveWithInputs(ctx, itemsMap.(map[string]interface{}), vars)
+	resolvedItemsRaw, err := e.CEL.ResolveWithInputs(ctx, itemsMap.(map[string]any), vars)
 	if err != nil {
 		return fmt.Errorf("failed to resolve 'items' for loop step '%s': %w", step.Name, err)
 	}
@@ -141,26 +141,26 @@ func (e *StepExecutor) executeLoopStep(ctx context.Context, srun *runsv1alpha1.S
 		return fmt.Errorf("loop step '%s' exceeds maximum of %d iterations", step.Name, maxIterations)
 	}
 
-	var childStepRunNames []string
+	childStepRunNames := make([]string, 0, len(resolvedItems))
 	for i, item := range resolvedItems {
 		childStepName := fmt.Sprintf("%s-%s-%d", srun.Name, step.Name, i)
 		childStepRunNames = append(childStepRunNames, childStepName)
 
-		loopVars := map[string]interface{}{
+		loopVars := map[string]any{
 			"inputs": vars["inputs"],
 			"steps":  vars["steps"],
 			"item":   item,
 			"index":  i,
 		}
 
-		var withMap interface{}
+		var withMap any
 		if config.Template.With != nil {
 			if err := json.Unmarshal(config.Template.With.Raw, &withMap); err != nil {
 				return fmt.Errorf("failed to parse 'with' for loop template in step '%s': %w", step.Name, err)
 			}
 		}
 
-		resolvedWith, err := e.CEL.ResolveWithInputs(ctx, withMap.(map[string]interface{}), loopVars)
+		resolvedWith, err := e.CEL.ResolveWithInputs(ctx, withMap.(map[string]any), loopVars)
 		if err != nil {
 			return fmt.Errorf("failed to resolve 'with' for loop iteration %d in step '%s': %w", i, step.Name, err)
 		}
@@ -182,7 +182,7 @@ func (e *StepExecutor) executeLoopStep(ctx context.Context, srun *runsv1alpha1.S
 		if err := controllerutil.SetControllerReference(srun, stepRun, e.Scheme); err != nil {
 			return err
 		}
-		if err := e.Client.Create(ctx, stepRun); err != nil && !errors.IsAlreadyExists(err) {
+		if err := e.Create(ctx, stepRun); err != nil && !errors.IsAlreadyExists(err) {
 			return err
 		}
 	}
@@ -195,7 +195,7 @@ func (e *StepExecutor) executeLoopStep(ctx context.Context, srun *runsv1alpha1.S
 	return nil
 }
 
-func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]interface{}) error {
+func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alpha1.StoryRun, _ *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]any) error {
 	type parallelWith struct {
 		Steps []bubuv1alpha1.Step `json:"steps"`
 	}
@@ -204,19 +204,19 @@ func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alph
 		return fmt.Errorf("failed to parse 'with' for parallel step '%s': %w", step.Name, err)
 	}
 
-	var childStepRunNames []string
+	childStepRunNames := make([]string, 0, len(config.Steps))
 	for _, childStep := range config.Steps {
 		childStepName := fmt.Sprintf("%s-%s-%s", srun.Name, step.Name, childStep.Name)
 		childStepRunNames = append(childStepRunNames, childStepName)
 
-		var withMap interface{}
+		var withMap any
 		if childStep.With != nil {
 			if err := json.Unmarshal(childStep.With.Raw, &withMap); err != nil {
 				return fmt.Errorf("failed to parse 'with' for parallel branch '%s' in step '%s': %w", childStep.Name, step.Name, err)
 			}
 		}
 
-		resolvedWith, err := e.CEL.ResolveWithInputs(ctx, withMap.(map[string]interface{}), vars)
+		resolvedWith, err := e.CEL.ResolveWithInputs(ctx, withMap.(map[string]any), vars)
 		if err != nil {
 			return fmt.Errorf("failed to resolve 'with' for parallel branch '%s' in step '%s': %w", childStep.Name, step.Name, err)
 		}
@@ -238,7 +238,7 @@ func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alph
 		if err := controllerutil.SetControllerReference(srun, stepRun, e.Scheme); err != nil {
 			return err
 		}
-		if err := e.Client.Create(ctx, stepRun); err != nil && !errors.IsAlreadyExists(err) {
+		if err := e.Create(ctx, stepRun); err != nil && !errors.IsAlreadyExists(err) {
 			return err
 		}
 	}
@@ -298,7 +298,7 @@ func (e *StepExecutor) executeStoryStep(ctx context.Context, srun *runsv1alpha1.
 	}
 
 	var story bubuv1alpha1.Story
-	if err := e.Client.Get(ctx, with.StoryRef.ToNamespacedName(srun), &story); err != nil {
+	if err := e.Get(ctx, with.StoryRef.ToNamespacedName(srun), &story); err != nil {
 		return fmt.Errorf("failed to get story '%s' for story step '%s': %w", with.StoryRef.Name, step.Name, err)
 	}
 
@@ -317,7 +317,7 @@ func (e *StepExecutor) mergeWithBlocks(engramWith, stepWith *runtime.RawExtensio
 		return engramWith, nil
 	}
 
-	var engramMap, stepMap map[string]interface{}
+	var engramMap, stepMap map[string]any
 	if err := json.Unmarshal(engramWith.Raw, &engramMap); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal engram 'with' block: %w", err)
 	}
@@ -337,18 +337,18 @@ func (e *StepExecutor) mergeWithBlocks(engramWith, stepWith *runtime.RawExtensio
 	return &runtime.RawExtension{Raw: mergedBytes}, nil
 }
 
-func coerceToList(input interface{}) ([]interface{}, error) {
+func coerceToList(input any) ([]any, error) {
 	switch v := input.(type) {
-	case []interface{}:
+	case []any:
 		return v, nil
 	case []string:
-		var list []interface{}
+		var list []any
 		for _, item := range v {
 			list = append(list, item)
 		}
 		return list, nil
 	case string:
-		return []interface{}{v}, nil
+		return []any{v}, nil
 	default:
 		return nil, fmt.Errorf("input '%v' is not a list or string", input)
 	}

@@ -64,7 +64,7 @@ func (r *EngramReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 	}()
 
 	// Bound reconcile duration to avoid hanging on slow/unresponsive API calls
-	timeout := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -127,7 +127,7 @@ func (r *EngramReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Op
 	mapTemplateToEngrams := func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var engrams bubushv1alpha1.EngramList
 		// List all engrams in all namespaces that might reference this cluster-scoped template.
-		if err := r.Client.List(ctx, &engrams, client.MatchingFields{"spec.templateRef.name": obj.GetName()}); err != nil {
+		if err := r.List(ctx, &engrams, client.MatchingFields{"spec.templateRef.name": obj.GetName()}); err != nil {
 			// In case of error, log it but don't panic the controller.
 			// An empty list will be returned, and reconciliation will depend on engram updates.
 			log := logging.NewControllerLogger(ctx, "engram-mapper")

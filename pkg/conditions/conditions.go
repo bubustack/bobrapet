@@ -112,7 +112,13 @@ func (cm *ConditionManager) UpdateGeneration(generation int64) {
 }
 
 // SetCondition sets a condition on the conditions slice
-func (cm *ConditionManager) SetCondition(conditions *[]metav1.Condition, conditionType string, status metav1.ConditionStatus, reason, message string) {
+func (cm *ConditionManager) SetCondition(
+	conditions *[]metav1.Condition,
+	conditionType string,
+	status metav1.ConditionStatus,
+	reason,
+	message string,
+) {
 	now := metav1.Now()
 	condition := metav1.Condition{
 		Type:               conditionType,
@@ -136,7 +142,12 @@ func (cm *ConditionManager) SetReadyCondition(conditions *[]metav1.Condition, re
 }
 
 // SetProgressingCondition sets the Progressing condition
-func (cm *ConditionManager) SetProgressingCondition(conditions *[]metav1.Condition, progressing bool, reason, message string) {
+func (cm *ConditionManager) SetProgressingCondition(
+	conditions *[]metav1.Condition,
+	progressing bool,
+	reason,
+	message string,
+) {
 	status := metav1.ConditionFalse
 	if progressing {
 		status = metav1.ConditionTrue
@@ -145,7 +156,12 @@ func (cm *ConditionManager) SetProgressingCondition(conditions *[]metav1.Conditi
 }
 
 // SetDegradedCondition sets the Degraded condition
-func (cm *ConditionManager) SetDegradedCondition(conditions *[]metav1.Condition, degraded bool, reason, message string) {
+func (cm *ConditionManager) SetDegradedCondition(
+	conditions *[]metav1.Condition,
+	degraded bool,
+	reason,
+	message string,
+) {
 	status := metav1.ConditionFalse
 	if degraded {
 		status = metav1.ConditionTrue
@@ -154,7 +170,12 @@ func (cm *ConditionManager) SetDegradedCondition(conditions *[]metav1.Condition,
 }
 
 // SetTerminatingCondition sets the Terminating condition
-func (cm *ConditionManager) SetTerminatingCondition(conditions *[]metav1.Condition, terminating bool, reason, message string) {
+func (cm *ConditionManager) SetTerminatingCondition(
+	conditions *[]metav1.Condition,
+	terminating bool,
+	reason,
+	message string,
+) {
 	status := metav1.ConditionFalse
 	if terminating {
 		status = metav1.ConditionTrue
@@ -224,7 +245,12 @@ func (cm *ConditionManager) setConditionInternal(conditions *[]metav1.Condition,
 }
 
 // TransitionConditions handles standard resource state transitions
-func (cm *ConditionManager) TransitionConditions(conditions *[]metav1.Condition, targetState string, reason, message string) {
+func (cm *ConditionManager) TransitionConditions(
+	conditions *[]metav1.Condition,
+	targetState string,
+	reason,
+	message string,
+) {
 	switch targetState {
 	case "Ready":
 		cm.SetReadyCondition(conditions, true, reason, message)
@@ -253,7 +279,9 @@ func (cm *ConditionManager) TransitionConditions(conditions *[]metav1.Condition,
 }
 
 // SetLargeDataDelegatedCondition sets the LargeDataDelegated condition
-func (cm *ConditionManager) SetLargeDataDelegatedCondition(conditions *[]metav1.Condition, delegated bool, reason, message string) {
+func (cm *ConditionManager) SetLargeDataDelegatedCondition(
+	conditions *[]metav1.Condition, delegated bool, reason, message string,
+) {
 	status := metav1.ConditionFalse
 	if delegated {
 		status = metav1.ConditionTrue

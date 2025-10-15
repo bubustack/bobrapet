@@ -34,14 +34,14 @@ import (
 // maybeConfigureTLSEnvAndMounts attempts to mount a TLS secret and set SDK TLS env vars.
 // If the named secret exists, it mounts it to /var/run/tls and sets server/client envs.
 // containerIndex selects which container to mutate (0 = engram container).
-func (r *RealtimeEngramReconciler) maybeConfigureTLSEnvAndMounts(ctx context.Context, namespace, secretName string, podSpec *corev1.PodTemplateSpec, containerIndex int) bool {
+func (r *RealtimeEngramReconciler) maybeConfigureTLSEnvAndMounts(ctx context.Context, namespace, secretName string, podSpec *corev1.PodTemplateSpec, containerIndex int) error {
 	if podSpec == nil || len(podSpec.Spec.Containers) <= containerIndex {
-		return false
+		return fmt.Errorf("podSpec is nil or container index is out of range")
 	}
 	// Probe secret existence
 	var sec corev1.Secret
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretName}, &sec); err != nil {
-		return false
+		return err
 	}
 	// Add volume if not present
 	volumeName := "engram-tls"
@@ -86,7 +86,8 @@ func (r *RealtimeEngramReconciler) maybeConfigureTLSEnvAndMounts(ctx context.Con
 		corev1.EnvVar{Name: "BUBU_GRPC_CLIENT_KEY_FILE", Value: mountPath + "/tls.key"},
 		corev1.EnvVar{Name: "BUBU_GRPC_REQUIRE_TLS", Value: "true"},
 	)
-	return true
+
+	return nil
 }
 
 // getTLSSecretName reads TLS secret name from annotations in priority order:
@@ -116,12 +117,12 @@ type RealtimeEngramReconciler struct {
 	config.ControllerDependencies
 }
 
-//+kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=bubustack.io,resources=engrams/finalizers,verbs=update
-//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=bubustack.io,resources=engrams/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 
 func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := logging.NewReconcileLogger(ctx, "realtime-engram").WithValues("engram", req.NamespacedName)
@@ -131,7 +132,7 @@ func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}()
 
 	// Bound reconcile duration
-	timeout := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -158,7 +159,10 @@ func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Handle deletion
 	if !engram.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &engram)
+		if err := r.reconcileDelete(ctx, &engram); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if it doesn't exist
@@ -273,7 +277,7 @@ func (r *RealtimeEngramReconciler) getEngramTemplate(ctx context.Context, engram
 	return template, nil
 }
 
-func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *v1alpha1.Engram) (ctrl.Result, error) {
+func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *v1alpha1.Engram) error {
 	log := logging.NewReconcileLogger(ctx, "realtime-engram").WithValues("engram", engram.Name)
 	log.Info("Reconciling deletion for realtime Engram")
 
@@ -283,12 +287,12 @@ func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *
 	if err == nil {
 		if err := r.Delete(ctx, deployment); err != nil && !errors.IsNotFound(err) {
 			log.Error(err, "Failed to delete owned Deployment")
-			return ctrl.Result{}, err
+			return err
 		}
 		log.Info("Deleted owned Deployment")
 	} else if !errors.IsNotFound(err) {
 		log.Error(err, "Failed to get owned Deployment for deletion")
-		return ctrl.Result{}, err
+		return err
 	}
 
 	// Delete owned StatefulSet
@@ -297,12 +301,12 @@ func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *
 	if err == nil {
 		if err := r.Delete(ctx, sts); err != nil && !errors.IsNotFound(err) {
 			log.Error(err, "Failed to delete owned StatefulSet")
-			return ctrl.Result{}, err
+			return err
 		}
 		log.Info("Deleted owned StatefulSet")
 	} else if !errors.IsNotFound(err) {
 		log.Error(err, "Failed to get owned StatefulSet for deletion")
-		return ctrl.Result{}, err
+		return err
 	}
 
 	// Delete owned Service
@@ -311,12 +315,12 @@ func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *
 	if err == nil {
 		if err := r.Delete(ctx, service); err != nil && !errors.IsNotFound(err) {
 			log.Error(err, "Failed to delete owned Service")
-			return ctrl.Result{}, err
+			return err
 		}
 		log.Info("Deleted owned Service")
 	} else if !errors.IsNotFound(err) {
 		log.Error(err, "Failed to get owned Service for deletion")
-		return ctrl.Result{}, err
+		return err
 	}
 
 	// All owned resources are deleted, remove the finalizer
@@ -324,21 +328,21 @@ func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *
 		controllerutil.RemoveFinalizer(engram, RealtimeEngramFinalizer)
 		if err := r.Update(ctx, engram); err != nil {
 			log.Error(err, "Failed to remove finalizer")
-			return ctrl.Result{}, err
+			return err
 		}
 		log.Info("Removed finalizer")
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
-func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engram *v1alpha1.Engram, execConfig *config.ResolvedExecutionConfig) error {
+func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engram *v1alpha1.Engram, execCfg *config.ResolvedExecutionConfig) error {
 	log := logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name)
 	deployment := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}, deployment)
 	if err != nil && errors.IsNotFound(err) {
 		log.Info("Creating a new Deployment", "Deployment.Namespace", engram.Namespace, "Deployment.Name", engram.Name)
-		newDep := r.deploymentForEngram(ctx, engram, execConfig)
+		newDep := r.deploymentForEngram(ctx, engram, execCfg)
 		if err := r.Create(ctx, newDep); err != nil {
 			log.Error(err, "Failed to create new Deployment")
 			return err
@@ -349,17 +353,17 @@ func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engr
 	}
 
 	// Update logic
-	desiredDep := r.deploymentForEngram(ctx, engram, execConfig)
+	desiredDep := r.deploymentForEngram(ctx, engram, execCfg)
 	if !reflect.DeepEqual(deployment.Spec.Template, desiredDep.Spec.Template) || *deployment.Spec.Replicas != *desiredDep.Spec.Replicas {
 		log.Info("Deployment spec differs, updating deployment")
 		// Retry on conflict using a fresh GET + merge to avoid clobbering cluster-managed fields
 		key := types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}
-		if err := r.Client.Get(ctx, key, deployment); err != nil {
+		if err := r.Get(ctx, key, deployment); err != nil {
 			return err
 		}
 		original := deployment.DeepCopy()
 		deployment.Spec = desiredDep.Spec
-		if err := r.Client.Patch(ctx, deployment, client.MergeFrom(original)); err != nil {
+		if err := r.Patch(ctx, deployment, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to patch Deployment")
 			return err
 		}
@@ -390,12 +394,12 @@ func (r *RealtimeEngramReconciler) reconcileStatefulSet(ctx context.Context, eng
 	if !reflect.DeepEqual(sts.Spec.Template, desired.Spec.Template) || sts.Spec.ServiceName != desired.Spec.ServiceName {
 		log.Info("StatefulSet spec differs, updating statefulset")
 		key := types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}
-		if err := r.Client.Get(ctx, key, sts); err != nil {
+		if err := r.Get(ctx, key, sts); err != nil {
 			return err
 		}
 		original := sts.DeepCopy()
 		sts.Spec = desired.Spec
-		if err := r.Client.Patch(ctx, sts, client.MergeFrom(original)); err != nil {
+		if err := r.Patch(ctx, sts, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to patch StatefulSet")
 			return err
 		}
@@ -486,7 +490,10 @@ func (r *RealtimeEngramReconciler) statefulSetForEngram(ctx context.Context, eng
 
 	// Configure TLS via user-provided secret if annotated
 	if sec := getTLSSecretName(&engram.ObjectMeta); sec != "" {
-		r.maybeConfigureTLSEnvAndMounts(ctx, engram.Namespace, sec, &podSpec, 0)
+		if err := r.maybeConfigureTLSEnvAndMounts(ctx, engram.Namespace, sec, &podSpec, 0); err != nil {
+			// Log and continue without TLS rather than returning a nil StatefulSet
+			logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Error(err, "Failed to configure TLS mounts/envs for StatefulSet")
+		}
 	}
 
 	sts := &appsv1.StatefulSet{
@@ -502,7 +509,9 @@ func (r *RealtimeEngramReconciler) statefulSetForEngram(ctx context.Context, eng
 			Template: podSpec,
 		},
 	}
-	ctrl.SetControllerReference(engram, sts, r.Scheme)
+	if err := ctrl.SetControllerReference(engram, sts, r.Scheme); err != nil {
+		logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Error(err, "failed to set controller reference on StatefulSet")
+	}
 	return sts
 }
 
@@ -528,7 +537,7 @@ func (r *RealtimeEngramReconciler) reconcileService(ctx context.Context, engram 
 	err := r.Get(ctx, types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}, service)
 	if err != nil && errors.IsNotFound(err) {
 		log.Info("Creating a new Service", "Service.Namespace", engram.Namespace, "Service.Name", engram.Name)
-		newSvc := r.serviceForEngram(engram, execConfig)
+		newSvc := r.serviceForEngram(ctx, engram, execConfig)
 		if err := r.Create(ctx, newSvc); err != nil {
 			log.Error(err, "Failed to create new Service")
 			return err
@@ -539,7 +548,7 @@ func (r *RealtimeEngramReconciler) reconcileService(ctx context.Context, engram 
 	}
 
 	// Update logic
-	desiredSvc := r.serviceForEngram(engram, execConfig)
+	desiredSvc := r.serviceForEngram(ctx, engram, execConfig)
 	// Preserve the ClusterIP
 	desiredSvc.Spec.ClusterIP = service.Spec.ClusterIP
 	// Preserve the ResourceVersion to avoid update conflicts
@@ -548,12 +557,12 @@ func (r *RealtimeEngramReconciler) reconcileService(ctx context.Context, engram 
 	if !reflect.DeepEqual(service.Spec, desiredSvc.Spec) {
 		log.Info("Service spec differs, updating service")
 		key := types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}
-		if err := r.Client.Get(ctx, key, service); err != nil {
+		if err := r.Get(ctx, key, service); err != nil {
 			return err
 		}
 		original := service.DeepCopy()
 		service.Spec = desiredSvc.Spec
-		if err := r.Client.Patch(ctx, service, client.MergeFrom(original)); err != nil {
+		if err := r.Patch(ctx, service, client.MergeFrom(original)); err != nil {
 			log.Error(err, "Failed to patch Service")
 			return err
 		}
@@ -562,7 +571,7 @@ func (r *RealtimeEngramReconciler) reconcileService(ctx context.Context, engram 
 	return nil
 }
 
-func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engram *v1alpha1.Engram, config *config.ResolvedExecutionConfig) *appsv1.Deployment {
+func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engram *v1alpha1.Engram, execCfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
 	labels := map[string]string{"app": engram.Name, "bubustack.io/engram": engram.Name}
 	replicas := int32(1)
 
@@ -584,14 +593,14 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 			Labels: labels,
 		},
 		Spec: corev1.PodSpec{
-			ServiceAccountName:            config.ServiceAccountName,
+			ServiceAccountName:            execCfg.ServiceAccountName,
 			TerminationGracePeriodSeconds: &terminationGracePeriod,
-			SecurityContext:               config.ToPodSecurityContext(),
+			SecurityContext:               execCfg.ToPodSecurityContext(),
 			Containers: []corev1.Container{{
-				Image:           config.Image,
+				Image:           execCfg.Image,
 				Name:            "engram",
-				ImagePullPolicy: config.ImagePullPolicy,
-				SecurityContext: config.ToContainerSecurityContext(),
+				ImagePullPolicy: execCfg.ImagePullPolicy,
+				SecurityContext: execCfg.ToContainerSecurityContext(),
 				Ports: []corev1.ContainerPort{{
 					ContainerPort: int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
 					Name:          "grpc",
@@ -624,15 +633,15 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 					{Name: "BUBU_GRPC_MESSAGE_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)},
 					{Name: "BUBU_GRPC_CHANNEL_SEND_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)}, // Re-use message timeout
 				}, configEnvVars...),
-				LivenessProbe:  config.LivenessProbe,
-				ReadinessProbe: config.ReadinessProbe,
-				StartupProbe:   config.StartupProbe,
+				LivenessProbe:  execCfg.LivenessProbe,
+				ReadinessProbe: execCfg.ReadinessProbe,
+				StartupProbe:   execCfg.StartupProbe,
 			}},
 		},
 	}
 
 	// Handle object storage configuration
-	if storagePolicy := config.Storage; storagePolicy != nil && storagePolicy.S3 != nil {
+	if storagePolicy := execCfg.Storage; storagePolicy != nil && storagePolicy.S3 != nil {
 		s3Config := storagePolicy.S3
 		// log with reconcile context
 		logging.NewControllerLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Info("Configuring pod for S3 object storage access", "bucket", s3Config.Bucket)
@@ -663,7 +672,9 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 
 	// Configure TLS via user-provided secret if annotated
 	if sec := getTLSSecretName(&engram.ObjectMeta); sec != "" {
-		r.maybeConfigureTLSEnvAndMounts(ctx, engram.Namespace, sec, &podSpec, 0)
+		if err := r.maybeConfigureTLSEnvAndMounts(ctx, engram.Namespace, sec, &podSpec, 0); err != nil {
+			logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Error(err, "Failed to configure TLS mounts/envs for Deployment")
+		}
 	}
 
 	dep := &appsv1.Deployment{
@@ -679,11 +690,13 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 			Template: podSpec,
 		},
 	}
-	ctrl.SetControllerReference(engram, dep, r.Scheme)
+	if err := ctrl.SetControllerReference(engram, dep, r.Scheme); err != nil {
+		logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Error(err, "failed to set controller reference on Deployment")
+	}
 	return dep
 }
 
-func (r *RealtimeEngramReconciler) serviceForEngram(engram *v1alpha1.Engram, config *config.ResolvedExecutionConfig) *corev1.Service {
+func (r *RealtimeEngramReconciler) serviceForEngram(ctx context.Context, engram *v1alpha1.Engram, _ *config.ResolvedExecutionConfig) *corev1.Service {
 	labels := map[string]string{"app": engram.Name, "bubustack.io/engram": engram.Name}
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -706,7 +719,9 @@ func (r *RealtimeEngramReconciler) serviceForEngram(engram *v1alpha1.Engram, con
 		// Optional: make endpoints available before readiness for DNS
 		svc.Spec.PublishNotReadyAddresses = true
 	}
-	ctrl.SetControllerReference(engram, svc, r.Scheme)
+	if err := ctrl.SetControllerReference(engram, svc, r.Scheme); err != nil {
+		logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Error(err, "failed to set controller reference on Service")
+	}
 	return svc
 }
 

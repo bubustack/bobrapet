@@ -464,6 +464,7 @@ spec:
                   Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
 
                   Some resources may also support Paused for manual intervention scenarios.
+                  nolint:lll
                 enum:
                 - Pending
                 - Running

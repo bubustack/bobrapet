@@ -73,14 +73,14 @@ type StoryReconciler struct {
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *StoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	startTime := time.Now()
 	defer func() {
 		metrics.RecordControllerReconcile("story", time.Since(startTime), err)
 	}()
 
 	// Bound reconcile duration
-	timeout := r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -88,21 +88,24 @@ func (r *StoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res 
 	}
 
 	var story bubuv1alpha1.Story
-	if err := r.ControllerDependencies.Client.Get(ctx, req.NamespacedName, &story); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &story); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// Handle deletion first.
-	if !story.ObjectMeta.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &story)
+	if !story.DeletionTimestamp.IsZero() {
+		if err := r.reconcileDelete(ctx, &story); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	// Add finalizer if it doesn't exist.
 	if !controllerutil.ContainsFinalizer(&story, StoryFinalizer) {
-		patch := client.MergeFrom(story.DeepCopy())
+		mergePatch := client.MergeFrom(story.DeepCopy())
 		controllerutil.AddFinalizer(&story, StoryFinalizer)
-		if err := r.Patch(ctx, &story, patch); err != nil {
-			log.Error(err, "Failed to add finalizer to Story")
+		if err := r.Patch(ctx, &story, mergePatch); err != nil {
+			logger.Error(err, "Failed to add finalizer to Story")
 			return ctrl.Result{}, err
 		}
 	}
@@ -117,7 +120,7 @@ func (r *StoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res 
 	}
 
 	// Update the status based on validation.
-	err = patch.RetryableStatusPatch(ctx, r.ControllerDependencies.Client, &story, func(obj client.Object) {
+	err = patch.RetryableStatusPatch(ctx, r.Client, &story, func(obj client.Object) {
 		s := obj.(*bubuv1alpha1.Story)
 		s.Status.StepsTotal = int32(len(s.Spec.Steps))
 		s.Status.ObservedGeneration = s.Generation
@@ -141,36 +144,39 @@ func (r *StoryReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res 
 
 	// Handle streaming pattern infrastructure for PerStory strategy
 	if story.Spec.Pattern == enums.StreamingPattern && story.Spec.StreamingStrategy == enums.StreamingStrategyPerStory {
-		return r.reconcilePerStoryStreaming(ctx, &story)
+		if err := r.reconcilePerStoryStreaming(ctx, &story); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	return ctrl.Result{}, nil
 }
 
-func (r *StoryReconciler) reconcileDelete(ctx context.Context, story *bubuv1alpha1.Story) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-	log.Info("Reconciling deletion for Story")
+func (r *StoryReconciler) reconcileDelete(ctx context.Context, story *bubuv1alpha1.Story) error {
+	logger := log.FromContext(ctx)
+	logger.Info("Reconciling deletion for Story")
 
 	if controllerutil.ContainsFinalizer(story, StoryFinalizer) {
 		// Clean up external resources associated with the Story, such as Deployments and Services.
 		if err := r.cleanupOwnedResources(ctx, story); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 
 		// Remove the finalizer from the list and update it.
-		patch := client.MergeFrom(story.DeepCopy())
+		mergePatch := client.MergeFrom(story.DeepCopy())
 		controllerutil.RemoveFinalizer(story, StoryFinalizer)
-		if err := r.Patch(ctx, story, patch); err != nil {
-			log.Error(err, "Failed to remove finalizer from Story")
-			return ctrl.Result{}, err
+		if err := r.Patch(ctx, story, mergePatch); err != nil {
+			logger.Error(err, "Failed to remove finalizer from Story")
+			return err
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *StoryReconciler) cleanupOwnedResources(ctx context.Context, story *bubuv1alpha1.Story) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 
 	// This cleanup logic is only for streaming stories with a PerStory strategy.
 	if story.Spec.Pattern != enums.StreamingPattern || story.Spec.StreamingStrategy != enums.StreamingStrategyPerStory {
@@ -188,7 +194,7 @@ func (r *StoryReconciler) cleanupOwnedResources(ctx context.Context, story *bubu
 				},
 			}
 			if err := r.Delete(ctx, deployment, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !errors.IsNotFound(err) {
-				log.Error(err, "Failed to delete Deployment for streaming step", "deployment", deploymentName)
+				logger.Error(err, "Failed to delete Deployment for streaming step", "deployment", deploymentName)
 				return err
 			}
 
@@ -201,19 +207,19 @@ func (r *StoryReconciler) cleanupOwnedResources(ctx context.Context, story *bubu
 				},
 			}
 			if err := r.Delete(ctx, service); err != nil && !errors.IsNotFound(err) {
-				log.Error(err, "Failed to delete Service for streaming step", "service", serviceName)
+				logger.Error(err, "Failed to delete Service for streaming step", "service", serviceName)
 				return err
 			}
 		}
 	}
 
-	log.Info("Successfully cleaned up owned resources")
+	logger.Info("Successfully cleaned up owned resources")
 	return nil
 }
 
-func (r *StoryReconciler) reconcilePerStoryStreaming(ctx context.Context, story *bubuv1alpha1.Story) (ctrl.Result, error) {
-	log := log.FromContext(ctx)
-	log.Info("Reconciling workloads for streaming Story with PerStory strategy")
+func (r *StoryReconciler) reconcilePerStoryStreaming(ctx context.Context, story *bubuv1alpha1.Story) error {
+	logger := log.FromContext(ctx)
+	logger.Info("Reconciling workloads for streaming Story with PerStory strategy")
 
 	for _, step := range story.Spec.Steps {
 		if step.Ref == nil {
@@ -223,46 +229,46 @@ func (r *StoryReconciler) reconcilePerStoryStreaming(ctx context.Context, story 
 		// Fetch the Engram to get its spec
 		var engram bubuv1alpha1.Engram
 		engramKey := step.Ref.ToNamespacedName(story)
-		if err := r.ControllerDependencies.Client.Get(ctx, engramKey, &engram); err != nil {
-			log.Error(err, "Failed to get Engram for streaming step", "engram", engramKey.Name)
-			return ctrl.Result{}, err // Requeue and try again
+		if err := r.Get(ctx, engramKey, &engram); err != nil {
+			logger.Error(err, "Failed to get Engram for streaming step", "engram", engramKey.Name)
+			return err // Requeue and try again
 		}
 
 		// Resolve template and execution config to build a real deployment
 		// Fetch EngramTemplate
 		template := &catalogv1alpha1.EngramTemplate{}
-		if err := r.ControllerDependencies.Client.Get(ctx, types.NamespacedName{Name: engram.Spec.TemplateRef.Name, Namespace: ""}, template); err != nil {
-			log.Error(err, "Failed to get EngramTemplate for streaming step", "engramTemplate", engram.Spec.TemplateRef.Name)
-			return ctrl.Result{}, err
+		if err := r.Get(ctx, types.NamespacedName{Name: engram.Spec.TemplateRef.Name, Namespace: ""}, template); err != nil {
+			logger.Error(err, "Failed to get EngramTemplate for streaming step", "engramTemplate", engram.Spec.TemplateRef.Name)
+			return err
 		}
-		resolved, err := r.ControllerDependencies.ConfigResolver.ResolveExecutionConfig(ctx, nil, story, &engram, template)
+		resolved, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, story, &engram, template)
 		if err != nil {
-			log.Error(err, "Failed to resolve execution config for streaming step")
-			return ctrl.Result{}, err
+			logger.Error(err, "Failed to resolve execution config for streaming step")
+			return err
 		}
 		deployment := r.deploymentForStreamingStepWithConfig(story, &step, &engram, resolved)
 		if err := r.reconcileOwnedDeployment(ctx, story, deployment); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 
 		service := r.serviceForStreamingStepWithConfig(story, &step, &engram, resolved)
 		if err := r.reconcileOwnedService(ctx, story, service); err != nil {
-			return ctrl.Result{}, err
+			return err
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (r *StoryReconciler) reconcileOwnedDeployment(ctx context.Context, owner *bubuv1alpha1.Story, desired *appsv1.Deployment) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	existing := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
 	if err != nil && errors.IsNotFound(err) {
 		if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
 			return err
 		}
-		log.Info("Creating Deployment for streaming Story step", "deployment", desired.Name)
+		logger.Info("Creating Deployment for streaming Story step", "deployment", desired.Name)
 		return r.Create(ctx, desired)
 	} else if err != nil {
 		return err
@@ -271,24 +277,24 @@ func (r *StoryReconciler) reconcileOwnedDeployment(ctx context.Context, owner *b
 	// Preserve cluster-managed fields via fresh GET + merge
 	if !reflect.DeepEqual(existing.Spec.Template, desired.Spec.Template) ||
 		(existing.Spec.Replicas != nil && desired.Spec.Replicas != nil && *existing.Spec.Replicas != *desired.Spec.Replicas) {
-		patch := client.MergeFrom(existing.DeepCopy())
+		mergePatch := client.MergeFrom(existing.DeepCopy())
 		existing.Spec.Template = desired.Spec.Template
 		existing.Spec.Replicas = desired.Spec.Replicas
-		log.Info("Patching Deployment for streaming Story step", "deployment", desired.Name)
-		return r.Patch(ctx, existing, patch)
+		logger.Info("Patching Deployment for streaming Story step", "deployment", desired.Name)
+		return r.Patch(ctx, existing, mergePatch)
 	}
 	return nil
 }
 
 func (r *StoryReconciler) reconcileOwnedService(ctx context.Context, owner *bubuv1alpha1.Story, desired *corev1.Service) error {
-	log := log.FromContext(ctx)
+	logger := log.FromContext(ctx)
 	existing := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
 	if err != nil && errors.IsNotFound(err) {
 		if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
 			return err
 		}
-		log.Info("Creating Service for streaming Story step", "service", desired.Name)
+		logger.Info("Creating Service for streaming Story step", "service", desired.Name)
 		return r.Create(ctx, desired)
 	} else if err != nil {
 		return err
@@ -299,13 +305,13 @@ func (r *StoryReconciler) reconcileOwnedService(ctx context.Context, owner *bubu
 	original := existing.DeepCopy()
 	needsPatch := false
 
-	if !reflect.DeepEqual(existing.ObjectMeta.Labels, desired.ObjectMeta.Labels) {
-		existing.ObjectMeta.Labels = desired.ObjectMeta.Labels
+	if !reflect.DeepEqual(existing.Labels, desired.Labels) {
+		existing.Labels = desired.Labels
 		needsPatch = true
 	}
 
-	if !reflect.DeepEqual(existing.ObjectMeta.Annotations, desired.ObjectMeta.Annotations) {
-		existing.ObjectMeta.Annotations = desired.ObjectMeta.Annotations
+	if !reflect.DeepEqual(existing.Annotations, desired.Annotations) {
+		existing.Annotations = desired.Annotations
 		needsPatch = true
 	}
 
@@ -320,14 +326,14 @@ func (r *StoryReconciler) reconcileOwnedService(ctx context.Context, owner *bubu
 	}
 
 	if needsPatch {
-		log.Info("Patching Service for streaming Story step", "service", desired.Name)
+		logger.Info("Patching Service for streaming Story step", "service", desired.Name)
 		return r.Patch(ctx, existing, client.MergeFrom(original))
 	}
 
 	return nil
 }
 
-func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, engram *bubuv1alpha1.Engram, cfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
+func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, _ *bubuv1alpha1.Engram, cfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
 	name := fmt.Sprintf("%s-%s", story.Name, step.Name)
 	labels := map[string]string{
 		"app.kubernetes.io/name":       "bobrapet-streaming-engram",
@@ -358,7 +364,7 @@ func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alph
 						StartupProbe:    cfg.StartupProbe,
 						Ports: []corev1.ContainerPort{{
 							Name:          "grpc",
-							ContainerPort: int32(r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
+							ContainerPort: int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
 						}},
 						Env: []corev1.EnvVar{{Name: "BUBU_EXECUTION_MODE", Value: "streaming"}},
 					}},
@@ -368,7 +374,7 @@ func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alph
 	}
 }
 
-func (r *StoryReconciler) serviceForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, engram *bubuv1alpha1.Engram, cfg *config.ResolvedExecutionConfig) *corev1.Service {
+func (r *StoryReconciler) serviceForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, _ *bubuv1alpha1.Engram, _ *config.ResolvedExecutionConfig) *corev1.Service {
 	name := fmt.Sprintf("%s-%s", story.Name, step.Name)
 	labels := map[string]string{
 		"bubustack.io/story": story.Name,
@@ -383,7 +389,7 @@ func (r *StoryReconciler) serviceForStreamingStepWithConfig(story *bubuv1alpha1.
 			Selector: labels,
 			Ports: []corev1.ServicePort{{
 				Protocol:   corev1.ProtocolTCP,
-				Port:       int32(r.ControllerDependencies.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
+				Port:       int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
 				TargetPort: intstr.FromString("grpc"),
 			}},
 		},
@@ -395,7 +401,7 @@ func (r *StoryReconciler) validateEngramReferences(ctx context.Context, story *b
 		if step.Ref != nil { // This is an Engram step.
 			var engram bubuv1alpha1.Engram
 			key := step.Ref.ToNamespacedName(story)
-			if err := r.ControllerDependencies.Client.Get(ctx, key, &engram); err != nil {
+			if err := r.Get(ctx, key, &engram); err != nil {
 				if errors.IsNotFound(err) {
 					return fmt.Errorf("step '%s' references engram '%s' which does not exist in namespace '%s'", step.Name, key.Name, key.Namespace)
 				}
@@ -419,7 +425,7 @@ func (r *StoryReconciler) validateEngramReferences(ctx context.Context, story *b
 			}
 			var subStory bubuv1alpha1.Story
 			key := with.StoryRef.ToNamespacedName(story)
-			if err := r.ControllerDependencies.Client.Get(ctx, key, &subStory); err != nil {
+			if err := r.Get(ctx, key, &subStory); err != nil {
 				if errors.IsNotFound(err) {
 					return fmt.Errorf("step '%s' references story '%s' which does not exist in namespace '%s'", step.Name, key.Name, key.Namespace)
 				}
@@ -441,7 +447,7 @@ func (r *StoryReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Opt
 	r.Recorder = mgr.GetEventRecorderFor("story-controller")
 	mapEngramToStories := func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var stories bubuv1alpha1.StoryList
-		if err := r.Client.List(ctx, &stories, client.InNamespace(obj.GetNamespace()), client.MatchingFields{"spec.steps.ref.name": obj.GetName()}); err != nil {
+		if err := r.List(ctx, &stories, client.InNamespace(obj.GetNamespace()), client.MatchingFields{"spec.steps.ref.name": obj.GetName()}); err != nil {
 			return nil
 		}
 		reqs := make([]reconcile.Request, 0, len(stories.Items))

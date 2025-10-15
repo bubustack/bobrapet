@@ -194,7 +194,11 @@ func main() {
 	managerCtx := ctrl.SetupSignalHandler()
 	setup.SetupIndexers(managerCtx, mgr)
 
-	operatorConfigManager := config.NewOperatorConfigManager(mgr.GetClient(), "bobrapet-system", "bobrapet-operator-config")
+	operatorConfigManager := config.NewOperatorConfigManager(
+		mgr.GetClient(),
+		"bobrapet-system",
+		"bobrapet-operator-config",
+	)
 	setupLog.Info("Operator configuration manager initialized")
 	if err := mgr.Add(operatorConfigManager); err != nil {
 		setupLog.Error(err, "unable to add operator config manager to manager")

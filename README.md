@@ -2,9 +2,12 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/bubustack/bobrapet.svg)](https://pkg.go.dev/github.com/bubustack/bobrapet)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bubustack/bobrapet)](https://goreportcard.com/report/github.com/bubustack/bobrapet)
 
-Bobrapet is a powerful, cloud-native workflow engine for orchestrating complex AI and data processing pipelines on Kubernetes. It leverages the declarative power of Custom Resource Definitions (CRDs) to let you define, manage, and execute multi-step, event-driven workflows with unparalleled flexibility and control.
+Bobrapet is a powerful, cloud-native workflow engine for orchestrating complex AI and data processing pipelines on Kubernetes. It leverages the declarative power of Custom Resource Definitions (CRDs) to let you define, manage, and execute multi-step, event-driven workflows with flexibility and control.
 
-For full product docs, visit: https://bubustack.io/docs/
+Quick links:
+- Operator docs: https://bubustack.io/docs/bobrapet
+- Quickstart: https://bubustack.io/docs/bobrapet/guides/quickstart
+- CRD reference: https://bubustack.io/docs/bobrapet/reference/crds
 
 ## 🌟 Key Features
 
@@ -19,14 +22,8 @@ For full product docs, visit: https://bubustack.io/docs/
 
 ## 🏗️ Architecture
 
-The `bobrapet` operator is engineered for robustness and maintainability, following best practices for Kubernetes controller design. The core `StoryRun` controller, for example, is built on a modular, sub-reconciler pattern:
-
-- **Main Controller**: Acts as a lean, high-level orchestrator.
-- **RBAC Manager**: Manages all RBAC-related resources (`ServiceAccount`, `Role`, `RoleBinding`).
-- **DAG Reconciler**: Contains the entire workflow state machine, handling state synchronization, dependency analysis, and scheduling.
-- **Step Executor**: Manages the specific logic for launching different types of steps (`engram`, `executeStory`, etc.).
-
-This clean separation of concerns makes the operator highly scalable, testable, and easy to extend.
+High-level architecture, patterns, and controller internals are documented on the website:
+- Overview and architecture: https://bubustack.io/docs/bobrapet/explanations/architecture
 
 ## 📚 Core Concepts
 
@@ -39,32 +36,8 @@ This clean separation of concerns makes the operator highly scalable, testable, 
 
 ## 🧰 Workflow Primitives
 
-Beyond running custom `Engrams`, `Story` resources can use a rich set of built-in primitives for advanced control flow:
-
-- **`loop`**: Iterate over a list and expand a template step per item.
-  - `with.items`: CEL‑resolvable data (evaluated with `inputs`, `steps` contexts)
-  - `with.template`: a single `Step` to instantiate per item
-  - Limits: max 100 iterations; creates child `StepRun`s and records them under `status.primitiveChildren[step]`; marks the loop step Running ("Loop expanded").
-
-- **`parallel`**: Run multiple steps concurrently.
-  - `with.steps[]`: array of `Step` entries; each branch’s `with` is CEL‑resolved with `inputs` and `steps`
-  - Creates sibling `StepRun`s; marks the parallel step Running ("Parallel block expanded").
-
-- **`stop`**: Terminate the workflow early.
-  - `with.phase`: one of `Succeeded|Failed|Canceled` (defaults to `Succeeded`)
-  - `with.message`: optional human message
-  - Sets `StoryRun.status.phase/message` and returns.
-
-- **`executeStory`**: Run another `Story` as a sub‑workflow.
-  - `with.storyRef`: `{ name, namespace? }`
-  - Current status: placeholder; marks step Succeeded with a message.
-
-- **`condition`, `switch`, `setData`, `transform`, `filter`, `mergeData`**:
-  - Batch path: controller marks these primitives Succeeded with outputs available (no pod launch).
-  - Evidence: batch primitive completion (internal/controller/runs/step_executor.go:49-51)
-  - Streaming path: `transform` is evaluated in the Hub (CEL over payload/inputs) and forwarded downstream.
-
-- API declares additional types (`wait`, `throttle`, `batch`, `gate`) for future use.
+See the guides for primitives, batch vs. streaming, impulses, and storage configuration:
+- Guides: https://bubustack.io/docs/bobrapet/guides
 
 ## 🚀 Quick Start
 
@@ -129,13 +102,9 @@ kubectl get stepruns -l bubustack.io/storyrun=summarize-k8s-docs
 
 ## Environment variables (operator-injected; consumed by SDK)
 
-- Identity: `BUBU_STORY_NAME`, `BUBU_STORYRUN_ID`, `BUBU_STEP_NAME`, `BUBU_STEPRUN_NAME`, `BUBU_STEPRUN_NAMESPACE`, `BUBU_STARTED_AT`
-- Inputs/Config: `BUBU_INPUTS`, `BUBU_CONFIG`, `BUBU_EXECUTION_MODE`
-- Storage: `BUBU_MAX_INLINE_SIZE`, `BUBU_STORAGE_PROVIDER`, `BUBU_STORAGE_TIMEOUT`, `BUBU_STORAGE_S3_BUCKET`, `BUBU_STORAGE_S3_REGION`, `BUBU_STORAGE_S3_ENDPOINT`
-- gRPC (server/client): `BUBU_GRPC_PORT`, `BUBU_GRPC_MAX_RECV_BYTES`, `BUBU_GRPC_MAX_SEND_BYTES`, `BUBU_GRPC_CLIENT_MAX_RECV_BYTES`, `BUBU_GRPC_CLIENT_MAX_SEND_BYTES`, `BUBU_GRPC_MESSAGE_TIMEOUT`, `BUBU_GRPC_CHANNEL_SEND_TIMEOUT`, `BUBU_GRPC_RECONNECT_BASE_BACKOFF`, `BUBU_GRPC_RECONNECT_MAX_BACKOFF`, `BUBU_GRPC_RECONNECT_MAX_RETRIES`
-- TLS (optional): `BUBU_GRPC_TLS_CERT_FILE`, `BUBU_GRPC_TLS_KEY_FILE`, `BUBU_GRPC_CA_FILE`, `BUBU_GRPC_CLIENT_TLS`, `BUBU_GRPC_CLIENT_CERT_FILE`, `BUBU_GRPC_CLIENT_KEY_FILE`, `BUBU_GRPC_REQUIRE_TLS`
-
-See detailed tables in `bubustack.io/docs/reference`.
+For complete environment variable listings and defaults, see the operator configuration and transport reference:
+- Operator config: https://bubustack.io/docs/bobrapet/reference/config
+- gRPC transport: https://bubustack.io/docs/bobrapet/reference/grpc
 
 ## 🛠️ Local Development
 

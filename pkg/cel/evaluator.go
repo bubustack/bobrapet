@@ -59,7 +59,7 @@ func (e *Evaluator) Close() {
 }
 
 // EvaluateWhenCondition evaluates a step's `when` condition.
-func (e *Evaluator) EvaluateWhenCondition(ctx context.Context, when string, vars map[string]interface{}) (bool, error) {
+func (e *Evaluator) EvaluateWhenCondition(ctx context.Context, when string, vars map[string]any) (bool, error) {
 	if strings.TrimSpace(when) == "" {
 		return true, nil
 	}
@@ -83,12 +83,16 @@ func (e *Evaluator) EvaluateWhenCondition(ctx context.Context, when string, vars
 }
 
 // ResolveWithInputs resolves the `with` block for a step.
-func (e *Evaluator) ResolveWithInputs(ctx context.Context, with map[string]interface{}, vars map[string]interface{}) (map[string]interface{}, error) {
+func (e *Evaluator) ResolveWithInputs(
+	ctx context.Context,
+	with map[string]any,
+	vars map[string]any,
+) (map[string]any, error) {
 	if with == nil {
 		return nil, nil
 	}
 
-	resolved := make(map[string]interface{})
+	resolved := make(map[string]any)
 	for key, val := range with {
 		strVal, ok := val.(string)
 		if !ok {

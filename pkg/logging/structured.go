@@ -110,18 +110,18 @@ func (cl *ControllerLogger) WithError(err error) *ControllerLogger {
 }
 
 // WithValues adds custom key-value pairs to the logger
-func (cl *ControllerLogger) WithValues(keysAndValues ...interface{}) *ControllerLogger {
+func (cl *ControllerLogger) WithValues(keysAndValues ...any) *ControllerLogger {
 	logger := cl.logger.WithValues(keysAndValues...)
 	return &ControllerLogger{logger: logger}
 }
 
 // Info logs an info message
-func (cl *ControllerLogger) Info(msg string, keysAndValues ...interface{}) {
+func (cl *ControllerLogger) Info(msg string, keysAndValues ...any) {
 	cl.logger.Info(msg, keysAndValues...)
 }
 
 // Error logs an error message
-func (cl *ControllerLogger) Error(err error, msg string, keysAndValues ...interface{}) {
+func (cl *ControllerLogger) Error(err error, msg string, keysAndValues ...any) {
 	cl.logger.Error(err, msg, keysAndValues...)
 }
 
@@ -145,26 +145,26 @@ func NewReconcileLogger(ctx context.Context, controller string) *ReconcileLogger
 }
 
 // ReconcileStart logs the start of reconciliation
-func (rl *ReconcileLogger) ReconcileStart(msg string, keysAndValues ...interface{}) {
+func (rl *ReconcileLogger) ReconcileStart(msg string, keysAndValues ...any) {
 	rl.Info("Reconcile started: "+msg, keysAndValues...)
 }
 
 // ReconcileSuccess logs successful reconciliation
-func (rl *ReconcileLogger) ReconcileSuccess(msg string, keysAndValues ...interface{}) {
+func (rl *ReconcileLogger) ReconcileSuccess(msg string, keysAndValues ...any) {
 	duration := time.Since(rl.startTime)
 	allValues := append(keysAndValues, "duration", duration.String())
 	rl.Info("Reconcile succeeded: "+msg, allValues...)
 }
 
 // ReconcileError logs reconciliation error
-func (rl *ReconcileLogger) ReconcileError(err error, msg string, keysAndValues ...interface{}) {
+func (rl *ReconcileLogger) ReconcileError(err error, msg string, keysAndValues ...any) {
 	duration := time.Since(rl.startTime)
 	allValues := append(keysAndValues, "duration", duration.String())
 	rl.Error(err, "Reconcile failed: "+msg, allValues...)
 }
 
 // ReconcileRequeue logs reconciliation requeue
-func (rl *ReconcileLogger) ReconcileRequeue(msg string, after time.Duration, keysAndValues ...interface{}) {
+func (rl *ReconcileLogger) ReconcileRequeue(msg string, after time.Duration, keysAndValues ...any) {
 	duration := time.Since(rl.startTime)
 	allValues := append(keysAndValues, "duration", duration.String(), "requeue_after", after.String())
 	rl.Info("Reconcile requeue: "+msg, allValues...)
@@ -182,28 +182,28 @@ func NewStepLogger(ctx context.Context, steprun *runsv1alpha1.StepRun) *StepLogg
 }
 
 // StepStart logs step execution start
-func (sl *StepLogger) StepStart(msg string, keysAndValues ...interface{}) {
+func (sl *StepLogger) StepStart(msg string, keysAndValues ...any) {
 	sl.Info("Step started: "+msg, keysAndValues...)
 }
 
 // StepProgress logs step execution progress
-func (sl *StepLogger) StepProgress(msg string, keysAndValues ...interface{}) {
+func (sl *StepLogger) StepProgress(msg string, keysAndValues ...any) {
 	sl.V(1).Info("Step progress: "+msg, keysAndValues...)
 }
 
 // StepSuccess logs step execution success
-func (sl *StepLogger) StepSuccess(msg string, duration time.Duration, keysAndValues ...interface{}) {
+func (sl *StepLogger) StepSuccess(msg string, duration time.Duration, keysAndValues ...any) {
 	allValues := append(keysAndValues, "duration", duration.String())
 	sl.Info("Step succeeded: "+msg, allValues...)
 }
 
 // StepError logs step execution error
-func (sl *StepLogger) StepError(err error, msg string, keysAndValues ...interface{}) {
+func (sl *StepLogger) StepError(err error, msg string, keysAndValues ...any) {
 	sl.Error(err, "Step failed: "+msg, keysAndValues...)
 }
 
 // StepRetry logs step retry
-func (sl *StepLogger) StepRetry(attempt int, reason string, keysAndValues ...interface{}) {
+func (sl *StepLogger) StepRetry(attempt int, reason string, keysAndValues ...any) {
 	allValues := append(keysAndValues, "attempt", attempt, "reason", reason)
 	sl.Info("Step retry", allValues...)
 }
@@ -232,12 +232,27 @@ func (l *CELLogger) EvaluationStart(expression, expressionType string) {
 
 // EvaluationError logs a CEL evaluation error
 func (l *CELLogger) EvaluationError(err error, expression, expressionType string, duration time.Duration) {
-	l.log.Error(err, "CEL evaluation failed", "expression", expression, "type", expressionType, "duration", duration.String())
+	l.log.Error(
+		err,
+		"CEL evaluation failed",
+		"expression",
+		expression,
+		"type",
+		expressionType,
+		"duration",
+		duration.String(),
+	)
 }
 
 // EvaluationSuccess logs a successful CEL evaluation
-func (l *CELLogger) EvaluationSuccess(expression, expressionType string, duration time.Duration, result interface{}) {
-	l.log.V(1).Info("CEL evaluation succeeded", "expression", expression, "type", expressionType, "duration", duration.String(), "result", result)
+func (l *CELLogger) EvaluationSuccess(expression, expressionType string, duration time.Duration, result any) {
+	l.log.V(1).Info(
+		"CEL evaluation succeeded",
+		"expression", expression,
+		"type", expressionType,
+		"duration", duration.String(),
+		"result", result,
+	)
 }
 
 // CleanupLogger provides specialized logging for cleanup operations
@@ -252,19 +267,19 @@ func NewCleanupLogger(ctx context.Context, resourceType string) *CleanupLogger {
 }
 
 // CleanupStart logs cleanup start
-func (cl *CleanupLogger) CleanupStart(resourceName string, keysAndValues ...interface{}) {
+func (cl *CleanupLogger) CleanupStart(resourceName string, keysAndValues ...any) {
 	allValues := append(keysAndValues, "resource", resourceName)
 	cl.Info("Cleanup started", allValues...)
 }
 
 // CleanupSuccess logs cleanup success
-func (cl *CleanupLogger) CleanupSuccess(resourceName string, duration time.Duration, keysAndValues ...interface{}) {
+func (cl *CleanupLogger) CleanupSuccess(resourceName string, duration time.Duration, keysAndValues ...any) {
 	allValues := append(keysAndValues, "resource", resourceName, "duration", duration.String())
 	cl.Info("Cleanup succeeded", allValues...)
 }
 
 // CleanupError logs cleanup error
-func (cl *CleanupLogger) CleanupError(err error, resourceName string, keysAndValues ...interface{}) {
+func (cl *CleanupLogger) CleanupError(err error, resourceName string, keysAndValues ...any) {
 	allValues := append(keysAndValues, "resource", resourceName)
 	cl.Error(err, "Cleanup failed", allValues...)
 }

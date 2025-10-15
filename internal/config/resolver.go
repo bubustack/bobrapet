@@ -34,14 +34,14 @@ import (
 // Resolver resolves configuration with hierarchical priority
 // Priority (highest to lowest): StepRun > Story.Policy > Namespace > Controller Config
 type Resolver struct {
-	client        client.Client
+	k8sClient     client.Client
 	configManager *OperatorConfigManager
 }
 
 // NewResolver creates a new configuration resolver
-func NewResolver(client client.Client, configManager *OperatorConfigManager) *Resolver {
+func NewResolver(k8sClient client.Client, configManager *OperatorConfigManager) *Resolver {
 	return &Resolver{
-		client:        client,
+		k8sClient:     k8sClient,
 		configManager: configManager,
 	}
 }
@@ -124,7 +124,7 @@ func (cr *Resolver) ResolveExecutionConfig(ctx context.Context, step *runsv1alph
 // getOperatorDefaults initializes the configuration with values from the operator's config map.
 func (cr *Resolver) getOperatorDefaults(config *OperatorConfig) *ResolvedExecutionConfig {
 	return &ResolvedExecutionConfig{
-		ImagePullPolicy: corev1.PullPolicy(config.Controller.ImagePullPolicy),
+		ImagePullPolicy: config.Controller.ImagePullPolicy,
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse(config.Controller.DefaultCPURequest),
@@ -142,7 +142,7 @@ func (cr *Resolver) getOperatorDefaults(config *OperatorConfig) *ResolvedExecuti
 		RunAsUser:                    config.Controller.RunAsUser,
 		BackoffLimit:                 config.Controller.JobBackoffLimit,
 		TTLSecondsAfterFinished:      config.Controller.TTLSecondsAfterFinished,
-		RestartPolicy:                corev1.RestartPolicy(config.Controller.JobRestartPolicy),
+		RestartPolicy:                config.Controller.JobRestartPolicy,
 		ServiceAccountName:           config.Controller.ServiceAccountName,
 		DefaultStepTimeout:           config.Controller.DefaultStepTimeout,
 		MaxRetries:                   config.Controller.MaxRetries,
@@ -156,80 +156,96 @@ func (cr *Resolver) applyEngramTemplateConfig(template *catalogv1alpha1.EngramTe
 	if template == nil {
 		return
 	}
+	cr.applyTemplateImage(template, config)
+	exec := template.Spec.Execution
+	if exec == nil {
+		return
+	}
+	cr.applyTemplateImagePullPolicy(exec, config)
+	cr.applyTemplateResources(exec, config)
+	cr.applyTemplateSecurity(exec, config)
+	cr.applyTemplateJob(exec, config)
+	cr.applyTemplateTimeoutRetry(exec, config)
+	cr.applyTemplateProbes(exec, config)
+	cr.applyTemplateService(exec, config)
+}
 
-	// Image from template spec directly
+func (cr *Resolver) applyTemplateImage(template *catalogv1alpha1.EngramTemplate, config *ResolvedExecutionConfig) {
 	if template.Spec.Image != "" {
 		config.Image = template.Spec.Image
 	}
+}
 
-	if template.Spec.Execution == nil {
-		return
-	}
-	exec := template.Spec.Execution
-
-	// Image
+func (cr *Resolver) applyTemplateImagePullPolicy(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
 	if exec.Images != nil && exec.Images.PullPolicy != nil {
 		switch *exec.Images.PullPolicy {
-		case "Always":
+		case string(corev1.PullAlways):
 			config.ImagePullPolicy = corev1.PullAlways
-		case "Never":
+		case string(corev1.PullNever):
 			config.ImagePullPolicy = corev1.PullNever
-		case "IfNotPresent":
+		case string(corev1.PullIfNotPresent):
 			config.ImagePullPolicy = corev1.PullIfNotPresent
 		}
 	}
+}
 
-	// Resources
-	if exec.Resources != nil {
-		if exec.Resources.RecommendedCPURequest != nil {
-			config.Resources.Requests[corev1.ResourceCPU] = resource.MustParse(*exec.Resources.RecommendedCPURequest)
-		}
-		if exec.Resources.RecommendedCPULimit != nil {
-			config.Resources.Limits[corev1.ResourceCPU] = resource.MustParse(*exec.Resources.RecommendedCPULimit)
-		}
-		if exec.Resources.RecommendedMemoryRequest != nil {
-			config.Resources.Requests[corev1.ResourceMemory] = resource.MustParse(*exec.Resources.RecommendedMemoryRequest)
-		}
-		if exec.Resources.RecommendedMemoryLimit != nil {
-			config.Resources.Limits[corev1.ResourceMemory] = resource.MustParse(*exec.Resources.RecommendedMemoryLimit)
+func (cr *Resolver) applyTemplateResources(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
+	if exec.Resources == nil {
+		return
+	}
+	if exec.Resources.RecommendedCPURequest != nil {
+		config.Resources.Requests[corev1.ResourceCPU] = resource.MustParse(*exec.Resources.RecommendedCPURequest)
+	}
+	if exec.Resources.RecommendedCPULimit != nil {
+		config.Resources.Limits[corev1.ResourceCPU] = resource.MustParse(*exec.Resources.RecommendedCPULimit)
+	}
+	if exec.Resources.RecommendedMemoryRequest != nil {
+		config.Resources.Requests[corev1.ResourceMemory] = resource.MustParse(*exec.Resources.RecommendedMemoryRequest)
+	}
+	if exec.Resources.RecommendedMemoryLimit != nil {
+		config.Resources.Limits[corev1.ResourceMemory] = resource.MustParse(*exec.Resources.RecommendedMemoryLimit)
+	}
+}
+
+func (cr *Resolver) applyTemplateSecurity(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
+	if exec.Security == nil {
+		return
+	}
+	if exec.Security.RequiresNonRoot != nil {
+		config.RunAsNonRoot = *exec.Security.RequiresNonRoot
+	}
+	if exec.Security.RequiresReadOnlyRoot != nil {
+		config.ReadOnlyRootFilesystem = *exec.Security.RequiresReadOnlyRoot
+	}
+	if exec.Security.RequiresNoPrivilegeEscalation != nil {
+		config.AllowPrivilegeEscalation = !*exec.Security.RequiresNoPrivilegeEscalation
+	}
+	if exec.Security.RecommendedRunAsUser != nil {
+		config.RunAsUser = *exec.Security.RecommendedRunAsUser
+	}
+}
+
+func (cr *Resolver) applyTemplateJob(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
+	if exec.Job == nil {
+		return
+	}
+	if exec.Job.RecommendedBackoffLimit != nil {
+		config.BackoffLimit = *exec.Job.RecommendedBackoffLimit
+	}
+	if exec.Job.RecommendedTTLSecondsAfterFinished != nil {
+		config.TTLSecondsAfterFinished = *exec.Job.RecommendedTTLSecondsAfterFinished
+	}
+	if exec.Job.RecommendedRestartPolicy != nil {
+		switch *exec.Job.RecommendedRestartPolicy {
+		case "Never":
+			config.RestartPolicy = corev1.RestartPolicyNever
+		case "OnFailure":
+			config.RestartPolicy = corev1.RestartPolicyOnFailure
 		}
 	}
+}
 
-	// Security
-	if exec.Security != nil {
-		if exec.Security.RequiresNonRoot != nil {
-			config.RunAsNonRoot = *exec.Security.RequiresNonRoot
-		}
-		if exec.Security.RequiresReadOnlyRoot != nil {
-			config.ReadOnlyRootFilesystem = *exec.Security.RequiresReadOnlyRoot
-		}
-		if exec.Security.RequiresNoPrivilegeEscalation != nil {
-			config.AllowPrivilegeEscalation = !*exec.Security.RequiresNoPrivilegeEscalation
-		}
-		if exec.Security.RecommendedRunAsUser != nil {
-			config.RunAsUser = *exec.Security.RecommendedRunAsUser
-		}
-	}
-
-	// Job
-	if exec.Job != nil {
-		if exec.Job.RecommendedBackoffLimit != nil {
-			config.BackoffLimit = *exec.Job.RecommendedBackoffLimit
-		}
-		if exec.Job.RecommendedTTLSecondsAfterFinished != nil {
-			config.TTLSecondsAfterFinished = *exec.Job.RecommendedTTLSecondsAfterFinished
-		}
-		if exec.Job.RecommendedRestartPolicy != nil {
-			switch *exec.Job.RecommendedRestartPolicy {
-			case "Never":
-				config.RestartPolicy = corev1.RestartPolicyNever
-			case "OnFailure":
-				config.RestartPolicy = corev1.RestartPolicyOnFailure
-			}
-		}
-	}
-
-	// Timeout & Retry
+func (cr *Resolver) applyTemplateTimeoutRetry(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
 	if exec.Timeout != nil {
 		if d, err := time.ParseDuration(*exec.Timeout); err == nil {
 			config.DefaultStepTimeout = d
@@ -238,31 +254,35 @@ func (cr *Resolver) applyEngramTemplateConfig(template *catalogv1alpha1.EngramTe
 	if exec.Retry != nil && exec.Retry.RecommendedMaxRetries != nil {
 		config.MaxRetries = *exec.Retry.RecommendedMaxRetries
 	}
+}
 
-	// Health Check Probes
-	if exec.Probes != nil {
-		if exec.Probes.Liveness != nil {
-			config.LivenessProbe = exec.Probes.Liveness.DeepCopy()
-		}
-		if exec.Probes.Readiness != nil {
-			config.ReadinessProbe = exec.Probes.Readiness.DeepCopy()
-		}
-		if exec.Probes.Startup != nil {
-			config.StartupProbe = exec.Probes.Startup.DeepCopy()
-		}
+func (cr *Resolver) applyTemplateProbes(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
+	if exec.Probes == nil {
+		return
 	}
+	if exec.Probes.Liveness != nil {
+		config.LivenessProbe = exec.Probes.Liveness.DeepCopy()
+	}
+	if exec.Probes.Readiness != nil {
+		config.ReadinessProbe = exec.Probes.Readiness.DeepCopy()
+	}
+	if exec.Probes.Startup != nil {
+		config.StartupProbe = exec.Probes.Startup.DeepCopy()
+	}
+}
 
-	// Service Configuration
-	if exec.Service != nil && len(exec.Service.Ports) > 0 {
-		config.ServicePorts = make([]corev1.ServicePort, 0, len(exec.Service.Ports))
-		for _, p := range exec.Service.Ports {
-			config.ServicePorts = append(config.ServicePorts, corev1.ServicePort{
-				Name:       p.Name,
-				Protocol:   corev1.Protocol(p.Protocol),
-				Port:       p.Port,
-				TargetPort: intstr.FromInt(int(p.TargetPort)),
-			})
-		}
+func (cr *Resolver) applyTemplateService(exec *catalogv1alpha1.TemplateExecutionPolicy, config *ResolvedExecutionConfig) {
+	if exec.Service == nil || len(exec.Service.Ports) == 0 {
+		return
+	}
+	config.ServicePorts = make([]corev1.ServicePort, 0, len(exec.Service.Ports))
+	for _, p := range exec.Service.Ports {
+		config.ServicePorts = append(config.ServicePorts, corev1.ServicePort{
+			Name:       p.Name,
+			Protocol:   corev1.Protocol(p.Protocol),
+			Port:       p.Port,
+			TargetPort: intstr.FromInt(int(p.TargetPort)),
+		})
 	}
 }
 
@@ -337,11 +357,11 @@ func (cr *Resolver) ApplyExecutionOverrides(overrides *v1alpha1.ExecutionOverrid
 	}
 	if overrides.ImagePullPolicy != nil {
 		switch *overrides.ImagePullPolicy {
-		case "Always":
+		case string(corev1.PullAlways):
 			config.ImagePullPolicy = corev1.PullAlways
-		case "Never":
+		case string(corev1.PullNever):
 			config.ImagePullPolicy = corev1.PullNever
-		case "IfNotPresent":
+		case string(corev1.PullIfNotPresent):
 			config.ImagePullPolicy = corev1.PullIfNotPresent
 		}
 	}

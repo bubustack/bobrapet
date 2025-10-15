@@ -88,7 +88,10 @@ func NewCompilationCache(config *CacheConfig, env *cel.Env, logger observability
 }
 
 // CompileAndCache compiles a CEL expression and caches the result
-func (cc *CompilationCache) CompileAndCache(ctx context.Context, expression, expressionType string) (*CachedProgram, error) {
+func (cc *CompilationCache) CompileAndCache(
+	ctx context.Context,
+	expression, expressionType string,
+) (*CachedProgram, error) {
 	// Generate cache key
 	key := cc.generateCacheKey(expression, expressionType)
 
@@ -170,7 +173,11 @@ func (cc *CompilationCache) CompileAndCache(ctx context.Context, expression, exp
 }
 
 // Evaluate compiles (with caching) and evaluates a CEL expression
-func (cc *CompilationCache) Evaluate(ctx context.Context, expression, expressionType string, vars map[string]interface{}) (interface{}, error) {
+func (cc *CompilationCache) Evaluate(
+	ctx context.Context,
+	expression, expressionType string,
+	vars map[string]any,
+) (any, error) {
 	// Get or compile the program
 	cached, err := cc.CompileAndCache(ctx, expression, expressionType)
 	if err != nil {
@@ -201,7 +208,11 @@ func (cc *CompilationCache) Evaluate(ctx context.Context, expression, expression
 }
 
 // EvaluateCondition evaluates a boolean CEL expression with caching
-func (cc *CompilationCache) EvaluateCondition(ctx context.Context, expression string, vars map[string]interface{}) (bool, error) {
+func (cc *CompilationCache) EvaluateCondition(
+	ctx context.Context,
+	expression string,
+	vars map[string]any,
+) (bool, error) {
 	result, err := cc.Evaluate(ctx, expression, "condition", vars)
 	if err != nil {
 		return false, err
@@ -215,12 +226,20 @@ func (cc *CompilationCache) EvaluateCondition(ctx context.Context, expression st
 }
 
 // EvaluateTransform evaluates a transform CEL expression with caching
-func (cc *CompilationCache) EvaluateTransform(ctx context.Context, expression string, vars map[string]interface{}) (interface{}, error) {
+func (cc *CompilationCache) EvaluateTransform(
+	ctx context.Context,
+	expression string,
+	vars map[string]any,
+) (any, error) {
 	return cc.Evaluate(ctx, expression, "transform", vars)
 }
 
 // EvaluateFilter evaluates a filter CEL expression with caching
-func (cc *CompilationCache) EvaluateFilter(ctx context.Context, expression string, vars map[string]interface{}) (bool, error) {
+func (cc *CompilationCache) EvaluateFilter(
+	ctx context.Context,
+	expression string,
+	vars map[string]any,
+) (bool, error) {
 	result, err := cc.Evaluate(ctx, expression, "filter", vars)
 	if err != nil {
 		return false, err
@@ -333,8 +352,13 @@ func (cc *CompilationCache) cleanup() {
 }
 
 // ProcessList evaluates a CEL expression over a list of items with caching
-func (cc *CompilationCache) ProcessList(ctx context.Context, expression, expressionType string, items []interface{}, baseVars map[string]interface{}) ([]interface{}, error) {
-	var results []interface{}
+func (cc *CompilationCache) ProcessList(
+	ctx context.Context,
+	expression, expressionType string,
+	items []any,
+	baseVars map[string]any,
+) ([]any, error) {
+	results := make([]any, 0, len(items))
 
 	// Compile the expression once and reuse for all items
 	cached, err := cc.CompileAndCache(ctx, expression, expressionType)
@@ -344,7 +368,7 @@ func (cc *CompilationCache) ProcessList(ctx context.Context, expression, express
 
 	for i, item := range items {
 		// Create evaluation context for this item
-		vars := make(map[string]interface{})
+		vars := make(map[string]any)
 		for k, v := range baseVars {
 			vars[k] = v
 		}

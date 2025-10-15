@@ -135,7 +135,7 @@ func (d *dataOperationsLib) ProgramOptions() []cel.ProgramOption {
 // CEL function implementations
 
 func sortByField(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("sort_by requires a list")
 	}
@@ -146,7 +146,7 @@ func sortByField(lhs, rhs ref.Val) ref.Val {
 	}
 
 	// Create a copy to sort
-	sorted := make([]interface{}, len(list))
+	sorted := make([]any, len(list))
 	copy(sorted, list)
 
 	sort.Slice(sorted, func(i, j int) bool {
@@ -159,13 +159,13 @@ func sortByField(lhs, rhs ref.Val) ref.Val {
 }
 
 func deduplicate(arg ref.Val) ref.Val {
-	list, ok := arg.Value().([]interface{})
+	list, ok := arg.Value().([]any)
 	if !ok {
 		return types.NewErr("dedupe requires a list")
 	}
 
 	seen := make(map[string]bool)
-	var result []interface{}
+	var result []any
 
 	for _, item := range list {
 		key := fmt.Sprintf("%v", item)
@@ -179,7 +179,7 @@ func deduplicate(arg ref.Val) ref.Val {
 }
 
 func groupByField(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("group_by requires a list")
 	}
@@ -189,7 +189,7 @@ func groupByField(lhs, rhs ref.Val) ref.Val {
 		return types.NewErr("group_by requires a string field name")
 	}
 
-	groups := make(map[string][]interface{})
+	groups := make(map[string][]any)
 
 	for _, item := range list {
 		key := fmt.Sprintf("%v", getFieldValue(item, field))
@@ -200,7 +200,7 @@ func groupByField(lhs, rhs ref.Val) ref.Val {
 }
 
 func chunkList(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("chunk requires a list")
 	}
@@ -214,7 +214,7 @@ func chunkList(lhs, rhs ref.Val) ref.Val {
 		return types.NewErr("chunk size must be positive")
 	}
 
-	var chunks [][]interface{}
+	var chunks [][]any
 	for i := 0; i < len(list); i += int(size) {
 		end := i + int(size)
 		if end > len(list) {
@@ -227,7 +227,7 @@ func chunkList(lhs, rhs ref.Val) ref.Val {
 }
 
 func sumByField(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("sum_by requires a list")
 	}
@@ -249,7 +249,7 @@ func sumByField(lhs, rhs ref.Val) ref.Val {
 }
 
 func countByField(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("count_by requires a list")
 	}
@@ -270,17 +270,17 @@ func countByField(lhs, rhs ref.Val) ref.Val {
 }
 
 func renameKeys(lhs, rhs ref.Val) ref.Val {
-	data, ok := lhs.Value().(map[string]interface{})
+	data, ok := lhs.Value().(map[string]any)
 	if !ok {
 		return types.NewErr("rename_keys requires a map")
 	}
 
-	mapping, ok := rhs.Value().(map[string]interface{})
+	mapping, ok := rhs.Value().(map[string]any)
 	if !ok {
 		return types.NewErr("rename_keys requires a mapping")
 	}
 
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 
 	for key, value := range data {
 		if newKey, exists := mapping[key]; exists {
@@ -314,7 +314,7 @@ func formatTime(lhs, rhs ref.Val) ref.Val {
 }
 
 func takeN(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("take requires a list")
 	}
@@ -325,7 +325,7 @@ func takeN(lhs, rhs ref.Val) ref.Val {
 	}
 
 	if n <= 0 {
-		return types.DefaultTypeAdapter.NativeToValue([]interface{}{})
+		return types.DefaultTypeAdapter.NativeToValue([]any{})
 	}
 
 	if int(n) >= len(list) {
@@ -336,7 +336,7 @@ func takeN(lhs, rhs ref.Val) ref.Val {
 }
 
 func skipN(lhs, rhs ref.Val) ref.Val {
-	list, ok := lhs.Value().([]interface{})
+	list, ok := lhs.Value().([]any)
 	if !ok {
 		return types.NewErr("skip requires a list")
 	}
@@ -351,7 +351,7 @@ func skipN(lhs, rhs ref.Val) ref.Val {
 	}
 
 	if int(n) >= len(list) {
-		return types.DefaultTypeAdapter.NativeToValue([]interface{}{})
+		return types.DefaultTypeAdapter.NativeToValue([]any{})
 	}
 
 	return types.DefaultTypeAdapter.NativeToValue(list[n:])
@@ -359,14 +359,14 @@ func skipN(lhs, rhs ref.Val) ref.Val {
 
 // Helper functions
 
-func getFieldValue(item interface{}, field string) interface{} {
-	if m, ok := item.(map[string]interface{}); ok {
+func getFieldValue(item any, field string) any {
+	if m, ok := item.(map[string]any); ok {
 		return m[field]
 	}
 	return nil
 }
 
-func compareValues(a, b interface{}) int {
+func compareValues(a, b any) int {
 	switch va := a.(type) {
 	case string:
 		if vb, ok := b.(string); ok {
@@ -398,7 +398,7 @@ func compareValues(a, b interface{}) int {
 	return 0
 }
 
-func toNumber(val interface{}) (float64, bool) {
+func toNumber(val any) (float64, bool) {
 	switch v := val.(type) {
 	case int64:
 		return float64(v), true

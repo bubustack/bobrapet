@@ -66,19 +66,10 @@ func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	templateLogger := rl.WithValues("template", template.Name, "version", template.Spec.Version)
 	rl.ReconcileStart("Processing EngramTemplate")
 
-	// Validate required fields
-	if template.Spec.Image == "" {
-		r.updateErrorStatus(&template, "image is required")
-		rl.ReconcileError(fmt.Errorf("image missing"), "Image is required for EngramTemplate")
-		if err := r.updateStatus(ctx, &template); err != nil {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if template.Spec.Version == "" {
-		r.updateErrorStatus(&template, "version is required")
-		rl.ReconcileError(fmt.Errorf("version missing"), "Version is required for EngramTemplate")
+	// Validate required fields (extracted helper to reduce cyclomatic complexity)
+	if missingField, handled := r.handleRequiredFields(ctx, &template); handled {
+		r.updateErrorStatus(&template, fmt.Sprintf("%s is required", missingField))
+		rl.ReconcileError(fmt.Errorf("%s missing", missingField), fmt.Sprintf("%s is required for EngramTemplate", missingField))
 		if err := r.updateStatus(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
@@ -87,53 +78,22 @@ func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	templateLogger.Info("Validating EngramTemplate", "image", template.Spec.Image, "version", template.Spec.Version)
 
-	// Validate JSON schemas if provided
-	if template.Spec.InputSchema != nil {
-		if err := r.validateJSONSchema(template.Spec.InputSchema.Raw); err != nil {
-			r.updateErrorStatus(&template, fmt.Sprintf("invalid input schema: %v", err))
-			rl.ReconcileError(err, "Invalid input schema")
-			if updateErr := r.updateStatus(ctx, &template); updateErr != nil {
-				templateLogger.Error(updateErr, "failed to update status after schema validation error")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// Validate JSON schemas if provided (extracted helper)
+	if which, schemaErr := r.validateAllSchemas(ctx, &template); which != "" {
+		r.updateErrorStatus(&template, fmt.Sprintf("invalid %s schema: %v", which, schemaErr))
+		rl.ReconcileError(schemaErr, fmt.Sprintf("Invalid %s schema", which))
+		if updateErr := r.updateStatus(ctx, &template); updateErr != nil {
+			templateLogger.Error(updateErr, "failed to update status after schema validation error")
 		}
-		templateLogger.V(1).Info("Input schema validated")
-	}
-
-	if template.Spec.OutputSchema != nil {
-		if err := r.validateJSONSchema(template.Spec.OutputSchema.Raw); err != nil {
-			r.updateErrorStatus(&template, fmt.Sprintf("invalid output schema: %v", err))
-			rl.ReconcileError(err, "Invalid output schema")
-			if updateErr := r.updateStatus(ctx, &template); updateErr != nil {
-				templateLogger.Error(updateErr, "failed to update status after schema validation error")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		templateLogger.V(1).Info("Output schema validated")
-	}
-
-	if template.Spec.ConfigSchema != nil {
-		if err := r.validateJSONSchema(template.Spec.ConfigSchema.Raw); err != nil {
-			r.updateErrorStatus(&template, fmt.Sprintf("invalid config schema: %v", err))
-			rl.ReconcileError(err, "Invalid config schema")
-			if updateErr := r.updateStatus(ctx, &template); updateErr != nil {
-				templateLogger.Error(updateErr, "failed to update status after schema validation error")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		templateLogger.V(1).Info("Config schema validated")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// Update status to ready
 	r.updateReadyStatus(&template)
 
-	// List all Engrams that were created from this template
-	var engrams bubushv1alpha1.EngramList
-	if err := r.List(ctx, &engrams, client.MatchingFields{"spec.templateRef.name": req.Name}); err != nil {
+	// List all Engrams that were created from this template (extracted helper)
+	if err := r.setUsageCount(ctx, &template, req.Name); err != nil {
 		templateLogger.Error(err, "Failed to list engrams for template")
-		// We don't fail the reconcile, just log the error. Status will be updated on next reconcile.
-	} else {
-		template.Status.UsageCount = int32(len(engrams.Items))
 	}
 
 	if err := r.updateStatus(ctx, &template); err != nil {
@@ -148,6 +108,47 @@ func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"has_output_schema", template.Spec.OutputSchema != nil,
 		"has_config_schema", template.Spec.ConfigSchema != nil)
 	return ctrl.Result{}, nil
+}
+
+// handleRequiredFields returns which required field is missing if any, and whether it handled a condition.
+func (r *EngramTemplateReconciler) handleRequiredFields(_ context.Context, template *catalogv1alpha1.EngramTemplate) (missingField string, handled bool) {
+	if template.Spec.Image == "" {
+		return "image", true
+	}
+	if template.Spec.Version == "" {
+		return "version", true
+	}
+	return "", false
+}
+
+// validateAllSchemas validates input/output/config schemas and returns which failed and the error.
+func (r *EngramTemplateReconciler) validateAllSchemas(_ context.Context, template *catalogv1alpha1.EngramTemplate) (which string, err error) {
+	if template.Spec.InputSchema != nil {
+		if err := r.validateJSONSchema(template.Spec.InputSchema.Raw); err != nil {
+			return "input", err
+		}
+	}
+	if template.Spec.OutputSchema != nil {
+		if err := r.validateJSONSchema(template.Spec.OutputSchema.Raw); err != nil {
+			return "output", err
+		}
+	}
+	if template.Spec.ConfigSchema != nil {
+		if err := r.validateJSONSchema(template.Spec.ConfigSchema.Raw); err != nil {
+			return "config", err
+		}
+	}
+	return "", nil
+}
+
+// setUsageCount lists Engrams using this template and updates UsageCount on the in-memory object.
+func (r *EngramTemplateReconciler) setUsageCount(ctx context.Context, template *catalogv1alpha1.EngramTemplate, templateName string) error {
+	var engrams bubushv1alpha1.EngramList
+	if err := r.List(ctx, &engrams, client.MatchingFields{"spec.templateRef.name": templateName}); err != nil {
+		return err
+	}
+	template.Status.UsageCount = int32(len(engrams.Items))
+	return nil
 }
 
 // validateJSONSchema performs basic JSON schema validation

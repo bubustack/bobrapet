@@ -69,126 +69,166 @@ type StoryRunReconciler struct {
 func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", req.NamespacedName)
 	startTime := time.Now()
-	defer func() {
-		metrics.RecordControllerReconcile("storyrun", time.Since(startTime), err)
-	}()
+	defer func() { metrics.RecordControllerReconcile("storyrun", time.Since(startTime), err) }()
 
-	// Bound reconcile duration
-	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
+	ctx, cancel := r.withReconcileTimeout(ctx)
+	defer cancel()
 
 	var srun runsv1alpha1.StoryRun
 	if err := r.Get(ctx, req.NamespacedName, &srun); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Validate input size to prevent oversized objects when webhooks are disabled.
-	maxBytes := r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultMaxInlineSize
-	if maxBytes == 0 {
-		maxBytes = DefaultMaxInlineInputsSize // Fallback to a safe default, mirroring webhook logic.
+	if handled, err := r.guardOversizedInputs(ctx, &srun, log); handled || err != nil {
+		return ctrl.Result{}, err
+	}
+	if handled, result, err := r.handleDeletionIfNeeded(ctx, &srun); handled {
+		return result, err
+	}
+	if err := r.ensureFinalizer(ctx, &srun, log); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.rbacManager.Reconcile(ctx, &srun); err != nil {
+		log.Error(err, "Failed to reconcile RBAC")
+		return ctrl.Result{}, err
+	}
+	if srun.Status.Phase == enums.PhaseSucceeded || srun.Status.Phase == enums.PhaseFailed {
+		return ctrl.Result{}, nil
+	}
+
+	return r.reconcileAfterSetup(ctx, &srun, log)
+}
+
+func (r *StoryRunReconciler) withReconcileTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (r *StoryRunReconciler) reconcileAfterSetup(ctx context.Context, srun *runsv1alpha1.StoryRun, log *logging.ControllerLogger) (ctrl.Result, error) {
+	var story *bubushv1alpha1.Story
+	handled, result, s, err := r.getStoryOrWait(ctx, srun, log)
+	if handled || err != nil {
+		return result, err
+	}
+	story = s
+
+	if handled, err := r.handleStreamingIfNeeded(ctx, srun, story, log); handled || err != nil {
+		return ctrl.Result{}, err
+	}
+	if handled, err := r.initializePhaseIfEmpty(ctx, srun); handled || err != nil {
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return r.dagReconciler.Reconcile(ctx, srun, story)
+}
+
+func (r *StoryRunReconciler) guardOversizedInputs(ctx context.Context, srun *runsv1alpha1.StoryRun, log *logging.ControllerLogger) (bool, error) {
+	// Prefer StoryRun-specific knob from operator config; fall back to sane default
+	maxBytes := r.ConfigResolver.GetOperatorConfig().Controller.StoryRun.MaxInlineInputsSize
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxInlineInputsSize
 	}
 	if srun.Spec.Inputs != nil && len(srun.Spec.Inputs.Raw) > maxBytes {
 		if srun.Status.Phase != enums.PhaseFailed {
 			log.Info("StoryRun spec.inputs is too large, failing run", "size", len(srun.Spec.Inputs.Raw), "maxSize", maxBytes)
 			failMsg := fmt.Sprintf("spec.inputs size %d bytes exceeds maximum of %d", len(srun.Spec.Inputs.Raw), maxBytes)
-			if err := r.setStoryRunPhase(ctx, &srun, enums.PhaseFailed, failMsg); err != nil {
+			if err := r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, failMsg); err != nil {
 				log.Error(err, "Failed to set StoryRun status to Failed due to oversized inputs")
-				return ctrl.Result{}, err
+				return true, err
 			}
 		}
-		return ctrl.Result{}, nil // Stop reconciliation for this oversized object.
+		return true, nil
 	}
+	return false, nil
+}
 
-	// Handle deletion first
+func (r *StoryRunReconciler) handleDeletionIfNeeded(ctx context.Context, srun *runsv1alpha1.StoryRun) (bool, ctrl.Result, error) {
 	if !srun.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &srun)
+		res, err := r.reconcileDelete(ctx, srun)
+		return true, res, err
 	}
+	return false, ctrl.Result{}, nil
+}
 
-	// Add finalizer if it doesn't exist
-	if !controllerutil.ContainsFinalizer(&srun, StoryRunFinalizer) {
-		beforePatch := srun.DeepCopy()
-		controllerutil.AddFinalizer(&srun, StoryRunFinalizer)
-		if err := r.Patch(ctx, &srun, client.MergeFrom(beforePatch)); err != nil {
-			log.Error(err, "Failed to add finalizer")
-			return ctrl.Result{}, err
+func (r *StoryRunReconciler) ensureFinalizer(ctx context.Context, srun *runsv1alpha1.StoryRun, log *logging.ControllerLogger) error {
+	if controllerutil.ContainsFinalizer(srun, StoryRunFinalizer) {
+		return nil
+	}
+	beforePatch := srun.DeepCopy()
+	controllerutil.AddFinalizer(srun, StoryRunFinalizer)
+	if err := r.Patch(ctx, srun, client.MergeFrom(beforePatch)); err != nil {
+		log.Error(err, "Failed to add finalizer")
+		return err
+	}
+	return nil
+}
+
+func (r *StoryRunReconciler) getStoryOrWait(ctx context.Context, srun *runsv1alpha1.StoryRun, log *logging.ControllerLogger) (bool, ctrl.Result, *bubushv1alpha1.Story, error) {
+	story, err := r.getStoryForRun(ctx, srun)
+	if err == nil {
+		return false, ctrl.Result{}, story, nil
+	}
+	if errors.IsNotFound(err) {
+		log.Info("Story not found for StoryRun, will requeue", "story", srun.Spec.StoryRef.Name)
+		if r.Recorder != nil {
+			r.Recorder.Event(srun, "Warning", conditions.ReasonStoryNotFound, fmt.Sprintf("Waiting for Story '%s'", srun.Spec.StoryRef.ToNamespacedName(srun).String()))
 		}
-	}
-
-	if err := r.rbacManager.Reconcile(ctx, &srun); err != nil {
-		log.Error(err, "Failed to reconcile RBAC")
-		// We can choose to fail hard here or just log and continue.
-		// For now, let's fail hard as RBAC is critical for engrams to run.
-		return ctrl.Result{}, err
-	}
-
-	if srun.Status.Phase == enums.PhaseSucceeded || srun.Status.Phase == enums.PhaseFailed {
-		return ctrl.Result{}, nil
-	}
-
-	story, err := r.getStoryForRun(ctx, &srun)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			log.Info("Story not found for StoryRun, will requeue", "story", srun.Spec.StoryRef.Name)
-			// Emit event for user visibility (guard recorder for tests)
-			if r.Recorder != nil {
-				r.Recorder.Event(&srun, "Warning", conditions.ReasonStoryNotFound, fmt.Sprintf("Waiting for Story '%s'", srun.Spec.StoryRef.ToNamespacedName(&srun).String()))
+		statusErr := patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
+			sr := obj.(*runsv1alpha1.StoryRun)
+			if sr.Status.Phase == "" {
+				sr.Status.Phase = enums.PhasePending
 			}
-			statusErr := patch.RetryableStatusPatch(ctx, r.Client, &srun, func(obj client.Object) {
-				sr := obj.(*runsv1alpha1.StoryRun)
-				if sr.Status.Phase == "" {
-					sr.Status.Phase = enums.PhasePending
-				}
-				cm := conditions.NewConditionManager(sr.Generation)
-				message := fmt.Sprintf("Waiting for Story '%s' to be created", srun.Spec.StoryRef.ToNamespacedName(&srun).String())
-				cm.SetCondition(&sr.Status.Conditions, conditions.ConditionReady, metav1.ConditionFalse, conditions.ReasonStoryNotFound, message)
-				sr.Status.Message = message
-			})
-			if statusErr != nil {
-				log.Error(statusErr, "Failed to update StoryRun status while waiting for Story")
-				return ctrl.Result{}, statusErr
-			}
-			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+			cm := conditions.NewConditionManager(sr.Generation)
+			message := fmt.Sprintf("Waiting for Story '%s' to be created", srun.Spec.StoryRef.ToNamespacedName(srun).String())
+			cm.SetCondition(&sr.Status.Conditions, conditions.ConditionReady, metav1.ConditionFalse, conditions.ReasonStoryNotFound, message)
+			sr.Status.Message = message
+		})
+		if statusErr != nil {
+			log.Error(statusErr, "Failed to update StoryRun status while waiting for Story")
+			return true, ctrl.Result{}, nil, statusErr
 		}
+		return true, ctrl.Result{RequeueAfter: 15 * time.Second}, nil, nil
+	}
+	log.Error(err, "Failed to get Story for StoryRun")
+	if updateErr := r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, fmt.Sprintf("failed to get story: %v", err)); updateErr != nil {
+		log.Error(updateErr, "Failed to set StoryRun status to Failed")
+		return true, ctrl.Result{}, nil, updateErr
+	}
+	return true, ctrl.Result{}, nil, nil
+}
 
-		// For other errors, fail the run
-		log.Error(err, "Failed to get Story for StoryRun")
-		if updateErr := r.setStoryRunPhase(ctx, &srun, enums.PhaseFailed, fmt.Sprintf("failed to get story: %v", err)); updateErr != nil {
+func (r *StoryRunReconciler) handleStreamingIfNeeded(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story, log *logging.ControllerLogger) (bool, error) {
+	if story.Spec.Pattern != enums.StreamingPattern {
+		return false, nil
+	}
+	if err := r.reconcileStreamingStoryRun(ctx, srun, story); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Info("Reconciliation timed out, returning error to trigger failure rate limiter")
+			return true, fmt.Errorf("reconcile timed out: %w", ctx.Err())
+		}
+		log.Error(err, "Failed to reconcile streaming story run")
+		if updateErr := r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, fmt.Sprintf("failed to reconcile streaming story: %v", err)); updateErr != nil {
 			log.Error(updateErr, "Failed to set StoryRun status to Failed")
-			return ctrl.Result{}, updateErr // Return the error from the status update
+			return true, updateErr
 		}
-		return ctrl.Result{}, nil // Do not requeue, as this is a terminal state
+		return true, nil
 	}
+	return false, nil
+}
 
-	if story.Spec.Pattern == enums.StreamingPattern {
-		if err := r.reconcileStreamingStoryRun(ctx, &srun, story); err != nil {
-			if ctx.Err() == context.DeadlineExceeded {
-				log.Info("Reconciliation timed out, returning error to trigger failure rate limiter")
-				return ctrl.Result{}, fmt.Errorf("reconcile timed out: %w", ctx.Err())
-			}
-			log.Error(err, "Failed to reconcile streaming story run")
-			if updateErr := r.setStoryRunPhase(ctx, &srun, enums.PhaseFailed, fmt.Sprintf("failed to reconcile streaming story: %v", err)); updateErr != nil {
-				log.Error(updateErr, "Failed to set StoryRun status to Failed")
-				return ctrl.Result{}, updateErr
-			}
-			return ctrl.Result{}, nil
-		}
+func (r *StoryRunReconciler) initializePhaseIfEmpty(ctx context.Context, srun *runsv1alpha1.StoryRun) (bool, error) {
+	if srun.Status.Phase != "" {
+		return false, nil
 	}
-
-	if srun.Status.Phase == "" {
-		err := r.setStoryRunPhase(ctx, &srun, enums.PhaseRunning, "Starting StoryRun execution")
-		if err != nil {
-			log.Error(err, "Failed to update StoryRun status to Running")
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{Requeue: true}, nil
+	if err := r.setStoryRunPhase(ctx, srun, enums.PhaseRunning, "Starting StoryRun execution"); err != nil {
+		return true, err
 	}
-
-	// Re-evaluate the entire DAG based on the current state.
-	return r.dagReconciler.Reconcile(ctx, &srun, story)
+	return true, nil
 }
 
 func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story) error {

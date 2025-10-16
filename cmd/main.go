@@ -100,71 +100,27 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// if the enable-http2 flag is false (the default), http/2 should be disabled
-	// due to its vulnerabilities. More specifically, disabling http/2 will
-	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
-	// Rapid Reset CVEs. For more information see:
-	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
-	// - https://github.com/advisories/GHSA-4374-p667-p6c8
-	disableHTTP2 := func(c *tls.Config) {
-		setupLog.Info("disabling http/2")
-		c.NextProtos = []string{"http/1.1"}
-	}
+	// Configure HTTP/2 and TLS options
+	configureHTTP2(enableHTTP2, &tlsOpts)
 
-	if !enableHTTP2 {
-		tlsOpts = append(tlsOpts, disableHTTP2)
-	}
+	// Build servers' options
+	webhookServer := webhook.NewServer(
+		buildWebhookServerOptions(
+			webhookCertPath,
+			webhookCertName,
+			webhookCertKey,
+			tlsOpts,
+		),
+	)
 
-	// Initial webhook TLS options
-	webhookTLSOpts := tlsOpts
-	webhookServerOptions := webhook.Options{
-		TLSOpts: webhookTLSOpts,
-	}
-
-	if len(webhookCertPath) > 0 {
-		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
-			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
-
-		webhookServerOptions.CertDir = webhookCertPath
-		webhookServerOptions.CertName = webhookCertName
-		webhookServerOptions.KeyName = webhookCertKey
-	}
-
-	webhookServer := webhook.NewServer(webhookServerOptions)
-
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
-	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/metrics/server
-	// - https://book.kubebuilder.io/reference/metrics.html
-	metricsServerOptions := metricsserver.Options{
-		BindAddress:   metricsAddr,
-		SecureServing: secureMetrics,
-		TLSOpts:       tlsOpts,
-	}
-
-	if secureMetrics {
-		// FilterProvider is used to protect the metrics endpoint with authn/authz.
-		// These configurations ensure that only authorized users and service accounts
-		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
-		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/metrics/filters#WithAuthenticationAndAuthorization
-		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
-	}
-
-	// If the certificate is not specified, controller-runtime will automatically
-	// generate self-signed certificates for the metrics server. While convenient for development and testing,
-	// this setup is not recommended for production.
-	//
-	// - [METRICS-WITH-CERTS] at config/default/kustomization.yaml to generate and use certificates
-	// managed by cert-manager for the metrics server.
-	// - [PROMETHEUS-WITH-CERTS] at config/prometheus/kustomization.yaml for TLS certification.
-	if len(metricsCertPath) > 0 {
-		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
-			"metrics-cert-path", metricsCertPath, "metrics-cert-name", metricsCertName, "metrics-cert-key", metricsCertKey)
-
-		metricsServerOptions.CertDir = metricsCertPath
-		metricsServerOptions.CertName = metricsCertName
-		metricsServerOptions.KeyName = metricsCertKey
-	}
+	metricsServerOptions := buildMetricsServerOptions(
+		metricsAddr,
+		secureMetrics,
+		metricsCertPath,
+		metricsCertName,
+		metricsCertKey,
+		tlsOpts,
+	)
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
@@ -173,16 +129,6 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "d3a8b358.bubustack.io",
-		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
-		// when the Manager ends. This requires the binary to immediately end when the
-		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
-		// speeds up voluntary leader transitions as the new leader don't have to wait
-		// LeaseDuration time first.
-		//
-		// In the default scaffold provided, the program ends immediately after
-		// the manager stops, so would be fine to enable this option. However,
-		// if you are doing or is intended to do any operation such as perform cleanups
-		// after the manager stops then its usage might be unsafe.
 		// LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
@@ -194,6 +140,81 @@ func main() {
 	managerCtx := ctrl.SetupSignalHandler()
 	setup.SetupIndexers(managerCtx, mgr)
 
+	operatorConfigManager, controllerConfig, configResolver, celEvaluator := mustInitOperatorServices(mgr)
+
+	deps := config.ControllerDependencies{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		ConfigResolver: configResolver,
+		CELEvaluator:   *celEvaluator,
+	}
+
+	mustSetupControllers(mgr, deps, controllerConfig)
+
+	setupWebhooksIfEnabled(mgr, operatorConfigManager)
+	// +kubebuilder:scaffold:builder
+
+	mustAddHealthChecks(mgr)
+
+	setupLog.Info("starting manager")
+	defer celEvaluator.Close()
+	if err := mgr.Start(managerCtx); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
+}
+
+func configureHTTP2(enableHTTP2 bool, tlsOpts *[]func(*tls.Config)) {
+	// if the enable-http2 flag is false (the default), http/2 should be disabled
+	// due to its vulnerabilities.
+	disableHTTP2 := func(c *tls.Config) {
+		setupLog.Info("disabling http/2")
+		c.NextProtos = []string{"http/1.1"}
+	}
+	if !enableHTTP2 {
+		*tlsOpts = append(*tlsOpts, disableHTTP2)
+	}
+}
+
+func buildWebhookServerOptions(certPath, certName, certKey string, tlsOpts []func(*tls.Config)) webhook.Options {
+	opts := webhook.Options{TLSOpts: tlsOpts}
+	if len(certPath) > 0 {
+		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
+			"webhook-cert-path", certPath, "webhook-cert-name", certName, "webhook-cert-key", certKey)
+		opts.CertDir = certPath
+		opts.CertName = certName
+		opts.KeyName = certKey
+	}
+	return opts
+}
+
+func buildMetricsServerOptions(
+	metricsAddr string,
+	secure bool,
+	certPath, certName, certKey string,
+	tlsOpts []func(*tls.Config),
+) metricsserver.Options {
+	opts := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: secure,
+		TLSOpts:       tlsOpts,
+	}
+	if secure {
+		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+	}
+	if len(certPath) > 0 {
+		setupLog.Info("Initializing metrics certificate watcher using provided certificates",
+			"metrics-cert-path", certPath, "metrics-cert-name", certName, "metrics-cert-key", certKey)
+		opts.CertDir = certPath
+		opts.CertName = certName
+		opts.KeyName = certKey
+	}
+	return opts
+}
+
+func mustInitOperatorServices(
+	mgr ctrl.Manager,
+) (*config.OperatorConfigManager, *config.ControllerConfig, *config.Resolver, *cel.Evaluator) {
 	operatorConfigManager := config.NewOperatorConfigManager(
 		mgr.GetClient(),
 		"bobrapet-system",
@@ -204,7 +225,6 @@ func main() {
 		setupLog.Error(err, "unable to add operator config manager to manager")
 		os.Exit(1)
 	}
-
 	controllerConfig := operatorConfigManager.GetControllerConfig()
 	setupLog.Info("Controller configuration loaded")
 	configResolver := config.NewResolver(mgr.GetClient(), operatorConfigManager)
@@ -215,14 +235,14 @@ func main() {
 		setupLog.Error(err, "unable to create CEL evaluator")
 		os.Exit(1)
 	}
+	return operatorConfigManager, controllerConfig, configResolver, celEvaluator
+}
 
-	deps := config.ControllerDependencies{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		ConfigResolver: configResolver,
-		CELEvaluator:   *celEvaluator,
-	}
-
+func mustSetupControllers(
+	mgr ctrl.Manager,
+	deps config.ControllerDependencies,
+	controllerConfig *config.ControllerConfig,
+) {
 	if err := (&controller.StoryReconciler{
 		ControllerDependencies: deps,
 	}).SetupWithManager(mgr, controllerConfig.BuildStoryControllerOptions()); err != nil {
@@ -265,52 +285,50 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ImpulseTemplate")
 		os.Exit(1)
 	}
+}
 
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		setupLog.Info("setting up webhooks")
-		if err := (&webhookv1alpha1.StoryWebhook{}).SetupWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Story")
-			os.Exit(1)
-		}
-		if err := (&webhookv1alpha1.EngramWebhook{
-			Config: operatorConfigManager.GetControllerConfig(),
-		}).SetupWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Engram")
-			os.Exit(1)
-		}
-		if err := (&webhookv1alpha1.ImpulseWebhook{
-			Config: operatorConfigManager.GetControllerConfig(),
-		}).SetupWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "Impulse")
-			os.Exit(1)
-		}
-		if err := (&webhookrunsv1alpha1.StoryRunWebhook{
-			Config: operatorConfigManager.GetControllerConfig(),
-		}).SetupWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "StoryRun")
-			os.Exit(1)
-		}
-		if err := (&webhookrunsv1alpha1.StepRunWebhook{}).SetupWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "StepRun")
-			os.Exit(1)
-		}
+func setupWebhooksIfEnabled(mgr ctrl.Manager, operatorConfigManager *config.OperatorConfigManager) {
+	if os.Getenv("ENABLE_WEBHOOKS") == "false" {
+		return
 	}
-	// +kubebuilder:scaffold:builder
+	setupLog.Info("setting up webhooks")
+	if err := (&webhookv1alpha1.StoryWebhook{
+		Config: operatorConfigManager.GetControllerConfig(),
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "Story")
+		os.Exit(1)
+	}
+	if err := (&webhookv1alpha1.EngramWebhook{
+		Config: operatorConfigManager.GetControllerConfig(),
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "Engram")
+		os.Exit(1)
+	}
+	if err := (&webhookv1alpha1.ImpulseWebhook{
+		Config: operatorConfigManager.GetControllerConfig(),
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "Impulse")
+		os.Exit(1)
+	}
+	if err := (&webhookrunsv1alpha1.StoryRunWebhook{
+		Config: operatorConfigManager.GetControllerConfig(),
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "StoryRun")
+		os.Exit(1)
+	}
+	if err := (&webhookrunsv1alpha1.StepRunWebhook{}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "StepRun")
+		os.Exit(1)
+	}
+}
 
+func mustAddHealthChecks(mgr ctrl.Manager) {
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
-	}
-
-	setupLog.Info("starting manager")
-	// Ensure CEL evaluator background routines stop on manager shutdown
-	defer celEvaluator.Close()
-	if err := mgr.Start(managerCtx); err != nil {
-		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
 }

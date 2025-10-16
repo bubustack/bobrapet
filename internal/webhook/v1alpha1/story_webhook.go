@@ -155,28 +155,51 @@ func (v *StoryCustomValidator) ValidateDelete(ctx context.Context, obj runtime.O
 // - All items in step.Needs must reference existing step names (no self-dependency)
 // - For streaming pattern PerStory, referenced Engrams must be long-running modes is enforced at reconcile; here we only validate shape
 func (v *StoryCustomValidator) validateStory(ctx context.Context, story *bubushv1alpha1.Story) error {
-	// Add a total size check to prevent etcd overload.
+	if err := validateStorySize(story); err != nil {
+		return err
+	}
+	maxSize := pickStoryMaxWithSize(v.Config)
+	if err := validateOutputSize(story, maxSize); err != nil {
+		return err
+	}
+	if err := validateStepsShape(ctx, v, story, maxSize); err != nil {
+		return err
+	}
+	if err := validateNeedsExistence(story); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateStorySize(story *bubushv1alpha1.Story) error {
 	rawStory, err := json.Marshal(story)
 	if err != nil {
-		// This should not happen with valid Kubernetes objects.
 		return fmt.Errorf("internal error: failed to marshal story for size validation: %w", err)
 	}
-	// Use a safe, hardcoded limit slightly below the typical 1.5MiB etcd limit.
 	const maxTotalStorySizeBytes = 1 * 1024 * 1024 // 1 MiB
 	if len(rawStory) > maxTotalStorySizeBytes {
 		return fmt.Errorf("story size of %d bytes exceeds maximum allowed size of %d bytes", len(rawStory), maxTotalStorySizeBytes)
 	}
+	return nil
+}
 
-	seen := make(map[string]struct{})
-	maxSize := v.Config.MaxStoryWithBlockSizeBytes
+func pickStoryMaxWithSize(cfg *config.ControllerConfig) int {
+	maxSize := cfg.MaxStoryWithBlockSizeBytes
 	if maxSize <= 0 {
 		maxSize = config.DefaultControllerConfig().MaxStoryWithBlockSizeBytes
 	}
+	return maxSize
+}
 
+func validateOutputSize(story *bubushv1alpha1.Story, maxSize int) error {
 	if story.Spec.Output != nil && len(story.Spec.Output.Raw) > maxSize {
 		return fmt.Errorf("story 'output' block size of %d bytes exceeds maximum allowed size of %d bytes", len(story.Spec.Output.Raw), maxSize)
 	}
+	return nil
+}
 
+func validateStepsShape(ctx context.Context, v *StoryCustomValidator, story *bubushv1alpha1.Story, maxSize int) error {
+	seen := make(map[string]struct{})
 	for i := range story.Spec.Steps {
 		s := &story.Spec.Steps[i]
 		if _, exists := seen[s.Name]; exists {
@@ -189,44 +212,47 @@ func (v *StoryCustomValidator) validateStory(ctx context.Context, story *bubushv
 		if s.Ref == nil && s.Type == "" {
 			return fmt.Errorf("step '%s' must set either ref or type", s.Name)
 		}
-
 		for _, dep := range s.Needs {
 			if dep == s.Name {
 				return fmt.Errorf("step '%s' cannot depend on itself in needs", s.Name)
 			}
-			// second pass below validates that all dependencies exist; no-op here to avoid SA4006
 		}
-
 		if s.Ref != nil {
 			if err := v.validateEngramStep(ctx, story.Namespace, s); err != nil {
 				return err
 			}
 		}
-
 		if s.With != nil && len(s.With.Raw) > maxSize {
 			return fmt.Errorf("step '%s': 'with' block size of %d bytes exceeds maximum allowed size of %d bytes", s.Name, len(s.With.Raw), maxSize)
 		}
-
-		// Validate the 'with' block for known primitive types that require a specific schema.
-		if s.Type == enums.StepTypeExecuteStory {
-			if s.With == nil {
-				return fmt.Errorf("step '%s' of type 'executeStory' requires a 'with' block", s.Name)
-			}
-			var withConfig struct {
-				StoryRef struct {
-					Name string `json:"name"`
-				} `json:"storyRef"`
-			}
-			if err := json.Unmarshal(s.With.Raw, &withConfig); err != nil {
-				return fmt.Errorf("step '%s' has an invalid 'with' block for type 'executeStory': %w", s.Name, err)
-			}
-			if withConfig.StoryRef.Name == "" {
-				return fmt.Errorf("step '%s' of type 'executeStory' requires 'with.storyRef.name' to be set", s.Name)
-			}
+		if err := validatePrimitiveShapes(s); err != nil {
+			return err
 		}
 	}
+	return nil
+}
 
-	// Second pass: ensure all needs exist
+func validatePrimitiveShapes(s *bubushv1alpha1.Step) error {
+	if s.Type == enums.StepTypeExecuteStory {
+		if s.With == nil {
+			return fmt.Errorf("step '%s' of type 'executeStory' requires a 'with' block", s.Name)
+		}
+		var withConfig struct {
+			StoryRef struct {
+				Name string `json:"name"`
+			} `json:"storyRef"`
+		}
+		if err := json.Unmarshal(s.With.Raw, &withConfig); err != nil {
+			return fmt.Errorf("step '%s' has an invalid 'with' block for type 'executeStory': %w", s.Name, err)
+		}
+		if withConfig.StoryRef.Name == "" {
+			return fmt.Errorf("step '%s' of type 'executeStory' requires 'with.storyRef.name' to be set", s.Name)
+		}
+	}
+	return nil
+}
+
+func validateNeedsExistence(story *bubushv1alpha1.Story) error {
 	stepNames := make(map[string]struct{}, len(story.Spec.Steps))
 	for i := range story.Spec.Steps {
 		stepNames[story.Spec.Steps[i].Name] = struct{}{}

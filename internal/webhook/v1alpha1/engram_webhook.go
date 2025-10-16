@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xeipuuv/gojsonschema"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -141,53 +140,52 @@ func (v *EngramCustomValidator) ValidateDelete(ctx context.Context, obj runtime.
 // - templateRef.name must be set (enforced by CRD; double-check presence)
 // - if With is present, it must be a JSON object (not array/primitive)
 func (v *EngramCustomValidator) validateEngram(ctx context.Context, engram *bubushv1alpha1.Engram) error {
+	if err := requireTemplateRef(engram); err != nil {
+		return err
+	}
+	template, err := fetchEngramTemplate(ctx, v.Client, engram.Spec.TemplateRef.Name)
+	if err != nil {
+		return err
+	}
+	if err := validateWithBlock(engram, v.Config, template); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requireTemplateRef(engram *bubushv1alpha1.Engram) error {
 	if engram.Spec.TemplateRef.Name == "" {
 		return fmt.Errorf("spec.templateRef.name is required")
 	}
+	return nil
+}
 
-	// Fetch the template to validate against its schema
+func fetchEngramTemplate(ctx context.Context, c client.Client, name string) (*v1alpha1.EngramTemplate, error) {
 	var template v1alpha1.EngramTemplate
-	if err := v.Client.Get(ctx, types.NamespacedName{Name: engram.Spec.TemplateRef.Name, Namespace: ""}, &template); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ""}, &template); err != nil {
 		if errors.IsNotFound(err) {
-			return fmt.Errorf("EngramTemplate '%s' not found", engram.Spec.TemplateRef.Name)
+			return nil, fmt.Errorf("EngramTemplate '%s' not found", name)
 		}
-		return fmt.Errorf("failed to get EngramTemplate '%s': %w", engram.Spec.TemplateRef.Name, err)
+		return nil, fmt.Errorf("failed to get EngramTemplate '%s': %w", name, err)
 	}
+	return &template, nil
+}
 
-	if engram.Spec.With != nil && len(engram.Spec.With.Raw) > 0 {
-		// Validate that Raw JSON is an object (starts with '{')
-		b := engram.Spec.With.Raw
-		for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
-			b = b[1:]
-		}
-		if len(b) > 0 && b[0] != '{' {
-			return fmt.Errorf("spec.with must be a JSON object")
-		}
-		// Enforce an upper bound for inline config to avoid oversized pod specs/APIServer payloads.
-		// Use EngramControllerConfig.DefaultMaxInlineSize for a single cap.
-		maxBytes := v.Config.Engram.EngramControllerConfig.DefaultMaxInlineSize
-		if maxBytes == 0 {
-			maxBytes = 1024 // Fallback to a safe default
-		}
-		if len(engram.Spec.With.Raw) > maxBytes {
-			return fmt.Errorf("spec.with too large (%d bytes). Provide large payloads via object storage and references instead of inlining", len(engram.Spec.With.Raw))
-		}
-
-		// Validate 'with' against the template's configSchema
-		if template.Spec.ConfigSchema != nil && len(template.Spec.ConfigSchema.Raw) > 0 {
-			schemaLoader := gojsonschema.NewStringLoader(string(template.Spec.ConfigSchema.Raw))
-			documentLoader := gojsonschema.NewStringLoader(string(engram.Spec.With.Raw))
-			result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-			if err != nil {
-				return fmt.Errorf("error validating spec.with against EngramTemplate configSchema: %w", err)
-			}
-			if !result.Valid() {
-				var errs []string
-				for _, desc := range result.Errors() {
-					errs = append(errs, desc.String())
-				}
-				return fmt.Errorf("spec.with is invalid against EngramTemplate configSchema: %v", errs)
-			}
+func validateWithBlock(engram *bubushv1alpha1.Engram, cfg *config.ControllerConfig, template *v1alpha1.EngramTemplate) error {
+	if engram.Spec.With == nil || len(engram.Spec.With.Raw) == 0 {
+		return nil
+	}
+	b := trimLeadingSpace(engram.Spec.With.Raw)
+	if err := ensureJSONObject("spec.with", b); err != nil {
+		return err
+	}
+	maxBytes := pickMaxInline(cfg)
+	if err := enforceMaxBytes("spec.with", engram.Spec.With.Raw, maxBytes); err != nil {
+		return err
+	}
+	if template.Spec.ConfigSchema != nil && len(template.Spec.ConfigSchema.Raw) > 0 {
+		if err := validateJSONAgainstSchema(engram.Spec.With.Raw, template.Spec.ConfigSchema.Raw, "EngramTemplate"); err != nil {
+			return err
 		}
 	}
 	return nil

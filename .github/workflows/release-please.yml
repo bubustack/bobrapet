@@ -58,6 +58,7 @@ jobs:
             type=semver,pattern={{version}},value=${{ steps.release.outputs.tag_name }}
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.tag_name }}
             type=semver,pattern={{major}},value=${{ steps.release.outputs.tag_name }}
+            type=raw,value=${{ steps.release.outputs.tag_name }}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -94,6 +95,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload ${{ steps.release.outputs.tag_name }} dist/install.yaml
+
+      - name: Warm Go module caches (proxy/sum/pkg.go.dev)
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          set -euo pipefail
+          MOD=github.com/${{ github.repository }}
+          VER=${{ steps.release.outputs.tag_name }}
+          echo "Warming proxy.golang.org for $MOD@$VER"
+          curl -sSfL "https://proxy.golang.org/${MOD}/@v/${VER}.info" || true
+          echo "Warming sum.golang.org for $MOD@$VER"
+          curl -sSfL "https://sum.golang.org/lookup/${MOD}@${VER}" || true
+          echo "Triggering pkg.go.dev indexing for $MOD@$VER"
+          curl -sSfL "https://pkg.go.dev/${MOD}@${VER}" > /dev/null || true
+          echo "Triggering Go Report Card for $MOD"
+          curl -X POST -F "repo=${MOD}" https://goreportcard.com/checks
 
       - name: Create release summary
         if: ${{ steps.release.outputs.release_created }}

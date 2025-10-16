@@ -334,37 +334,56 @@ func (cr *Resolver) ApplyExecutionOverrides(overrides *v1alpha1.ExecutionOverrid
 		return
 	}
 
+	applyBasicOverrides(overrides, config)
+	applySecurityOverrides(overrides, config)
+	applyImagePolicyOverride(overrides, config)
+	applyTimeoutRetryOverrides(overrides, config)
+	applyProbeOverrides(overrides, config)
+}
+
+func applyBasicOverrides(overrides *v1alpha1.ExecutionOverrides, config *ResolvedExecutionConfig) {
 	if overrides.ServiceAccountName != nil {
 		config.ServiceAccountName = *overrides.ServiceAccountName
 	}
 	if overrides.AutomountServiceAccountToken != nil {
 		config.AutomountServiceAccountToken = *overrides.AutomountServiceAccountToken
 	}
-	if overrides.Security != nil {
-		sec := overrides.Security
-		if sec.RunAsNonRoot != nil {
-			config.RunAsNonRoot = *sec.RunAsNonRoot
-		}
-		if sec.ReadOnlyRootFilesystem != nil {
-			config.ReadOnlyRootFilesystem = *sec.ReadOnlyRootFilesystem
-		}
-		if sec.AllowPrivilegeEscalation != nil {
-			config.AllowPrivilegeEscalation = *sec.AllowPrivilegeEscalation
-		}
-		if sec.RunAsUser != nil {
-			config.RunAsUser = *sec.RunAsUser
-		}
+}
+
+func applySecurityOverrides(overrides *v1alpha1.ExecutionOverrides, config *ResolvedExecutionConfig) {
+	if overrides.Security == nil {
+		return
 	}
-	if overrides.ImagePullPolicy != nil {
-		switch *overrides.ImagePullPolicy {
-		case string(corev1.PullAlways):
-			config.ImagePullPolicy = corev1.PullAlways
-		case string(corev1.PullNever):
-			config.ImagePullPolicy = corev1.PullNever
-		case string(corev1.PullIfNotPresent):
-			config.ImagePullPolicy = corev1.PullIfNotPresent
-		}
+	sec := overrides.Security
+	if sec.RunAsNonRoot != nil {
+		config.RunAsNonRoot = *sec.RunAsNonRoot
 	}
+	if sec.ReadOnlyRootFilesystem != nil {
+		config.ReadOnlyRootFilesystem = *sec.ReadOnlyRootFilesystem
+	}
+	if sec.AllowPrivilegeEscalation != nil {
+		config.AllowPrivilegeEscalation = *sec.AllowPrivilegeEscalation
+	}
+	if sec.RunAsUser != nil {
+		config.RunAsUser = *sec.RunAsUser
+	}
+}
+
+func applyImagePolicyOverride(overrides *v1alpha1.ExecutionOverrides, config *ResolvedExecutionConfig) {
+	if overrides.ImagePullPolicy == nil {
+		return
+	}
+	switch *overrides.ImagePullPolicy {
+	case string(corev1.PullAlways):
+		config.ImagePullPolicy = corev1.PullAlways
+	case string(corev1.PullNever):
+		config.ImagePullPolicy = corev1.PullNever
+	case string(corev1.PullIfNotPresent):
+		config.ImagePullPolicy = corev1.PullIfNotPresent
+	}
+}
+
+func applyTimeoutRetryOverrides(overrides *v1alpha1.ExecutionOverrides, config *ResolvedExecutionConfig) {
 	if overrides.Timeout != nil {
 		if d, err := time.ParseDuration(*overrides.Timeout); err == nil {
 			config.DefaultStepTimeout = d
@@ -373,17 +392,20 @@ func (cr *Resolver) ApplyExecutionOverrides(overrides *v1alpha1.ExecutionOverrid
 	if overrides.Retry != nil && overrides.Retry.MaxRetries != nil {
 		config.MaxRetries = int(*overrides.Retry.MaxRetries)
 	}
-	// Handle probe disabling at instance level
-	if overrides.Probes != nil {
-		if overrides.Probes.DisableLiveness {
-			config.LivenessProbe = nil
-		}
-		if overrides.Probes.DisableReadiness {
-			config.ReadinessProbe = nil
-		}
-		if overrides.Probes.DisableStartup {
-			config.StartupProbe = nil
-		}
+}
+
+func applyProbeOverrides(overrides *v1alpha1.ExecutionOverrides, config *ResolvedExecutionConfig) {
+	if overrides.Probes == nil {
+		return
+	}
+	if overrides.Probes.DisableLiveness {
+		config.LivenessProbe = nil
+	}
+	if overrides.Probes.DisableReadiness {
+		config.ReadinessProbe = nil
+	}
+	if overrides.Probes.DisableStartup {
+		config.StartupProbe = nil
 	}
 }
 

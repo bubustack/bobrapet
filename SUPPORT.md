@@ -1,6 +1,6 @@
 # Support
 
-Thank you for using bobrapet. Here's how you can get help.
+Thank you for using BubuStack. Here's how you can get help.
 
 ## Self-Service
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/bubustack/bobrapet/compare/v0.1.0...v0.1.1) (2025-10-16)
+
+
+### Miscellaneous
+
+* **SUPPORT.md:** use ecosystem name instead of operator ([89fc875](https://github.com/bubustack/bobrapet/commit/89fc87547f91d0ce0b6cfa8b03674bee6a0f1325))
+
 ## [0.1.0](https://github.com/bubustack/bobrapet/compare/v0.1.0...v0.1.0) (2025-10-16)
 
 

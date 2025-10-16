@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/bubustack/bobrapet/compare/v0.1.1...v0.1.2) (2025-10-16)
+
+
+### Miscellaneous
+
+* update copyright comments ([530323a](https://github.com/bubustack/bobrapet/commit/530323a22a12e3c21bcc48ca9c1aa84ed9317b5d))
+
 ## [0.1.1](https://github.com/bubustack/bobrapet/compare/v0.1.0...v0.1.1) (2025-10-16)
 
 

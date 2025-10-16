@@ -182,39 +182,65 @@ func (ocm *OperatorConfigManager) parseConfigMap(cm *corev1.ConfigMap, config *O
 	parseStoryRunConfig(cm, config)
 }
 
-// --- helpers below keep parseConfigMap readable and reduce cyclomatic complexity ---
-
 func parseControllerTimings(cm *corev1.ConfigMap, config *OperatorConfig) {
+	setMaxConcurrentReconciles(cm, config)
+	setRequeueBaseDelay(cm, config)
+	setRequeueMaxDelay(cm, config)
+	setHealthCheckInterval(cm, config)
+	setCleanupInterval(cm, config)
+	setReconcileTimeout(cm, config)
+	setDefaultEngramGRPCPort(cm, config)
+}
+
+func setMaxConcurrentReconciles(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.max-concurrent-reconciles"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxConcurrentReconciles = parsed
 		}
 	}
+}
+
+func setRequeueBaseDelay(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.requeue-base-delay"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.RequeueBaseDelay = parsed
 		}
 	}
+}
+
+func setRequeueMaxDelay(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.requeue-max-delay"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.RequeueMaxDelay = parsed
 		}
 	}
+}
+
+func setHealthCheckInterval(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.health-check-interval"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.HealthCheckInterval = parsed
 		}
 	}
+}
+
+func setCleanupInterval(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.cleanup-interval"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.CleanupInterval = metav1.Duration{Duration: parsed}
 		}
 	}
+}
+
+func setReconcileTimeout(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.reconcile-timeout"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.ReconcileTimeout = parsed
 		}
 	}
+}
+
+func setDefaultEngramGRPCPort(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["controller.default-engram-grpc-port"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.DefaultEngramGRPCPort = parsed
@@ -257,36 +283,64 @@ func parseResourceLimits(cm *corev1.ConfigMap, config *OperatorConfig) {
 }
 
 func parseRetryAndTimeouts(cm *corev1.ConfigMap, config *OperatorConfig) {
+	setMaxRetries(cm, config)
+	setExponentialBackoffBase(cm, config)
+	setExponentialBackoffMax(cm, config)
+	setDefaultStepTimeout(cm, config)
+	setApprovalDefaultTimeout(cm, config)
+	setExternalDataTimeout(cm, config)
+	setConditionalTimeout(cm, config)
+}
+
+func setMaxRetries(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["retry.max-retries"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
 			config.Controller.MaxRetries = parsed
 		}
 	}
+}
+
+func setExponentialBackoffBase(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["retry.exponential-backoff-base"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.ExponentialBackoffBase = parsed
 		}
 	}
+}
+
+func setExponentialBackoffMax(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["retry.exponential-backoff-max"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.ExponentialBackoffMax = parsed
 		}
 	}
+}
+
+func setDefaultStepTimeout(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["timeout.default-step"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.DefaultStepTimeout = parsed
 		}
 	}
+}
+
+func setApprovalDefaultTimeout(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["timeout.approval-default"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.ApprovalDefaultTimeout = parsed
 		}
 	}
+}
+
+func setExternalDataTimeout(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["timeout.external-data-default"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.ExternalDataTimeout = parsed
 		}
 	}
+}
+
+func setConditionalTimeout(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["timeout.conditional-default"]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.ConditionalTimeout = parsed
@@ -295,26 +349,46 @@ func parseRetryAndTimeouts(cm *corev1.ConfigMap, config *OperatorConfig) {
 }
 
 func parseLoopConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
+	setMaxLoopIterations(cm, config)
+	setDefaultLoopBatchSize(cm, config)
+	setMaxLoopBatchSize(cm, config)
+	setMaxLoopConcurrency(cm, config)
+	setMaxConcurrencyLimit(cm, config)
+}
+
+func setMaxLoopIterations(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["loop.max-iterations"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxLoopIterations = parsed
 		}
 	}
+}
+
+func setDefaultLoopBatchSize(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["loop.default-batch-size"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.DefaultLoopBatchSize = parsed
 		}
 	}
+}
+
+func setMaxLoopBatchSize(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["loop.max-batch-size"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxLoopBatchSize = parsed
 		}
 	}
+}
+
+func setMaxLoopConcurrency(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["loop.max-concurrency"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxLoopConcurrency = parsed
 		}
 	}
+}
+
+func setMaxConcurrencyLimit(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data["loop.max-concurrency-limit"]; exists {
 		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
 			config.Controller.MaxConcurrencyLimit = parsed

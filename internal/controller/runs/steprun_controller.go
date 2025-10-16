@@ -355,71 +355,93 @@ func (r *StepRunReconciler) reconcileDelete(ctx context.Context, step *runsv1alp
 func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1alpha1.StepRun, engram *v1alpha1.Engram, engramTemplate *catalogv1alpha1.EngramTemplate) (*batchv1.Job, error) {
 	stepLogger := logging.NewControllerLogger(ctx, "steprun").WithStepRun(srun)
 
-	// Fetch the parent Story to provide the full context for the resolver.
-	story, err := r.getStoryForStep(ctx, srun)
+	story, storyRun, resolvedConfig, inputBytes, stepTimeout, err := r.prepareExecutionContext(ctx, srun, engram, engramTemplate, stepLogger)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get story for step: %w", err)
+		return nil, err
 	}
 
-	// Fetch the parent StoryRun to get inputs and outputs context.
-	storyRun, err := r.getParentStoryRun(ctx, srun)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get parent storyrun: %w", err)
-	}
-
-	// Resolve the final configuration using the hierarchical resolver.
-	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, srun, story, engram, engramTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve execution config for step '%s': %w", srun.Name, err)
-	}
-
-	stepLogger.Info("Resolved ServiceAccountName", "sa", resolvedConfig.ServiceAccountName)
-
-	// Get the StoryRun's initial inputs
-	storyRunInputs, err := r.getStoryRunInputs(ctx, storyRun)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get storyrun inputs: %w", err)
-	}
-
-	// Resolve inputs using the shared CEL evaluator
-	stepOutputs, err := getPriorStepOutputs(ctx, r.Client, storyRun, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get prior step outputs: %w", err)
-	}
-
-	var with map[string]any
-	if srun.Spec.Input != nil {
-		if err := json.Unmarshal(srun.Spec.Input.Raw, &with); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal step 'with' block: %w", err)
-		}
-	}
-
-	vars := map[string]any{
-		"inputs": storyRunInputs,
-		"steps":  stepOutputs,
-	}
-	resolvedInputs, err := r.CELEvaluator.ResolveWithInputs(ctx, with, vars)
-	if err != nil {
-		// This is where we detect if an upstream output is not ready.
-		// The CEL evaluator will return a compile error for an undeclared reference.
-		return nil, fmt.Errorf("failed to resolve inputs with CEL: %w", err)
-	}
-
-	inputBytes, err := json.Marshal(resolvedInputs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal resolved inputs: %w", err)
-	}
-
-	// Setup secrets
 	secretEnvVars, volumes, volumeMounts := r.setupSecrets(ctx, resolvedConfig, engramTemplate)
+	envVars := r.buildBaseEnvVars(srun, story, inputBytes, stepTimeout)
+	envVars = r.appendGRPCTuningEnv(envVars)
+	envVars = r.appendStorageEnv(envVars, resolvedConfig, stepLogger)
 
-	// Determine startedAt timestamp for accurate duration tracking
+	activeDeadlineSeconds := int64((stepTimeout + 2*time.Minute).Seconds())
 	startedAt := metav1.Now()
 	if srun.Status.StartedAt != nil {
 		startedAt = *srun.Status.StartedAt
 	}
+	r.addStartedAtEnv(&envVars, startedAt)
+	envVars = append(envVars, secretEnvVars...)
+	if engram.Spec.With != nil && len(engram.Spec.With.Raw) > 0 {
+		envVars = append(envVars, corev1.EnvVar{Name: "BUBU_CONFIG", Value: string(engram.Spec.With.Raw)})
+	}
 
-	// Base environment variables
+	job := r.buildJobSpec(srun, resolvedConfig, envVars, volumes, volumeMounts, activeDeadlineSeconds)
+	if err := controllerutil.SetControllerReference(srun, job, r.Scheme); err != nil {
+		return nil, err
+	}
+	_ = storyRun // storyRun currently unused beyond inputs; keep for future enhancements
+	return job, nil
+}
+
+func (r *StepRunReconciler) prepareExecutionContext(ctx context.Context, srun *runsv1alpha1.StepRun, engram *v1alpha1.Engram, engramTemplate *catalogv1alpha1.EngramTemplate, stepLogger *logging.ControllerLogger) (*v1alpha1.Story, *runsv1alpha1.StoryRun, *config.ResolvedExecutionConfig, []byte, time.Duration, error) {
+	story, err := r.getStoryForStep(ctx, srun)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to get story for step: %w", err)
+	}
+	storyRun, err := r.getParentStoryRun(ctx, srun)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to get parent storyrun: %w", err)
+	}
+	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, srun, story, engram, engramTemplate)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to resolve execution config for step '%s': %w", srun.Name, err)
+	}
+	stepLogger.Info("Resolved ServiceAccountName", "sa", resolvedConfig.ServiceAccountName)
+	storyRunInputs, err := r.getStoryRunInputs(ctx, storyRun)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to get storyrun inputs: %w", err)
+	}
+	stepOutputs, err := getPriorStepOutputs(ctx, r.Client, storyRun, nil)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to get prior step outputs: %w", err)
+	}
+	with := map[string]any{}
+	if srun.Spec.Input != nil {
+		if err := json.Unmarshal(srun.Spec.Input.Raw, &with); err != nil {
+			return nil, nil, nil, nil, 0, fmt.Errorf("failed to unmarshal step 'with' block: %w", err)
+		}
+	}
+	vars := map[string]any{"inputs": storyRunInputs, "steps": stepOutputs}
+	resolvedInputs, err := r.CELEvaluator.ResolveWithInputs(ctx, with, vars)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to resolve inputs with CEL: %w", err)
+	}
+	inputBytes, err := json.Marshal(resolvedInputs)
+	if err != nil {
+		return nil, nil, nil, nil, 0, fmt.Errorf("failed to marshal resolved inputs: %w", err)
+	}
+	stepTimeout := r.computeStepTimeout(story, stepLogger)
+	return story, storyRun, resolvedConfig, inputBytes, stepTimeout, nil
+}
+
+func (r *StepRunReconciler) computeStepTimeout(story *v1alpha1.Story, stepLogger *logging.ControllerLogger) time.Duration {
+	stepTimeout := r.ConfigResolver.GetOperatorConfig().Controller.DefaultStepTimeout
+	if stepTimeout == 0 {
+		stepTimeout = 30 * time.Minute
+	}
+	if story.Spec.Policy != nil && story.Spec.Policy.Timeouts != nil && story.Spec.Policy.Timeouts.Step != nil {
+		if parsedTimeout, err := time.ParseDuration(*story.Spec.Policy.Timeouts.Step); err == nil && parsedTimeout > 0 {
+			stepTimeout = parsedTimeout
+			stepLogger.Info("Using Story-level step timeout", "timeout", stepTimeout)
+		} else if err != nil {
+			stepLogger.Error(err, "Invalid step timeout in Story policy, using default", "rawTimeout", *story.Spec.Policy.Timeouts.Step, "default", stepTimeout)
+		}
+	}
+	return stepTimeout
+}
+
+func (r *StepRunReconciler) buildBaseEnvVars(srun *runsv1alpha1.StepRun, story *v1alpha1.Story, inputBytes []byte, stepTimeout time.Duration) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
 		{Name: "BUBU_STORY_NAME", Value: story.Name},
 		{Name: "BUBU_STORYRUN_ID", Value: srun.Spec.StoryRunRef.Name},
@@ -427,16 +449,18 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 		{Name: "BUBU_STEPRUN_NAME", Value: srun.Name},
 		{Name: "BUBU_STEPRUN_NAMESPACE", Value: srun.Namespace},
 		{Name: "BUBU_INPUTS", Value: string(inputBytes)},
-		{Name: "BUBU_STARTED_AT", Value: startedAt.Format(time.RFC3339Nano)},
 		{Name: "BUBU_EXECUTION_MODE", Value: "batch"},
 		{Name: "BUBU_GRPC_PORT", Value: fmt.Sprintf("%d", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort)},
 		{Name: "BUBU_MAX_INLINE_SIZE", Value: fmt.Sprintf("%d", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultMaxInlineSize)},
 		{Name: "BUBU_STORAGE_TIMEOUT", Value: fmt.Sprintf("%ds", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultStorageTimeoutSeconds)},
+		{Name: "BUBU_STEP_TIMEOUT", Value: stepTimeout.String()},
 	}
+	return envVars
+}
 
-	// Add gRPC tuning parameters for consistency, even in batch mode
+func (r *StepRunReconciler) appendGRPCTuningEnv(envVars []corev1.EnvVar) []corev1.EnvVar {
 	engramConfig := r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig
-	envVars = append(envVars,
+	return append(envVars,
 		corev1.EnvVar{Name: "BUBU_GRPC_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxRecvMsgBytes)},
 		corev1.EnvVar{Name: "BUBU_GRPC_MAX_SEND_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxSendMsgBytes)},
 		corev1.EnvVar{Name: "BUBU_GRPC_CLIENT_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxRecvMsgBytes)},
@@ -448,53 +472,34 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 		corev1.EnvVar{Name: "BUBU_GRPC_RECONNECT_MAX_BACKOFF", Value: fmt.Sprintf("%ds", engramConfig.DefaultReconnectMaxBackoffSeconds)},
 		corev1.EnvVar{Name: "BUBU_GRPC_HANG_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultHangTimeoutSeconds)},
 		corev1.EnvVar{Name: "BUBU_GRPC_MESSAGE_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)},
-		corev1.EnvVar{Name: "BUBU_GRPC_CHANNEL_SEND_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)}, // Re-use message timeout
+		corev1.EnvVar{Name: "BUBU_GRPC_CHANNEL_SEND_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)},
 	)
+}
 
-	// Determine step timeout with priority hierarchy:
-	// 1. Story.Spec.Policy.Timeouts.Step (highest priority)
-	// 2. Operator config DefaultStepTimeout
-	// 3. Fallback to 30 minutes (matches SDK default)
-	// This allows SDK to enforce timeout before Job-level activeDeadlineSeconds kills the pod
-	stepTimeout := r.ConfigResolver.GetOperatorConfig().Controller.DefaultStepTimeout
-	if stepTimeout == 0 {
-		stepTimeout = 30 * time.Minute // Fallback to SDK's default
-	}
-	// Override from Story-level policy if specified
-	if story.Spec.Policy != nil && story.Spec.Policy.Timeouts != nil && story.Spec.Policy.Timeouts.Step != nil {
-		if parsedTimeout, err := time.ParseDuration(*story.Spec.Policy.Timeouts.Step); err == nil && parsedTimeout > 0 {
-			stepTimeout = parsedTimeout
-			stepLogger.Info("Using Story-level step timeout", "timeout", stepTimeout)
-		} else {
-			stepLogger.Error(err, "Invalid step timeout in Story policy, using default", "rawTimeout", *story.Spec.Policy.Timeouts.Step, "default", stepTimeout)
+func (r *StepRunReconciler) appendStorageEnv(envVars []corev1.EnvVar, resolvedConfig *config.ResolvedExecutionConfig, stepLogger *logging.ControllerLogger) []corev1.EnvVar {
+	if storagePolicy := resolvedConfig.Storage; storagePolicy != nil && storagePolicy.S3 != nil {
+		s3Config := storagePolicy.S3
+		stepLogger.Info("Configuring pod for S3 object storage access", "bucket", s3Config.Bucket)
+		envVars = append(envVars,
+			corev1.EnvVar{Name: "BUBU_STORAGE_PROVIDER", Value: "s3"},
+			corev1.EnvVar{Name: "BUBU_STORAGE_S3_BUCKET", Value: s3Config.Bucket},
+		)
+		if s3Config.Region != "" {
+			envVars = append(envVars, corev1.EnvVar{Name: "BUBU_STORAGE_S3_REGION", Value: s3Config.Region})
+		}
+		if s3Config.Endpoint != "" {
+			envVars = append(envVars, corev1.EnvVar{Name: "BUBU_STORAGE_S3_ENDPOINT", Value: s3Config.Endpoint})
 		}
 	}
-	envVars = append(envVars, corev1.EnvVar{
-		Name:  "BUBU_STEP_TIMEOUT",
-		Value: stepTimeout.String(), // e.g., "30m", "5m"
-	})
+	return envVars
+}
 
-	// Calculate activeDeadlineSeconds for defense-in-depth timeout enforcement.
-	// Add 2-minute grace period to allow SDK time to:
-	// - Dehydrate large outputs (up to 60s for large payloads)
-	// - Patch StepRun status with retries (up to 30s)
-	// - Flush logs and cleanup (up to 5s)
-	// This provides Kubernetes-level timeout enforcement if SDK process hangs
-	// before reaching its exit logic (kernel deadlock, OOM, etc.).
-	activeDeadlineSeconds := int64((stepTimeout + 2*time.Minute).Seconds())
+func (r *StepRunReconciler) addStartedAtEnv(envVars *[]corev1.EnvVar, startedAt metav1.Time) {
+	*envVars = append(*envVars, corev1.EnvVar{Name: "BUBU_STARTED_AT", Value: startedAt.Format(time.RFC3339Nano)})
+}
 
-	envVars = append(envVars, secretEnvVars...)
-
-	// Serialize engram's 'with' configuration to JSON for the SDK
-	// This mirrors the logic in realtime_engram_controller.go for streaming engrams
-	if engram.Spec.With != nil && len(engram.Spec.With.Raw) > 0 {
-		envVars = append(envVars, corev1.EnvVar{
-			Name:  "BUBU_CONFIG",
-			Value: string(engram.Spec.With.Raw),
-		})
-	}
-
-	job := &batchv1.Job{
+func (r *StepRunReconciler) buildJobSpec(srun *runsv1alpha1.StepRun, resolvedConfig *config.ResolvedExecutionConfig, envVars []corev1.EnvVar, volumes []corev1.Volume, volumeMounts []corev1.VolumeMount, activeDeadlineSeconds int64) *batchv1.Job {
+	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      srun.Name,
 			Namespace: srun.Namespace,
@@ -511,9 +516,7 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 			TTLSecondsAfterFinished: &resolvedConfig.TTLSecondsAfterFinished,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"bubustack.io/steprun": srun.Name,
-					},
+					Labels: map[string]string{"bubustack.io/steprun": srun.Name},
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy:                 resolvedConfig.RestartPolicy,
@@ -521,6 +524,7 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 					AutomountServiceAccountToken:  &resolvedConfig.AutomountServiceAccountToken,
 					TerminationGracePeriodSeconds: &r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultTerminationGracePeriodSeconds,
 					SecurityContext:               resolvedConfig.ToPodSecurityContext(),
+					Volumes:                       volumes,
 					Containers: []corev1.Container{{
 						Name:            "engram",
 						Image:           resolvedConfig.Image,
@@ -530,52 +534,13 @@ func (r *StepRunReconciler) createJobForStep(ctx context.Context, srun *runsv1al
 						LivenessProbe:   resolvedConfig.LivenessProbe,
 						ReadinessProbe:  resolvedConfig.ReadinessProbe,
 						StartupProbe:    resolvedConfig.StartupProbe,
+						Env:             envVars,
+						VolumeMounts:    volumeMounts,
 					}},
 				},
 			},
 		},
 	}
-
-	// Handle object storage configuration
-	if storagePolicy := resolvedConfig.Storage; storagePolicy != nil && storagePolicy.S3 != nil {
-		s3Config := storagePolicy.S3
-		stepLogger.Info("Configuring pod for S3 object storage access", "bucket", s3Config.Bucket)
-
-		// Add environment variables for the SDK
-		envVars = append(envVars,
-			corev1.EnvVar{Name: "BUBU_STORAGE_PROVIDER", Value: "s3"},
-			corev1.EnvVar{Name: "BUBU_STORAGE_S3_BUCKET", Value: s3Config.Bucket},
-		)
-		if s3Config.Region != "" {
-			envVars = append(envVars, corev1.EnvVar{Name: "BUBU_STORAGE_S3_REGION", Value: s3Config.Region})
-		}
-		if s3Config.Endpoint != "" {
-			envVars = append(envVars, corev1.EnvVar{Name: "BUBU_STORAGE_S3_ENDPOINT", Value: s3Config.Endpoint})
-		}
-
-		// Handle secret-based authentication
-		if auth := &s3Config.Authentication; auth.SecretRef != nil {
-			secretName := auth.SecretRef.Name
-			stepLogger.Info("Using S3 secret reference for authentication", "secretName", secretName)
-			// envFromSources = append(envFromSources, corev1.EnvFromSource{ // This line is removed
-			// 	SecretRef: &corev1.SecretEnvSource{
-			// 		LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-			// 	},
-			// })
-		}
-	}
-
-	// Final assembly of pod spec
-	job.Spec.Template.Spec.Volumes = volumes
-	job.Spec.Template.Spec.Containers[0].VolumeMounts = volumeMounts
-	job.Spec.Template.Spec.Containers[0].Env = envVars
-	// job.Spec.Template.Spec.Containers[0].EnvFrom = envFromSources // This line is removed
-
-	if err := controllerutil.SetControllerReference(srun, job, r.Scheme); err != nil {
-		return nil, err
-	}
-
-	return job, nil
 }
 
 // getStoryRunInputs fetches the initial inputs from the parent StoryRun.

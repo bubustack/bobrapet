@@ -43,93 +43,49 @@ func NewDAGReconciler(k8sClient client.Client, celEval *cel.Evaluator, stepExecu
 func (r *DAGReconciler) Reconcile(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story) (ctrl.Result, error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun-dag").WithValues("storyrun", srun.Name)
 
-	// 1. Initialize Status
-	if srun.Status.StepStates == nil {
-		srun.Status.StepStates = make(map[string]runsv1alpha1.StepState)
-	}
+	r.initStepStatesIfNeeded(srun)
 
-	// 2. Sync State from Child Resources (StepRuns)
 	stepRunList, err := r.syncStateFromStepRuns(ctx, srun)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	log.Info("Synced StepRuns", "count", len(stepRunList.Items))
 
-	// Loop to traverse the DAG as far as possible in one reconciliation cycle.
-	// The loop is bounded by the number of steps to prevent infinite cycles in case of bugs.
 	priorStepOutputs, err := getPriorStepOutputs(ctx, r.Client, srun, stepRunList)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to get prior step outputs: %w", err)
 	}
-	for i := 0; i < len(story.Spec.Steps)+1; i++ { // +1 to allow one final check after all steps are processed
-		// Sync state from synchronous sub-stories
-		if updated := r.checkSyncSubStories(ctx, srun, story); updated {
-			// If a sub-story status was synced, we must re-fetch the outputs
-			// Inefficient to re-list all step runs, but acceptable for now as sub-stories are less common.
-			// A future improvement would be to only fetch the single sub-story's output and merge it in.
-			stepRunList, err = r.syncStateFromStepRuns(ctx, srun)
-			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to re-sync step runs after sub-story sync: %w", err)
-			}
-			priorStepOutputs, err = getPriorStepOutputs(ctx, r.Client, srun, stepRunList)
-			if err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to re-fetch prior step outputs after sub-story sync: %w", err)
-			}
+
+	for i := 0; i < len(story.Spec.Steps)+1; i++ { // bounded traversal
+		_, priorStepOutputs, err = r.refreshAfterSubStoriesIfNeeded(ctx, srun, story, stepRunList, priorStepOutputs)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
 
-		// Build state maps for DAG traversal
 		completedSteps, runningSteps, failedSteps := buildStateMaps(srun.Status.StepStates)
-
-		// 5. Check for StoryRun Completion or Failure
-		if len(failedSteps) > 0 && r.shouldFailFast(story) {
-			return ctrl.Result{}, r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, "A step failed and fail-fast policy is enabled.")
-		}
-		if len(completedSteps) == len(story.Spec.Steps) {
-			if err := r.finalizeSuccessfulRun(ctx, srun, story); err != nil {
-				log.Error(err, "Failed to finalize successful story run")
-				// Try to set phase to failed, but the finalization error is the root cause.
-				_ = r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, "Failed to evaluate final output template.")
-				return ctrl.Result{}, err // Return the evaluation error
-			}
-			return ctrl.Result{}, nil // Finalization handles setting the Succeeded phase
+		if done, err := r.checkCompletionOrFailure(ctx, srun, story, failedSteps, completedSteps, log); done || err != nil {
+			return ctrl.Result{}, err
 		}
 
-		// 6. Persist current status BEFORE launching new steps so downstream resolvers can see prior outputs.
-		// This prevents a race where a newly created StepRun's reconciler fetches the
-		// parent StoryRun before its status is updated with the latest completed steps.
-		if err := patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
-			sr := obj.(*runsv1alpha1.StoryRun)
-			sr.Status.StepStates = srun.Status.StepStates
-		}); err != nil {
+		if err := r.persistStepStates(ctx, srun); err != nil {
 			log.Error(err, "Failed to patch StoryRun status before launching steps")
 			return ctrl.Result{}, err
 		}
 
-		// 7. Find and Launch Ready Steps
 		readySteps, skippedSteps, err := r.findAndLaunchReadySteps(ctx, srun, story, completedSteps, runningSteps, priorStepOutputs)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 
-		// 8. Persist Status Changes (including skipped steps)
-		err = patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
-			sr := obj.(*runsv1alpha1.StoryRun)
-			// Merge the maps to ensure we don't lose state
-			for k, v := range srun.Status.StepStates {
-				sr.Status.StepStates[k] = v
-			}
-		})
-		if err != nil {
+		if err := r.persistMergedStates(ctx, srun); err != nil {
 			log.Error(err, "Failed to patch StoryRun status")
 			return ctrl.Result{}, err
 		}
-
 		if len(readySteps) == 0 && len(skippedSteps) == 0 {
-			break // DAG is stable, no more progress can be made in this cycle.
+			break
 		}
 
-		// After launching, immediately sync state again and refresh prior outputs
-		// to allow the next level of the DAG to be processed in this cycle.
+		// refresh for next level
 		stepRunList, err = r.syncStateFromStepRuns(ctx, srun)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -139,8 +95,59 @@ func (r *DAGReconciler) Reconcile(ctx context.Context, srun *runsv1alpha1.StoryR
 			return ctrl.Result{}, err
 		}
 	}
-
 	return ctrl.Result{}, nil
+}
+
+func (r *DAGReconciler) initStepStatesIfNeeded(srun *runsv1alpha1.StoryRun) {
+	if srun.Status.StepStates == nil {
+		srun.Status.StepStates = make(map[string]runsv1alpha1.StepState)
+	}
+}
+
+func (r *DAGReconciler) refreshAfterSubStoriesIfNeeded(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, stepRunList *runsv1alpha1.StepRunList, prior map[string]any) (*runsv1alpha1.StepRunList, map[string]any, error) {
+	if updated := r.checkSyncSubStories(ctx, srun, story); !updated {
+		return stepRunList, prior, nil
+	}
+	lst, err := r.syncStateFromStepRuns(ctx, srun)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to re-sync step runs after sub-story sync: %w", err)
+	}
+	out, err := getPriorStepOutputs(ctx, r.Client, srun, lst)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to re-fetch prior step outputs after sub-story sync: %w", err)
+	}
+	return lst, out, nil
+}
+
+func (r *DAGReconciler) checkCompletionOrFailure(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, failed, completed map[string]bool, log *logging.ControllerLogger) (bool, error) {
+	if len(failed) > 0 && r.shouldFailFast(story) {
+		return true, r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, "A step failed and fail-fast policy is enabled.")
+	}
+	if len(completed) == len(story.Spec.Steps) {
+		if err := r.finalizeSuccessfulRun(ctx, srun, story); err != nil {
+			log.Error(err, "Failed to finalize successful story run")
+			_ = r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, "Failed to evaluate final output template.")
+			return true, err
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+func (r *DAGReconciler) persistStepStates(ctx context.Context, srun *runsv1alpha1.StoryRun) error {
+	return patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
+		sr := obj.(*runsv1alpha1.StoryRun)
+		sr.Status.StepStates = srun.Status.StepStates
+	})
+}
+
+func (r *DAGReconciler) persistMergedStates(ctx context.Context, srun *runsv1alpha1.StoryRun) error {
+	return patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
+		sr := obj.(*runsv1alpha1.StoryRun)
+		for k, v := range srun.Status.StepStates {
+			sr.Status.StepStates[k] = v
+		}
+	})
 }
 
 func (r *DAGReconciler) syncStateFromStepRuns(ctx context.Context, srun *runsv1alpha1.StoryRun) (*runsv1alpha1.StepRunList, error) {
@@ -261,25 +268,48 @@ func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha
 	log := logging.NewReconcileLogger(ctx, "dag-output-resolver")
 	outputs := make(map[string]any)
 
-	// The StoryRun's status.stepOutputs field is deprecated and no longer used.
-	// Instead, we always resolve outputs by listing the child StepRun objects,
-	// which is the single source of truth.
-	if stepRunList == nil {
-		var newList runsv1alpha1.StepRunList
-		if err := c.List(ctx, &newList, client.InNamespace(srun.Namespace),
-			client.MatchingLabels{"bubustack.io/storyrun": srun.Name}); err != nil {
-			log.Error(err, "Failed to list StepRuns for output resolution")
-			return nil, err
-		}
-		stepRunList = &newList
+	// Ensure we have a list of StepRuns to inspect
+	lst, err := ensureStepRunList(ctx, c, srun, stepRunList, log)
+	if err != nil {
+		return nil, err
 	}
 
+	// Collect outputs from StepRuns and synchronous sub-stories
+	collectOutputsFromStepRuns(lst, outputs, log)
+	collectOutputsFromSubStories(ctx, c, srun, outputs, log)
+
+	// Add normalized aliases for CEL expressions
+	addAliasKeys(outputs)
+
+	return outputs, nil
+}
+
+// ensureStepRunList returns a non-nil StepRunList scoped to the StoryRun
+func ensureStepRunList(
+	ctx context.Context,
+	c client.Client,
+	srun *runsv1alpha1.StoryRun,
+	stepRunList *runsv1alpha1.StepRunList,
+	log *logging.ReconcileLogger,
+) (*runsv1alpha1.StepRunList, error) {
+	if stepRunList != nil {
+		return stepRunList, nil
+	}
+	var newList runsv1alpha1.StepRunList
+	if err := c.List(ctx, &newList, client.InNamespace(srun.Namespace), client.MatchingLabels{"bubustack.io/storyrun": srun.Name}); err != nil {
+		log.Error(err, "Failed to list StepRuns for output resolution")
+		return nil, err
+	}
+	return &newList, nil
+}
+
+// collectOutputsFromStepRuns extracts outputs from succeeded StepRuns into outputs map
+func collectOutputsFromStepRuns(stepRunList *runsv1alpha1.StepRunList, outputs map[string]any, log *logging.ReconcileLogger) {
 	for i := range stepRunList.Items {
 		sr := &stepRunList.Items[i]
 		if _, exists := outputs[sr.Spec.StepID]; exists {
-			continue // An output for this step has already been resolved.
+			continue
 		}
-
 		if sr.Status.Phase == enums.PhaseSucceeded && sr.Status.Output != nil {
 			var outputData map[string]any
 			if err := json.Unmarshal(sr.Status.Output.Raw, &outputData); err != nil {
@@ -289,41 +319,42 @@ func getPriorStepOutputs(ctx context.Context, c client.Client, srun *runsv1alpha
 			outputs[sr.Spec.StepID] = map[string]any{"outputs": outputData}
 		}
 	}
+}
 
-	// Also resolve outputs from completed synchronous sub-stories.
+// collectOutputsFromSubStories extracts outputs from completed synchronous sub-stories
+func collectOutputsFromSubStories(ctx context.Context, c client.Client, srun *runsv1alpha1.StoryRun, outputs map[string]any, log *logging.ReconcileLogger) {
 	for stepID, state := range srun.Status.StepStates {
-		if state.Phase == enums.PhaseSucceeded && state.SubStoryRunName != "" {
-			if _, exists := outputs[stepID]; exists {
-				continue // Already populated, maybe from a StepRun (shouldn't happen for substories)
+		if state.Phase != enums.PhaseSucceeded || state.SubStoryRunName == "" {
+			continue
+		}
+		if _, exists := outputs[stepID]; exists {
+			continue
+		}
+		subRun := &runsv1alpha1.StoryRun{}
+		subRunKey := types.NamespacedName{Name: state.SubStoryRunName, Namespace: srun.Namespace}
+		if err := c.Get(ctx, subRunKey, subRun); err != nil {
+			log.Error(err, "Failed to get sub-StoryRun for output resolution", "subStoryRun", state.SubStoryRunName)
+			continue
+		}
+		if subRun.Status.Output != nil {
+			var outputData map[string]any
+			if err := json.Unmarshal(subRun.Status.Output.Raw, &outputData); err != nil {
+				log.Error(err, "Failed to unmarshal output from sub-StoryRun", "step", stepID)
+				continue
 			}
-
-			subRun := &runsv1alpha1.StoryRun{}
-			subRunKey := types.NamespacedName{Name: state.SubStoryRunName, Namespace: srun.Namespace}
-			if err := c.Get(ctx, subRunKey, subRun); err != nil {
-				log.Error(err, "Failed to get sub-StoryRun for output resolution", "subStoryRun", state.SubStoryRunName)
-				continue // Don't fail the whole reconcile, just skip this output
-			}
-
-			if subRun.Status.Output != nil {
-				var outputData map[string]any
-				if err := json.Unmarshal(subRun.Status.Output.Raw, &outputData); err != nil {
-					log.Error(err, "Failed to unmarshal output from sub-StoryRun", "step", stepID)
-					continue
-				}
-				outputs[stepID] = map[string]any{"outputs": outputData}
-			}
+			outputs[stepID] = map[string]any{"outputs": outputData}
 		}
 	}
+}
 
-	// Add normalized aliases for CEL expressions.
+// addAliasKeys duplicates keys using normalized aliases for CEL convenience
+func addAliasKeys(outputs map[string]any) {
 	for stepID, stepContext := range outputs {
 		alias := normalizeStepIdentifier(stepID)
 		if _, exists := outputs[alias]; !exists {
 			outputs[alias] = stepContext
 		}
 	}
-
-	return outputs, nil
 }
 
 func (r *DAGReconciler) findReadySteps(ctx context.Context, steps []bubuv1alpha1.Step, completed, running map[string]bool, dependencies map[string]map[string]bool, vars map[string]any) ([]*bubuv1alpha1.Step, []*bubuv1alpha1.Step) {

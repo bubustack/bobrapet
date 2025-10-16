@@ -72,19 +72,10 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	templateLogger := rl.WithValues("template", template.Name, "version", template.Spec.Version)
 	rl.ReconcileStart("Processing ImpulseTemplate")
 
-	// Validate required fields
-	if template.Spec.Image == "" {
-		r.updateErrorStatus(&template, "image is required")
-		rl.ReconcileError(fmt.Errorf("image missing"), "Image is required for ImpulseTemplate")
-		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
-		}
-		return ctrl.Result{}, nil
-	}
-
-	if template.Spec.Version == "" {
-		r.updateErrorStatus(&template, "version is required")
-		rl.ReconcileError(fmt.Errorf("version missing"), "Version is required for ImpulseTemplate")
+	// Validate required fields (extracted helper)
+	if missing, handled := r.handleRequiredFields(&template); handled {
+		r.updateErrorStatus(&template, fmt.Sprintf("%s is required", missing))
+		rl.ReconcileError(fmt.Errorf("%s missing", missing), fmt.Sprintf("%s is required for ImpulseTemplate", missing))
 		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
@@ -93,43 +84,25 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	templateLogger.Info("Validating ImpulseTemplate", "image", template.Spec.Image, "version", template.Spec.Version)
 
-	// Validate supported modes are appropriate for impulses (deployment or statefulset only)
-	validImpulseModes := []enums.WorkloadMode{"deployment", "statefulset"}
-	for _, mode := range template.Spec.SupportedModes {
-		if !slices.Contains(validImpulseModes, mode) {
-			r.updateErrorStatus(&template, fmt.Sprintf("invalid supported mode '%s' for impulse template (must be deployment or statefulset)", mode))
-			rl.ReconcileError(fmt.Errorf("invalid supported mode: %s", mode), "Invalid supported mode for ImpulseTemplate")
-			if err := r.updateStatusWithRetry(ctx, &template); err != nil {
-				return ctrl.Result{RequeueAfter: 5 * time.Second}, err
-			}
-			return ctrl.Result{}, nil
+	// Validate supported modes (extracted helper)
+	if invalidMode, handled := r.validateSupportedModes(&template); handled {
+		r.updateErrorStatus(&template, fmt.Sprintf("invalid supported mode '%s' for impulse template (must be deployment or statefulset)", invalidMode))
+		rl.ReconcileError(fmt.Errorf("invalid supported mode: %s", invalidMode), "Invalid supported mode for ImpulseTemplate")
+		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
+		return ctrl.Result{}, nil
 	}
 	templateLogger.V(1).Info("Supported modes validated", "modes", template.Spec.SupportedModes)
 
-	// Validate JSON schemas if provided
-	if template.Spec.ContextSchema != nil {
-		if err := r.validateJSONSchema(template.Spec.ContextSchema.Raw); err != nil {
-			r.updateErrorStatus(&template, fmt.Sprintf("invalid context schema: %v", err))
-			rl.ReconcileError(err, "Invalid context schema")
-			if updateErr := r.updateStatusWithRetry(ctx, &template); updateErr != nil {
-				templateLogger.Error(updateErr, "failed to update status after schema validation error")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	// Validate JSON schemas if provided (extracted helper)
+	if which, serr := r.validateAllSchemas(&template); which != "" {
+		r.updateErrorStatus(&template, fmt.Sprintf("invalid %s schema: %v", which, serr))
+		rl.ReconcileError(serr, fmt.Sprintf("Invalid %s schema", which))
+		if updateErr := r.updateStatusWithRetry(ctx, &template); updateErr != nil {
+			templateLogger.Error(updateErr, "failed to update status after schema validation error")
 		}
-		templateLogger.V(1).Info("Context schema validated")
-	}
-
-	if template.Spec.ConfigSchema != nil {
-		if err := r.validateJSONSchema(template.Spec.ConfigSchema.Raw); err != nil {
-			r.updateErrorStatus(&template, fmt.Sprintf("invalid config schema: %v", err))
-			rl.ReconcileError(err, "Invalid config schema")
-			if updateErr := r.updateStatusWithRetry(ctx, &template); updateErr != nil {
-				templateLogger.Error(updateErr, "failed to update status after schema validation error")
-			}
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-		templateLogger.V(1).Info("Config schema validated")
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// Update status to ready
@@ -234,4 +207,41 @@ func (r *ImpulseTemplateReconciler) setupControllerWithOptions(mgr ctrl.Manager,
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Named("catalog-impulsetemplate").
 		Complete(r)
+}
+
+// handleRequiredFields returns which required field is missing if any, and whether it's handled.
+func (r *ImpulseTemplateReconciler) handleRequiredFields(t *catalogv1alpha1.ImpulseTemplate) (missing string, handled bool) {
+	if t.Spec.Image == "" {
+		return "image", true
+	}
+	if t.Spec.Version == "" {
+		return "version", true
+	}
+	return "", false
+}
+
+// validateSupportedModes ensures only deployment/statefulset are allowed for impulses.
+func (r *ImpulseTemplateReconciler) validateSupportedModes(t *catalogv1alpha1.ImpulseTemplate) (invalid enums.WorkloadMode, handled bool) {
+	valid := []enums.WorkloadMode{"deployment", "statefulset"}
+	for _, mode := range t.Spec.SupportedModes {
+		if !slices.Contains(valid, mode) {
+			return mode, true
+		}
+	}
+	return "", false
+}
+
+// validateAllSchemas validates context/config schemas and returns which failed and error.
+func (r *ImpulseTemplateReconciler) validateAllSchemas(t *catalogv1alpha1.ImpulseTemplate) (which string, err error) {
+	if t.Spec.ContextSchema != nil {
+		if err := r.validateJSONSchema(t.Spec.ContextSchema.Raw); err != nil {
+			return "context", err
+		}
+	}
+	if t.Spec.ConfigSchema != nil {
+		if err := r.validateJSONSchema(t.Spec.ConfigSchema.Raw); err != nil {
+			return "config", err
+		}
+	}
+	return "", nil
 }

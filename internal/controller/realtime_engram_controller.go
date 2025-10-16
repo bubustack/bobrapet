@@ -131,11 +131,8 @@ func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		metrics.RecordControllerReconcile("realtime-engram", time.Since(startTime), err)
 	}()
 
-	// Bound reconcile duration
-	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
+	ctx, cancel := r.withReconcileTimeout(ctx)
+	if cancel != nil {
 		defer cancel()
 	}
 
@@ -144,121 +141,166 @@ func (r *RealtimeEngramReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// This reconciler only handles non-job modes.
-	// If the engram is not in a realtime mode, we should ensure our finalizer is removed and then stop.
-	if engram.Spec.Mode != enums.WorkloadModeDeployment && engram.Spec.Mode != enums.WorkloadModeStatefulSet {
-		if controllerutil.ContainsFinalizer(&engram, RealtimeEngramFinalizer) {
-			controllerutil.RemoveFinalizer(&engram, RealtimeEngramFinalizer)
-			if err := r.Update(ctx, &engram); err != nil {
-				log.Error(err, "Failed to remove realtime finalizer from job-mode Engram")
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
+	// If not a realtime mode, ensure finalizer is removed and stop.
+	if handled, err := r.handleNonRealtimeFinalizerIfNeeded(ctx, &engram, log); handled || err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Handle deletion
-	if !engram.DeletionTimestamp.IsZero() {
-		if err := r.reconcileDelete(ctx, &engram); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+	if handled, err := r.handleDeletionIfNeeded(ctx, &engram); handled || err != nil {
+		return ctrl.Result{}, err
 	}
 
-	// Add finalizer if it doesn't exist
-	if !controllerutil.ContainsFinalizer(&engram, RealtimeEngramFinalizer) {
-		controllerutil.AddFinalizer(&engram, RealtimeEngramFinalizer)
-		if err := r.Update(ctx, &engram); err != nil {
-			log.Error(err, "Failed to add realtime finalizer")
-			return ctrl.Result{}, err
-		}
+	// Ensure finalizer exists
+	if err := r.ensureRealtimeFinalizer(ctx, &engram, log); err != nil {
+		return ctrl.Result{}, err
 	}
 
-	// Get the referenced EngramTemplate
-	template, err := r.getEngramTemplate(ctx, &engram)
+	return r.reconcileRealtime(ctx, &engram, log)
+}
+
+// withReconcileTimeout applies a controller-configured timeout to the given context.
+func (r *RealtimeEngramReconciler) withReconcileTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	if timeout <= 0 {
+		return ctx, nil
+	}
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
+	return ctxWithTimeout, cancel
+}
+
+// handleNonRealtimeFinalizerIfNeeded removes the realtime finalizer for non-realtime modes.
+func (r *RealtimeEngramReconciler) handleNonRealtimeFinalizerIfNeeded(ctx context.Context, engram *v1alpha1.Engram, log *logging.ControllerLogger) (bool, error) {
+	if engram.Spec.Mode == enums.WorkloadModeDeployment || engram.Spec.Mode == enums.WorkloadModeStatefulSet {
+		return false, nil
+	}
+	if controllerutil.ContainsFinalizer(engram, RealtimeEngramFinalizer) {
+		controllerutil.RemoveFinalizer(engram, RealtimeEngramFinalizer)
+		if err := r.Update(ctx, engram); err != nil {
+			log.Error(err, "Failed to remove realtime finalizer from non-realtime Engram")
+			return true, err
+		}
+	}
+	return true, nil
+}
+
+// handleDeletionIfNeeded handles deletion flow when DeletionTimestamp is set.
+func (r *RealtimeEngramReconciler) handleDeletionIfNeeded(ctx context.Context, engram *v1alpha1.Engram) (bool, error) {
+	if engram.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if err := r.reconcileDelete(ctx, engram); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// ensureRealtimeFinalizer ensures the reconciler finalizer is present.
+func (r *RealtimeEngramReconciler) ensureRealtimeFinalizer(ctx context.Context, engram *v1alpha1.Engram, log *logging.ControllerLogger) error {
+	if controllerutil.ContainsFinalizer(engram, RealtimeEngramFinalizer) {
+		return nil
+	}
+	controllerutil.AddFinalizer(engram, RealtimeEngramFinalizer)
+	if err := r.Update(ctx, engram); err != nil {
+		log.Error(err, "Failed to add realtime finalizer")
+		return err
+	}
+	return nil
+}
+
+// markTemplateNotFound patches status to Blocked when the template is missing.
+func (r *RealtimeEngramReconciler) markTemplateNotFound(ctx context.Context, engram *v1alpha1.Engram, cause error) (ctrl.Result, error) {
+	updateErr := patch.RetryableStatusPatch(ctx, r.Client, engram, func(obj client.Object) {
+		e := obj.(*v1alpha1.Engram)
+		cm := conditions.NewConditionManager(e.Generation)
+		cm.SetCondition(&e.Status.Conditions, conditions.ConditionReady, metav1.ConditionFalse, conditions.ReasonTemplateNotFound, cause.Error())
+		e.Status.Phase = enums.PhaseBlocked
+	})
+	return ctrl.Result{}, updateErr
+}
+
+// markTemplateResolvedReady marks Engram as Ready after template resolution.
+func (r *RealtimeEngramReconciler) markTemplateResolvedReady(ctx context.Context, engram *v1alpha1.Engram) error {
+	return patch.RetryableStatusPatch(ctx, r.Client, engram, func(obj client.Object) {
+		e := obj.(*v1alpha1.Engram)
+		cm := conditions.NewConditionManager(e.Generation)
+		cm.SetCondition(&e.Status.Conditions, conditions.ConditionReady, metav1.ConditionTrue, conditions.ReasonTemplateResolved, "Engram template was found and is available.")
+		if e.Status.Phase == enums.PhaseBlocked {
+			e.Status.Phase = enums.PhasePending
+		}
+	})
+}
+
+// ensureRunnerServiceAccount ensures a non-default ServiceAccount is used.
+func (r *RealtimeEngramReconciler) ensureRunnerServiceAccount(ctx context.Context, engram *v1alpha1.Engram, resolved *config.ResolvedExecutionConfig, log *logging.ControllerLogger) error {
+	if resolved.ServiceAccountName != "" && resolved.ServiceAccountName != "default" {
+		return nil
+	}
+	saName := fmt.Sprintf("%s-engram-runner", engram.Name)
+	if err := r.ensureEngramServiceAccount(ctx, engram, saName); err != nil {
+		log.Error(err, "Failed to ensure ServiceAccount for realtime engram")
+		return err
+	}
+	resolved.ServiceAccountName = saName
+	return nil
+}
+
+// reconcileWorkload dispatches to the proper workload reconciler based on mode.
+func (r *RealtimeEngramReconciler) reconcileWorkload(ctx context.Context, engram *v1alpha1.Engram, resolved *config.ResolvedExecutionConfig) error {
+	mode := engram.Spec.Mode
+	if mode == "" {
+		mode = enums.WorkloadModeJob
+	}
+	if mode == enums.WorkloadModeJob {
+		return nil
+	}
+	switch mode {
+	case enums.WorkloadModeDeployment:
+		return r.reconcileDeployment(ctx, engram, resolved)
+	case enums.WorkloadModeStatefulSet:
+		return r.reconcileStatefulSet(ctx, engram, resolved)
+	default:
+		return nil
+	}
+}
+
+// reconcileRealtime performs the core realtime reconciliation steps after guards.
+func (r *RealtimeEngramReconciler) reconcileRealtime(ctx context.Context, engram *v1alpha1.Engram, log *logging.ControllerLogger) (ctrl.Result, error) {
+	// Fetch template
+	template, err := r.getEngramTemplate(ctx, engram)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			log.Info("EngramTemplate not found for Engram, setting status to Blocked")
-			updateErr := patch.RetryableStatusPatch(ctx, r.Client, &engram, func(obj client.Object) {
-				e := obj.(*v1alpha1.Engram)
-				cm := conditions.NewConditionManager(e.Generation)
-				cm.SetCondition(&e.Status.Conditions, conditions.ConditionReady, metav1.ConditionFalse, conditions.ReasonTemplateNotFound, err.Error())
-				e.Status.Phase = enums.PhaseBlocked
-			})
-			// We return the error from the patch operation, but if it's nil, we stop reconciling.
-			return ctrl.Result{}, updateErr
+			return r.markTemplateNotFound(ctx, engram, err)
 		}
-		// For other errors, log as an error and requeue.
 		log.Error(err, "Failed to get EngramTemplate")
 		return ctrl.Result{}, err
 	}
 
-	// If we are here, the template was found. Mark the engram as ready.
-	if err := patch.RetryableStatusPatch(ctx, r.Client, &engram, func(obj client.Object) {
-		e := obj.(*v1alpha1.Engram)
-		cm := conditions.NewConditionManager(e.Generation)
-		cm.SetCondition(&e.Status.Conditions, conditions.ConditionReady, metav1.ConditionTrue, conditions.ReasonTemplateResolved, "Engram template was found and is available.")
-		// We only set phase for terminal/blocked states at this level.
-		// Running state is managed by the workload reconciliation.
-		if e.Status.Phase == enums.PhaseBlocked {
-			e.Status.Phase = enums.PhasePending
-		}
-	}); err != nil {
+	// Mark template resolved
+	if err := r.markTemplateResolvedReady(ctx, engram); err != nil {
 		log.Error(err, "Failed to update Engram status to Ready")
 		return ctrl.Result{}, err
 	}
 
-	// Determine execution mode - Job, Deployment, or StatefulSet
-	// This logic decides which type of workload to create for the Engram
-	mode := engram.Spec.Mode
-	if mode == "" {
-		// Default to job if not specified
-		mode = enums.WorkloadModeJob
-	}
-
-	// This reconciler only handles non-job modes.
-	if mode == enums.WorkloadModeJob {
-		// This case is handled by the check at the beginning of the function.
-		return ctrl.Result{}, nil
-	}
-
-	// Resolve the full configuration
-	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, nil, &engram, template)
+	// Resolve execution config
+	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, nil, engram, template)
 	if err != nil {
 		log.Error(err, "Failed to resolve execution config")
-		// TODO: Update status with an error condition
 		return ctrl.Result{}, err
 	}
 
-	// Ensure a non-default ServiceAccount for realtime engrams if none was specified
-	if resolvedConfig.ServiceAccountName == "" || resolvedConfig.ServiceAccountName == "default" {
-		saName := fmt.Sprintf("%s-engram-runner", engram.Name)
-		if err := r.ensureEngramServiceAccount(ctx, &engram, saName); err != nil {
-			log.Error(err, "Failed to ensure ServiceAccount for realtime engram")
-			return ctrl.Result{}, err
-		}
-		resolvedConfig.ServiceAccountName = saName
-	}
-
-	// At this point, we reconcile the necessary resources for service-like engrams.
-	switch mode {
-	case enums.WorkloadModeDeployment:
-		if err := r.reconcileDeployment(ctx, &engram, resolvedConfig); err != nil {
-			return ctrl.Result{}, err
-		}
-	case enums.WorkloadModeStatefulSet:
-		if err := r.reconcileStatefulSet(ctx, &engram, resolvedConfig); err != nil {
-			return ctrl.Result{}, err
-		}
-	}
-
-	// Reconcile the associated Service
-	if err := r.reconcileService(ctx, &engram, resolvedConfig); err != nil {
+	// Ensure ServiceAccount
+	if err := r.ensureRunnerServiceAccount(ctx, engram, resolvedConfig, log); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// For now, the reconciler's main job is to keep the status in sync with the managed resources.
-	// A more advanced implementation would handle updates, scaling, etc.
+	// Reconcile workload and service
+	if err := r.reconcileWorkload(ctx, engram, resolvedConfig); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileService(ctx, engram, resolvedConfig); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{}, nil
 }
 

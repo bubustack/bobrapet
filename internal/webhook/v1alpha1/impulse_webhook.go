@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/xeipuuv/gojsonschema"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -183,33 +182,17 @@ func (v *ImpulseCustomValidator) validateWithBlock(impulse *bubushv1alpha1.Impul
 	if impulse.Spec.With == nil || len(impulse.Spec.With.Raw) == 0 {
 		return nil
 	}
-	b := impulse.Spec.With.Raw
-	for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
-		b = b[1:]
+	b := trimLeadingSpace(impulse.Spec.With.Raw)
+	if err := ensureJSONObject("spec.with", b); err != nil {
+		return err
 	}
-	if len(b) > 0 && b[0] != '{' {
-		return fmt.Errorf("spec.with must be a JSON object")
-	}
-	maxBytes := v.Config.Engram.EngramControllerConfig.DefaultMaxInlineSize
-	if maxBytes == 0 {
-		maxBytes = 1024
-	}
-	if len(impulse.Spec.With.Raw) > maxBytes {
-		return fmt.Errorf("spec.with too large (%d bytes). Provide large payloads via object storage and references instead of inlining", len(impulse.Spec.With.Raw))
+	maxBytes := pickMaxInline(v.Config)
+	if err := enforceMaxBytes("spec.with", impulse.Spec.With.Raw, maxBytes); err != nil {
+		return err
 	}
 	if template.Spec.ConfigSchema != nil && len(template.Spec.ConfigSchema.Raw) > 0 {
-		schemaLoader := gojsonschema.NewStringLoader(string(template.Spec.ConfigSchema.Raw))
-		documentLoader := gojsonschema.NewStringLoader(string(impulse.Spec.With.Raw))
-		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-		if err != nil {
-			return fmt.Errorf("error validating spec.with against ImpulseTemplate schema: %w", err)
-		}
-		if !result.Valid() {
-			var errs []string
-			for _, desc := range result.Errors() {
-				errs = append(errs, desc.String())
-			}
-			return fmt.Errorf("spec.with is invalid against ImpulseTemplate schema: %v", errs)
+		if err := validateJSONAgainstSchema(impulse.Spec.With.Raw, template.Spec.ConfigSchema.Raw, "ImpulseTemplate"); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -219,33 +202,17 @@ func (v *ImpulseCustomValidator) validateMappingBlock(impulse *bubushv1alpha1.Im
 	if impulse.Spec.Mapping == nil || len(impulse.Spec.Mapping.Raw) == 0 {
 		return nil
 	}
-	b := impulse.Spec.Mapping.Raw
-	for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
-		b = b[1:]
+	b := trimLeadingSpace(impulse.Spec.Mapping.Raw)
+	if err := ensureJSONObject("spec.mapping", b); err != nil {
+		return err
 	}
-	if len(b) > 0 && b[0] != '{' {
-		return fmt.Errorf("spec.mapping must be a JSON object")
-	}
-	maxBytes := v.Config.Engram.EngramControllerConfig.DefaultMaxInlineSize
-	if maxBytes == 0 {
-		maxBytes = 1024
-	}
-	if len(impulse.Spec.Mapping.Raw) > maxBytes {
-		return fmt.Errorf("spec.mapping too large (%d bytes). Provide large payloads via object storage and references instead of inlining", len(impulse.Spec.Mapping.Raw))
+	maxBytes := pickMaxInline(v.Config)
+	if err := enforceMaxBytes("spec.mapping", impulse.Spec.Mapping.Raw, maxBytes); err != nil {
+		return err
 	}
 	if template.Spec.ContextSchema != nil && len(template.Spec.ContextSchema.Raw) > 0 {
-		schemaLoader := gojsonschema.NewStringLoader(string(template.Spec.ContextSchema.Raw))
-		documentLoader := gojsonschema.NewStringLoader(string(impulse.Spec.Mapping.Raw))
-		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-		if err != nil {
-			return fmt.Errorf("error validating spec.mapping against ImpulseTemplate schema: %w", err)
-		}
-		if !result.Valid() {
-			var errs []string
-			for _, desc := range result.Errors() {
-				errs = append(errs, desc.String())
-			}
-			return fmt.Errorf("spec.mapping is invalid against ImpulseTemplate schema: %v", errs)
+		if err := validateJSONAgainstSchema(impulse.Spec.Mapping.Raw, template.Spec.ContextSchema.Raw, "ImpulseTemplate"); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -46,6 +47,13 @@ type StoryRunWebhook struct {
 
 func (wh *StoryRunWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	wh.Client = mgr.GetClient()
+	// Initialize operator config for validation knobs
+	operatorConfigManager := config.NewOperatorConfigManager(
+		mgr.GetClient(),
+		"bobrapet-system",
+		"bobrapet-operator-config",
+	)
+	wh.Config = operatorConfigManager.GetControllerConfig()
 
 	return ctrl.NewWebhookManagedBy(mgr).
 		For(&runsv1alpha1.StoryRun{}).
@@ -116,64 +124,81 @@ func (v *StoryRunCustomValidator) ValidateDelete(ctx context.Context, obj runtim
 // - spec.storyRef.name required
 // - inputs, if present, must be JSON object
 func (v *StoryRunCustomValidator) validateStoryRun(ctx context.Context, sr *runsv1alpha1.StoryRun) error {
+	if err := requireStoryRef(sr); err != nil {
+		return err
+	}
+	story, _, err := fetchStory(ctx, v.Client, sr)
+	if err != nil {
+		return err
+	}
+	if err := validateInputsShapeAndSize(v.Config, sr); err != nil {
+		return err
+	}
+	return validateInputsSchema(story, sr)
+}
+
+func requireStoryRef(sr *runsv1alpha1.StoryRun) error {
 	if sr.Spec.StoryRef.Name == "" {
 		return fmt.Errorf("spec.storyRef.name is required")
 	}
+	return nil
+}
 
-	// Fetch the referenced Story to validate against its schema
+func fetchStory(ctx context.Context, c client.Client, sr *runsv1alpha1.StoryRun) (*bubuv1alpha1.Story, types.NamespacedName, error) {
 	story := &bubuv1alpha1.Story{}
 	storyKey := sr.Spec.StoryRef.ToNamespacedName(sr)
-	if err := v.Client.Get(ctx, storyKey, story); err != nil {
+	if err := c.Get(ctx, storyKey, story); err != nil {
 		if errors.IsNotFound(err) {
-			return fmt.Errorf("referenced story '%s' not found", storyKey.String())
+			return nil, storyKey, fmt.Errorf("referenced story '%s' not found", storyKey.String())
 		}
-		return fmt.Errorf("failed to get referenced story '%s': %w", storyKey.String(), err)
+		return nil, storyKey, fmt.Errorf("failed to get referenced story '%s': %w", storyKey.String(), err)
 	}
+	return story, storyKey, nil
+}
 
+func validateInputsShapeAndSize(cfg *config.ControllerConfig, sr *runsv1alpha1.StoryRun) error {
+	if sr.Spec.Inputs == nil || len(sr.Spec.Inputs.Raw) == 0 {
+		return nil
+	}
+	b := sr.Spec.Inputs.Raw
+	for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
+		b = b[1:]
+	}
+	if len(b) > 0 && b[0] != '{' {
+		return fmt.Errorf("spec.inputs must be a JSON object")
+	}
+	// Use StoryRun-specific knob; fall back to defaults if unset
+	maxBytes := cfg.StoryRun.MaxInlineInputsSize
+	if maxBytes <= 0 {
+		maxBytes = config.DefaultControllerConfig().StoryRun.MaxInlineInputsSize
+	}
+	if len(sr.Spec.Inputs.Raw) > maxBytes {
+		return fmt.Errorf("spec.inputs is too large (%d bytes > %d). Provide large inputs via an offloading mechanism instead of inlining", len(sr.Spec.Inputs.Raw), maxBytes)
+	}
+	return nil
+}
+
+func validateInputsSchema(story *bubuv1alpha1.Story, sr *runsv1alpha1.StoryRun) error {
+	if story.Spec.InputsSchema == nil || len(story.Spec.InputsSchema.Raw) == 0 {
+		return nil
+	}
+	schemaLoader := gojsonschema.NewStringLoader(string(story.Spec.InputsSchema.Raw))
+	var documentLoader gojsonschema.JSONLoader
 	if sr.Spec.Inputs != nil && len(sr.Spec.Inputs.Raw) > 0 {
-		b := sr.Spec.Inputs.Raw
-		for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
-			b = b[1:]
-		}
-		if len(b) > 0 && b[0] != '{' {
-			return fmt.Errorf("spec.inputs must be a JSON object")
-		}
-
-		// Enforce an upper bound for inline input size to avoid oversized API server payloads.
-		// Use EngramControllerConfig.DefaultMaxInlineSize for a single cap.
-		maxBytes := v.Config.Engram.EngramControllerConfig.DefaultMaxInlineSize
-		if maxBytes == 0 {
-			maxBytes = 1024 // Fallback
-		}
-		if len(sr.Spec.Inputs.Raw) > maxBytes {
-			return fmt.Errorf("spec.inputs is too large (%d bytes > %d). Provide large inputs via an offloading mechanism instead of inlining", len(sr.Spec.Inputs.Raw), maxBytes)
-		}
+		documentLoader = gojsonschema.NewStringLoader(string(sr.Spec.Inputs.Raw))
+	} else {
+		documentLoader = gojsonschema.NewStringLoader("{}")
 	}
-
-	// Validate inputs against the Story's input schema
-	if story.Spec.InputsSchema != nil && len(story.Spec.InputsSchema.Raw) > 0 {
-		schemaLoader := gojsonschema.NewStringLoader(string(story.Spec.InputsSchema.Raw))
-		var documentLoader gojsonschema.JSONLoader
-		if sr.Spec.Inputs != nil && len(sr.Spec.Inputs.Raw) > 0 {
-			documentLoader = gojsonschema.NewStringLoader(string(sr.Spec.Inputs.Raw))
-		} else {
-			// If inputs are nil or empty, validate against an empty JSON object.
-			// This correctly handles cases where the schema requires certain fields.
-			documentLoader = gojsonschema.NewStringLoader("{}")
-		}
-
-		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-		if err != nil {
-			return fmt.Errorf("error validating spec.inputs against Story schema: %w", err)
-		}
-		if !result.Valid() {
-			var errs []string
-			for _, desc := range result.Errors() {
-				errs = append(errs, desc.String())
-			}
-			return fmt.Errorf("spec.inputs is invalid against Story schema: %v", errs)
-		}
+	result, err := gojsonschema.Validate(schemaLoader, documentLoader)
+	if err != nil {
+		return fmt.Errorf("error validating spec.inputs against Story schema: %w", err)
 	}
-
+	if !result.Valid() {
+		var errs []string
+		for _, desc := range result.Errors() {
+			errs = append(errs, desc.String())
+		}
+		return fmt.Errorf("spec.inputs is invalid against Story schema: %v", errs)
+	}
 	return nil
 }

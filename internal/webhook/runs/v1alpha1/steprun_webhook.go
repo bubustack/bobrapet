@@ -116,50 +116,69 @@ func (v *StepRunCustomValidator) ValidateDelete(ctx context.Context, obj runtime
 // - spec.stepId required
 // - If Input present, must be a JSON object
 func (v *StepRunCustomValidator) validateStepRun(sr *runsv1alpha1.StepRun) error {
+	if err := requireBasicFields(sr); err != nil {
+		return err
+	}
+	maxBytes := pickMaxInlineBytes(v.Config)
+	if err := validateInputs(sr, maxBytes); err != nil {
+		return err
+	}
+	if err := validateStatusOutput(sr, maxBytes); err != nil {
+		return err
+	}
+	return validateTotalSize(sr)
+}
+
+func requireBasicFields(sr *runsv1alpha1.StepRun) error {
 	if sr.Spec.StoryRunRef.Name == "" {
 		return fmt.Errorf("spec.storyRunRef.name is required")
 	}
 	if sr.Spec.StepID == "" {
 		return fmt.Errorf("spec.stepId is required")
 	}
+	return nil
+}
 
-	maxBytes := v.Config.Engram.EngramControllerConfig.DefaultMaxInlineSize
+func pickMaxInlineBytes(cfg *config.ControllerConfig) int {
+	maxBytes := cfg.Engram.EngramControllerConfig.DefaultMaxInlineSize
 	if maxBytes == 0 {
-		maxBytes = 1024 // Fallback to a safe default if config is not loaded
+		maxBytes = 1024
 	}
+	return maxBytes
+}
 
-	if sr.Spec.Input != nil && len(sr.Spec.Input.Raw) > 0 {
-		b := sr.Spec.Input.Raw
-		for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
-			b = b[1:]
-		}
-		if len(b) > 0 && b[0] != '{' {
-			return fmt.Errorf("spec.input must be a JSON object")
-		}
-		// Enforce an upper bound for inline input size to align with Engram/Impulse validation.
-		// Large payloads must be handled via SDK offload and storage policies.
-		if len(sr.Spec.Input.Raw) > maxBytes {
-			return fmt.Errorf("spec.input too large (%d bytes > %d). Provide large payloads via object storage (Story.policy.storage) and references instead of inlining", len(sr.Spec.Input.Raw), maxBytes)
-		}
+func validateInputs(sr *runsv1alpha1.StepRun, maxBytes int) error {
+	if sr.Spec.Input == nil || len(sr.Spec.Input.Raw) == 0 {
+		return nil
 	}
+	b := sr.Spec.Input.Raw
+	for len(b) > 0 && (b[0] == ' ' || b[0] == '\n' || b[0] == '\t' || b[0] == '\r') {
+		b = b[1:]
+	}
+	if len(b) > 0 && b[0] != '{' {
+		return fmt.Errorf("spec.input must be a JSON object")
+	}
+	if len(sr.Spec.Input.Raw) > maxBytes {
+		return fmt.Errorf("spec.input too large (%d bytes > %d). Provide large payloads via object storage (Story.policy.storage) and references instead of inlining", len(sr.Spec.Input.Raw), maxBytes)
+	}
+	return nil
+}
 
-	// Validate status.output size on updates. This is the critical check.
+func validateStatusOutput(sr *runsv1alpha1.StepRun, maxBytes int) error {
 	if sr.Status.Output != nil && len(sr.Status.Output.Raw) > maxBytes {
 		return fmt.Errorf("status.output is too large (%d bytes > %d). Large outputs must be offloaded by the SDK", len(sr.Status.Output.Raw), maxBytes)
 	}
+	return nil
+}
 
-	// Add total object size validation on update to prevent etcd errors
+func validateTotalSize(sr *runsv1alpha1.StepRun) error {
 	rawSR, err := json.Marshal(sr)
 	if err != nil {
-		// This should not happen on a valid object
 		return fmt.Errorf("internal error: failed to marshal StepRun for size validation: %w", err)
 	}
-
-	// Use a safe, hardcoded limit slightly below the typical 1.5MiB etcd limit.
 	const maxTotalStepRunSizeBytes = 1 * 1024 * 1024 // 1 MiB
 	if len(rawSR) > maxTotalStepRunSizeBytes {
 		return fmt.Errorf("StepRun total size of %d bytes exceeds maximum allowed size of %d bytes", len(rawSR), maxTotalStepRunSizeBytes)
 	}
-
 	return nil
 }

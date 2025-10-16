@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.0](https://github.com/bubustack/bobrapet/compare/v0.1.0...v0.1.0) (2025-10-16)
+
+
+### Features
+
+* **operator:** harden controllers, enable webhooks, enforce timeouts; align CEL and RBAC; CI tweaks ([f10b979](https://github.com/bubustack/bobrapet/commit/f10b97912469d376f54a5e5d8415810369622300))
+* **operator:** harden controllers, enable webhooks, enforce timeouts… ([a2e382f](https://github.com/bubustack/bobrapet/commit/a2e382f084233b0cfb9072a8c0e163863a2c6744))
+* **operator:** initial public release of bobrapet ([0881547](https://github.com/bubustack/bobrapet/commit/0881547c21aa65f441dd230c0270195841f1f819))
+* **runs,webhooks,core:** harden reconcile context, validation, and storage guards ([2173928](https://github.com/bubustack/bobrapet/commit/217392888a18cb0e6f5c07fed13b52810669f0c6))
+
+
+### Build System
+
+* **deps:** Bump github.com/google/cel-go from 0.26.0 to 0.26.1 ([bec8874](https://github.com/bubustack/bobrapet/commit/bec887418ccd60b2eab7ce209fd1c9598c581881))
+* **deps:** Bump github.com/google/cel-go from 0.26.0 to 0.26.1 ([46490e2](https://github.com/bubustack/bobrapet/commit/46490e2fc80d2ccc8459a85a8ff43d1bf394aee7))
+
+
+### Miscellaneous
+
+* **main:** release bobrapet 0.1.0 ([f28db35](https://github.com/bubustack/bobrapet/commit/f28db35fd161f99f6fa4ee8ff275d9671267121e))
+* **main:** release bobrapet 0.1.0 ([d8fa72a](https://github.com/bubustack/bobrapet/commit/d8fa72a127b15d69ba55b647eb8a725de7804a8d))
+
 ## 0.1.0 (2025-10-15)
 
 

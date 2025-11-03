@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/bubustack/bobrapet/compare/v0.1.2...v0.1.3) (2025-11-03)
+
+
+### Features
+
+* **story,runs,impulse,cel,config:** request manifest metadata and wire secret artifacts, reorganize engram execution and artifact plumbing ([#21](https://github.com/bubustack/bobrapet/issues/21)) ([d5b63fd](https://github.com/bubustack/bobrapet/commit/d5b63fd7b2adfe49b6d3a32e383c178d5c3109d8))
+
 ## [0.1.2](https://github.com/bubustack/bobrapet/compare/v0.1.1...v0.1.2) (2025-10-16)
 
 

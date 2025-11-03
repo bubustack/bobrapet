@@ -23,19 +23,24 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/internal/controller/naming"
 	"github.com/bubustack/bobrapet/pkg/conditions"
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/logging"
 	"github.com/bubustack/bobrapet/pkg/metrics"
+	"github.com/bubustack/bobrapet/pkg/observability"
 	"github.com/bubustack/bobrapet/pkg/patch"
 )
 
@@ -59,17 +64,33 @@ type StoryRunReconciler struct {
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;get;watch;list
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=create;get;watch;list
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create;get;watch;list
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;get;watch;list;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=create;get;watch;list;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=create;get;watch;list;update;patch
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=bubustack.io,resources=stories,verbs=get;list;watch
 // +kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch
 
 func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
+	ctx, span := observability.StartSpan(ctx, "StoryRunReconciler.Reconcile",
+		attribute.String("namespace", req.Namespace),
+		attribute.String("storyrun", req.Name),
+	)
+	defer span.End()
+
 	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", req.NamespacedName)
 	startTime := time.Now()
-	defer func() { metrics.RecordControllerReconcile("storyrun", time.Since(startTime), err) }()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+		}
+		requeue := res.RequeueAfter > 0
+		span.SetAttributes(
+			attribute.Bool("requeue", requeue),
+			attribute.String("requeue_after", res.RequeueAfter.String()),
+		)
+		metrics.RecordControllerReconcile("storyrun", time.Since(startTime), err)
+	}()
 
 	ctx, cancel := r.withReconcileTimeout(ctx)
 	defer cancel()
@@ -78,6 +99,10 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	if err := r.Get(ctx, req.NamespacedName, &srun); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	span.SetAttributes(
+		attribute.String("story", srun.Spec.StoryRef.Name),
+		attribute.String("phase", string(srun.Status.Phase)),
+	)
 
 	if handled, err := r.guardOversizedInputs(ctx, &srun, log); handled || err != nil {
 		return ctrl.Result{}, err
@@ -168,6 +193,34 @@ func (r *StoryRunReconciler) ensureFinalizer(ctx context.Context, srun *runsv1al
 	return nil
 }
 
+func (r *StoryRunReconciler) nextRequeueDelay() time.Duration {
+	const fallbackBase = 5 * time.Second
+	const fallbackMax = 30 * time.Second
+
+	cfg := r.ConfigResolver.GetOperatorConfig()
+	if cfg == nil {
+		return wait.Jitter(fallbackBase, 0.5)
+	}
+
+	base := cfg.Controller.RequeueBaseDelay
+	if base <= 0 {
+		base = fallbackBase
+	}
+	max := cfg.Controller.RequeueMaxDelay
+	if max <= 0 {
+		max = fallbackMax
+	}
+	if max < base {
+		max = base
+	}
+
+	delay := wait.Jitter(base, 0.5)
+	if delay > max {
+		delay = max
+	}
+	return delay
+}
+
 func (r *StoryRunReconciler) getStoryOrWait(ctx context.Context, srun *runsv1alpha1.StoryRun, log *logging.ControllerLogger) (bool, ctrl.Result, *bubushv1alpha1.Story, error) {
 	story, err := r.getStoryForRun(ctx, srun)
 	if err == nil {
@@ -192,14 +245,11 @@ func (r *StoryRunReconciler) getStoryOrWait(ctx context.Context, srun *runsv1alp
 			log.Error(statusErr, "Failed to update StoryRun status while waiting for Story")
 			return true, ctrl.Result{}, nil, statusErr
 		}
-		return true, ctrl.Result{RequeueAfter: 15 * time.Second}, nil, nil
+		return true, ctrl.Result{RequeueAfter: r.nextRequeueDelay()}, nil, nil
 	}
 	log.Error(err, "Failed to get Story for StoryRun")
-	if updateErr := r.setStoryRunPhase(ctx, srun, enums.PhaseFailed, fmt.Sprintf("failed to get story: %v", err)); updateErr != nil {
-		log.Error(updateErr, "Failed to set StoryRun status to Failed")
-		return true, ctrl.Result{}, nil, updateErr
-	}
-	return true, ctrl.Result{}, nil, nil
+	// Propagate the error so controller-runtime retries instead of marking the run failed on a transient API error.
+	return true, ctrl.Result{}, nil, err
 }
 
 func (r *StoryRunReconciler) handleStreamingIfNeeded(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubushv1alpha1.Story, log *logging.ControllerLogger) (bool, error) {
@@ -256,7 +306,7 @@ func (r *StoryRunReconciler) reconcileStreamingStoryRun(ctx context.Context, sru
 			// Create or update the run-specific engram
 			runEngram := &bubushv1alpha1.Engram{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("%s-%s", srun.Name, step.Name),
+					Name:      naming.Compose(srun.Name, step.Name),
 					Namespace: srun.Namespace,
 				},
 			}
@@ -307,6 +357,8 @@ func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1al
 
 	// For a simple MVP, we will just delete the StepRuns.
 	// A more advanced implementation might try to gracefully cancel them.
+	hasDependents := false
+
 	for _, sr := range stepRunList.Items {
 		if sr.DeletionTimestamp.IsZero() {
 			if err := r.Delete(ctx, &sr); err != nil {
@@ -315,10 +367,31 @@ func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1al
 			}
 			log.Info("Deleted child StepRun", "stepRun", sr.Name)
 		}
+		hasDependents = true
+	}
+
+	// Clean up any sub-storyruns spawned by executeStory steps.
+	var childStoryRuns runsv1alpha1.StoryRunList
+	if err := r.List(ctx, &childStoryRuns, client.InNamespace(srun.Namespace), client.MatchingLabels{"bubustack.io/parent-storyrun": srun.Name}); err != nil {
+		log.Error(err, "Failed to list child StoryRuns for cleanup")
+		return ctrl.Result{}, err
+	}
+	for _, child := range childStoryRuns.Items {
+		if child.UID == srun.UID {
+			continue
+		}
+		if child.DeletionTimestamp.IsZero() {
+			if err := r.Delete(ctx, &child, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
+				log.Error(err, "Failed to delete child StoryRun during cleanup", "childStoryRun", child.Name)
+				return ctrl.Result{}, err
+			}
+			log.Info("Deleted child StoryRun", "childStoryRun", child.Name)
+		}
+		hasDependents = true
 	}
 
 	// Once all children are gone, remove the finalizer.
-	if len(stepRunList.Items) == 0 {
+	if !hasDependents {
 		if controllerutil.ContainsFinalizer(srun, StoryRunFinalizer) {
 			mergePatch := client.MergeFrom(srun.DeepCopy())
 			controllerutil.RemoveFinalizer(srun, StoryRunFinalizer)
@@ -332,7 +405,7 @@ func (r *StoryRunReconciler) reconcileDelete(ctx context.Context, srun *runsv1al
 		}
 	} else {
 		// If children still exist, requeue to check on them later.
-		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		return ctrl.Result{RequeueAfter: r.nextRequeueDelay()}, nil
 	}
 
 	return ctrl.Result{}, nil
@@ -392,7 +465,7 @@ func (r *StoryRunReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1a
 // SetupWithManager sets up the controller with the Manager.
 func (r *StoryRunReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
 	r.rbacManager = NewRBACManager(mgr.GetClient(), mgr.GetScheme())
-	stepExecutor := NewStepExecutor(mgr.GetClient(), mgr.GetScheme(), &r.CELEvaluator)
+	stepExecutor := NewStepExecutor(mgr.GetClient(), mgr.GetScheme(), &r.CELEvaluator, r.ConfigResolver)
 	r.dagReconciler = NewDAGReconciler(mgr.GetClient(), &r.CELEvaluator, stepExecutor, r.ConfigResolver)
 	r.Recorder = mgr.GetEventRecorderFor("storyrun-controller")
 

@@ -30,6 +30,7 @@ kind-delete: ## Delete the kind cluster
 
 .PHONY: kind-get-kubeconfig
 kind-get-kubeconfig: ## Get the kubeconfig for the kind cluster
+	@mkdir -p $(HOME)/.kube
 	@kind get kubeconfig --name $(KIND_CLUSTER_NAME) > $(KUBECONFIG)
 	@echo "Kubeconfig saved to $(KUBECONFIG)"
 

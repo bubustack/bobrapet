@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
@@ -13,6 +14,7 @@ import (
 	"github.com/bubustack/bobrapet/pkg/conditions"
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/logging"
+	"github.com/bubustack/bobrapet/pkg/metrics"
 	"github.com/bubustack/bobrapet/pkg/patch"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -137,21 +139,36 @@ func (r *DAGReconciler) checkCompletionOrFailure(ctx context.Context, srun *runs
 func (r *DAGReconciler) persistStepStates(ctx context.Context, srun *runsv1alpha1.StoryRun) error {
 	return patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
 		sr := obj.(*runsv1alpha1.StoryRun)
-		sr.Status.StepStates = srun.Status.StepStates
+		sr.Status.StepStates = cloneStepStates(srun.Status.StepStates)
 	})
 }
 
 func (r *DAGReconciler) persistMergedStates(ctx context.Context, srun *runsv1alpha1.StoryRun) error {
 	return patch.RetryableStatusPatch(ctx, r.Client, srun, func(obj client.Object) {
 		sr := obj.(*runsv1alpha1.StoryRun)
+		if sr.Status.StepStates == nil {
+			sr.Status.StepStates = make(map[string]runsv1alpha1.StepState, len(srun.Status.StepStates))
+		}
 		for k, v := range srun.Status.StepStates {
 			sr.Status.StepStates[k] = v
 		}
 	})
 }
 
+func cloneStepStates(in map[string]runsv1alpha1.StepState) map[string]runsv1alpha1.StepState {
+	if len(in) == 0 {
+		return make(map[string]runsv1alpha1.StepState)
+	}
+	out := make(map[string]runsv1alpha1.StepState, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func (r *DAGReconciler) syncStateFromStepRuns(ctx context.Context, srun *runsv1alpha1.StoryRun) (*runsv1alpha1.StepRunList, error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun-dag-sync")
+	r.initStepStatesIfNeeded(srun)
 	var stepRunList runsv1alpha1.StepRunList
 	if err := r.List(ctx, &stepRunList, client.InNamespace(srun.Namespace), client.MatchingLabels{"bubustack.io/storyrun": srun.Name}); err != nil {
 		log.Error(err, "Failed to list StepRuns")
@@ -168,9 +185,6 @@ func (r *DAGReconciler) syncStateFromStepRuns(ctx context.Context, srun *runsv1a
 				Phase:   sr.Status.Phase,
 				Message: sr.Status.LastFailureMsg,
 			}
-			// DEPRECATED: Do not propagate StepRun outputs into the parent StoryRun.
-			// This was causing a storage hazard where the StoryRun could exceed etcd's
-			// size limit. Step outputs are now resolved on-demand from StepRun objects.
 		}
 	}
 	return &stepRunList, nil
@@ -231,6 +245,7 @@ func (r *DAGReconciler) checkSyncSubStories(ctx context.Context, srun *runsv1alp
 
 func (r *DAGReconciler) findAndLaunchReadySteps(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, completedSteps, runningSteps map[string]bool, priorStepOutputs map[string]any) ([]*bubuv1alpha1.Step, []*bubuv1alpha1.Step, error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun-dag-launcher")
+	r.initStepStatesIfNeeded(srun)
 	dependencies, _ := buildDependencyGraphs(story.Spec.Steps)
 	storyRunInputs, _ := getStoryRunInputs(srun)
 
@@ -256,7 +271,9 @@ func (r *DAGReconciler) findAndLaunchReadySteps(ctx context.Context, srun *runsv
 			// Propagate the error up to the main reconcile loop to trigger backoff
 			return nil, nil, fmt.Errorf("failed to execute step %s: %w", step.Name, err)
 		}
-		srun.Status.StepStates[step.Name] = runsv1alpha1.StepState{Phase: enums.PhaseRunning}
+		if state, ok := srun.Status.StepStates[step.Name]; !ok || state.Phase == "" {
+			srun.Status.StepStates[step.Name] = runsv1alpha1.StepState{Phase: enums.PhaseRunning}
+		}
 	}
 
 	return readySteps, skippedSteps, nil
@@ -316,7 +333,15 @@ func collectOutputsFromStepRuns(stepRunList *runsv1alpha1.StepRunList, outputs m
 				log.Error(err, "Failed to unmarshal output from prior StepRun during fallback", "step", sr.Spec.StepID)
 				continue
 			}
-			outputs[sr.Spec.StepID] = map[string]any{"outputs": outputData}
+			stepContext := map[string]any{
+				"outputs": outputData,
+				"output":  outputData,
+			}
+			if len(sr.Status.Manifest) > 0 {
+				stepContext["manifest"] = sr.Status.Manifest
+				applyManifestPlaceholders(outputData, sr.Status.Manifest)
+			}
+			outputs[sr.Spec.StepID] = stepContext
 		}
 	}
 }
@@ -342,8 +367,95 @@ func collectOutputsFromSubStories(ctx context.Context, c client.Client, srun *ru
 				log.Error(err, "Failed to unmarshal output from sub-StoryRun", "step", stepID)
 				continue
 			}
-			outputs[stepID] = map[string]any{"outputs": outputData}
+			stepContext := map[string]any{
+				"outputs": outputData,
+				"output":  outputData,
+			}
+			outputs[stepID] = stepContext
 		}
+	}
+}
+
+func applyManifestPlaceholders(outputs map[string]any, manifest map[string]runsv1alpha1.StepManifestData) {
+	if outputs == nil || len(manifest) == 0 {
+		return
+	}
+
+	for path, data := range manifest {
+		if path == "" || path == manifestRootPath {
+			applyRootManifestMetadata(outputs, data)
+			continue
+		}
+		if strings.Contains(path, "[") {
+			continue
+		}
+
+		if sample, ok := decodeManifestSample(data.Sample); ok {
+			ensurePathValue(outputs, path, sample)
+			continue
+		}
+
+		if data.Length != nil {
+			length := int(*data.Length)
+			if length < 0 {
+				length = 0
+			}
+			placeholder := make([]any, length)
+			ensurePathValue(outputs, path, placeholder)
+			continue
+		}
+
+		if data.Exists != nil && *data.Exists {
+			ensurePathValue(outputs, path, map[string]any{})
+		}
+	}
+}
+
+func applyRootManifestMetadata(outputs map[string]any, data runsv1alpha1.StepManifestData) {
+	if outputs == nil {
+		return
+	}
+	if data.Length != nil {
+		outputs[cel.ManifestLengthKey] = *data.Length
+	}
+}
+
+func decodeManifestSample(raw *runtime.RawExtension) (any, bool) {
+	if raw == nil || len(raw.Raw) == 0 {
+		return nil, false
+	}
+	var out any
+	if err := json.Unmarshal(raw.Raw, &out); err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func ensurePathValue(root map[string]any, path string, value any) {
+	segments := strings.Split(path, ".")
+	current := root
+	for i, segment := range segments {
+		if segment == "" {
+			continue
+		}
+		if i == len(segments)-1 {
+			if _, exists := current[segment]; !exists {
+				current[segment] = value
+			}
+			return
+		}
+		next, ok := current[segment]
+		if !ok {
+			sub := make(map[string]any)
+			current[segment] = sub
+			current = sub
+			continue
+		}
+		nextMap, ok := next.(map[string]any)
+		if !ok {
+			return
+		}
+		current = nextMap
 	}
 }
 
@@ -596,6 +708,7 @@ func (r *DAGReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1alpha1
 				sr.Status.FinishedAt = &now
 				if sr.Status.StartedAt != nil {
 					sr.Status.Duration = now.Sub(sr.Status.StartedAt.Time).String()
+					metrics.RecordStoryRunMetrics(sr.Namespace, sr.Spec.StoryRef.Name, string(phase), now.Sub(sr.Status.StartedAt.Time))
 				}
 			}
 			cm.SetCondition(&sr.Status.Conditions, conditions.ConditionReady, metav1.ConditionTrue, conditions.ReasonCompleted, message)
@@ -605,6 +718,7 @@ func (r *DAGReconciler) setStoryRunPhase(ctx context.Context, srun *runsv1alpha1
 				sr.Status.FinishedAt = &now
 				if sr.Status.StartedAt != nil {
 					sr.Status.Duration = now.Sub(sr.Status.StartedAt.Time).String()
+					metrics.RecordStoryRunMetrics(sr.Namespace, sr.Spec.StoryRef.Name, string(phase), now.Sub(sr.Status.StartedAt.Time))
 				}
 			}
 			cm.SetCondition(&sr.Status.Conditions, conditions.ConditionReady, metav1.ConditionFalse, conditions.ReasonExecutionFailed, message)

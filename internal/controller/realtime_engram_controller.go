@@ -24,6 +24,7 @@ import (
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	"github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/internal/controller/secretutil"
 	"github.com/bubustack/bobrapet/pkg/conditions"
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/logging"
@@ -246,7 +247,7 @@ func (r *RealtimeEngramReconciler) ensureRunnerServiceAccount(ctx context.Contex
 }
 
 // reconcileWorkload dispatches to the proper workload reconciler based on mode.
-func (r *RealtimeEngramReconciler) reconcileWorkload(ctx context.Context, engram *v1alpha1.Engram, resolved *config.ResolvedExecutionConfig) error {
+func (r *RealtimeEngramReconciler) reconcileWorkload(ctx context.Context, engram *v1alpha1.Engram, template *catalogv1alpha1.EngramTemplate, resolved *config.ResolvedExecutionConfig) error {
 	mode := engram.Spec.Mode
 	if mode == "" {
 		mode = enums.WorkloadModeJob
@@ -254,9 +255,10 @@ func (r *RealtimeEngramReconciler) reconcileWorkload(ctx context.Context, engram
 	if mode == enums.WorkloadModeJob {
 		return nil
 	}
+
 	switch mode {
 	case enums.WorkloadModeDeployment:
-		return r.reconcileDeployment(ctx, engram, resolved)
+		return r.reconcileDeployment(ctx, engram, template, resolved)
 	case enums.WorkloadModeStatefulSet:
 		return r.reconcileStatefulSet(ctx, engram, resolved)
 	default:
@@ -283,7 +285,7 @@ func (r *RealtimeEngramReconciler) reconcileRealtime(ctx context.Context, engram
 	}
 
 	// Resolve execution config
-	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, nil, engram, template)
+	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, nil, engram, template, nil)
 	if err != nil {
 		log.Error(err, "Failed to resolve execution config")
 		return ctrl.Result{}, err
@@ -295,7 +297,7 @@ func (r *RealtimeEngramReconciler) reconcileRealtime(ctx context.Context, engram
 	}
 
 	// Reconcile workload and service
-	if err := r.reconcileWorkload(ctx, engram, resolvedConfig); err != nil {
+	if err := r.reconcileWorkload(ctx, engram, template, resolvedConfig); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileService(ctx, engram, resolvedConfig); err != nil {
@@ -378,13 +380,13 @@ func (r *RealtimeEngramReconciler) reconcileDelete(ctx context.Context, engram *
 	return nil
 }
 
-func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engram *v1alpha1.Engram, execCfg *config.ResolvedExecutionConfig) error {
+func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engram *v1alpha1.Engram, template *catalogv1alpha1.EngramTemplate, execCfg *config.ResolvedExecutionConfig) error {
 	log := logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name)
 	deployment := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: engram.Name, Namespace: engram.Namespace}, deployment)
 	if err != nil && errors.IsNotFound(err) {
 		log.Info("Creating a new Deployment", "Deployment.Namespace", engram.Namespace, "Deployment.Name", engram.Name)
-		newDep := r.deploymentForEngram(ctx, engram, execCfg)
+		newDep := r.deploymentForEngram(ctx, engram, template, execCfg)
 		if err := r.Create(ctx, newDep); err != nil {
 			log.Error(err, "Failed to create new Deployment")
 			return err
@@ -395,7 +397,7 @@ func (r *RealtimeEngramReconciler) reconcileDeployment(ctx context.Context, engr
 	}
 
 	// Update logic
-	desiredDep := r.deploymentForEngram(ctx, engram, execCfg)
+	desiredDep := r.deploymentForEngram(ctx, engram, template, execCfg)
 	if !reflect.DeepEqual(deployment.Spec.Template, desiredDep.Spec.Template) || *deployment.Spec.Replicas != *desiredDep.Spec.Replicas {
 		log.Info("Deployment spec differs, updating deployment")
 		// Retry on conflict using a fresh GET + merge to avoid clobbering cluster-managed fields
@@ -613,27 +615,17 @@ func (r *RealtimeEngramReconciler) reconcileService(ctx context.Context, engram 
 	return nil
 }
 
-func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engram *v1alpha1.Engram, execCfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
+func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engram *v1alpha1.Engram, template *catalogv1alpha1.EngramTemplate, execCfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
 	labels := map[string]string{"app": engram.Name, "bubustack.io/engram": engram.Name}
 	replicas := int32(1)
-
-	// Serialize the engram's 'with' configuration to JSON for the SDK
-	var configEnvVars []corev1.EnvVar
-	if engram.Spec.With != nil && len(engram.Spec.With.Raw) > 0 {
-		configEnvVars = append(configEnvVars, corev1.EnvVar{
-			Name:  "BUBU_CONFIG",
-			Value: string(engram.Spec.With.Raw),
-		})
-	}
-
-	// Set terminationGracePeriodSeconds to coordinate with SDK graceful shutdown timeout
 	terminationGracePeriod := r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultTerminationGracePeriodSeconds
 	engramConfig := r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig
 
+	envVars := buildRealtimeBaseEnv(engramConfig)
+	envVars = append(envVars, buildConfigEnvVars(engram)...)
+
 	podSpec := corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{
-			Labels: labels,
-		},
+		ObjectMeta: metav1.ObjectMeta{Labels: labels},
 		Spec: corev1.PodSpec{
 			ServiceAccountName:            execCfg.ServiceAccountName,
 			TerminationGracePeriodSeconds: &terminationGracePeriod,
@@ -644,37 +636,10 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 				ImagePullPolicy: execCfg.ImagePullPolicy,
 				SecurityContext: execCfg.ToContainerSecurityContext(),
 				Ports: []corev1.ContainerPort{{
-					ContainerPort: int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
+					ContainerPort: int32(engramConfig.DefaultGRPCPort),
 					Name:          "grpc",
 				}},
-				Env: append([]corev1.EnvVar{
-					{Name: "BUBU_MODE", Value: "deployment"},
-					// Ensure SDK auto-detects streaming execution mode
-					{Name: "BUBU_EXECUTION_MODE", Value: "streaming"},
-					// Expose port for SDK gRPC server; aligns with Service port
-					{Name: "BUBU_GRPC_PORT", Value: fmt.Sprintf("%d", r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort)},
-					{Name: "BUBU_POD_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"}}},
-					{Name: "BUBU_POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}},
-					// Set inline size limit for storage offloading (consistency with batch StepRun jobs)
-					{Name: "BUBU_MAX_INLINE_SIZE", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxInlineSize)},
-					// Set storage operation timeout for large file uploads/downloads
-					{Name: "BUBU_STORAGE_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultStorageTimeoutSeconds)},
-					// Set graceful shutdown timeout to coordinate with terminationGracePeriodSeconds
-					{Name: "BUBU_GRPC_GRACEFUL_SHUTDOWN_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultGracefulShutdownTimeoutSeconds)},
-					// Newly added SDK tuning parameters
-					{Name: "BUBU_GRPC_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxRecvMsgBytes)},
-					{Name: "BUBU_GRPC_MAX_SEND_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxSendMsgBytes)},
-					{Name: "BUBU_GRPC_CLIENT_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxRecvMsgBytes)},
-					{Name: "BUBU_GRPC_CLIENT_MAX_SEND_BYTES", Value: fmt.Sprintf("%d", engramConfig.DefaultMaxSendMsgBytes)},
-					{Name: "BUBU_GRPC_DIAL_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultDialTimeoutSeconds)},
-					{Name: "BUBU_GRPC_CHANNEL_BUFFER_SIZE", Value: fmt.Sprintf("%d", engramConfig.DefaultChannelBufferSize)},
-					{Name: "BUBU_GRPC_RECONNECT_MAX_RETRIES", Value: fmt.Sprintf("%d", engramConfig.DefaultReconnectMaxRetries)},
-					{Name: "BUBU_GRPC_RECONNECT_BASE_BACKOFF", Value: fmt.Sprintf("%dms", engramConfig.DefaultReconnectBaseBackoffMillis)},
-					{Name: "BUBU_GRPC_RECONNECT_MAX_BACKOFF", Value: fmt.Sprintf("%ds", engramConfig.DefaultReconnectMaxBackoffSeconds)},
-					{Name: "BUBU_GRPC_HANG_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultHangTimeoutSeconds)},
-					{Name: "BUBU_GRPC_MESSAGE_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)},
-					{Name: "BUBU_GRPC_CHANNEL_SEND_TIMEOUT", Value: fmt.Sprintf("%ds", engramConfig.DefaultMessageTimeoutSeconds)}, // Re-use message timeout
-				}, configEnvVars...),
+				Env:            envVars,
 				LivenessProbe:  execCfg.LivenessProbe,
 				ReadinessProbe: execCfg.ReadinessProbe,
 				StartupProbe:   execCfg.StartupProbe,
@@ -682,43 +647,117 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 		},
 	}
 
-	// Handle object storage configuration
-	if storagePolicy := execCfg.Storage; storagePolicy != nil && storagePolicy.S3 != nil {
-		s3Config := storagePolicy.S3
-		// log with reconcile context
-		logging.NewControllerLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Info("Configuring pod for S3 object storage access", "bucket", s3Config.Bucket)
+	r.applySecretArtifactsToRealtimePod(template, execCfg, &podSpec)
+	r.configureRealtimeStorage(ctx, engram, execCfg, &podSpec)
+	r.configureRealtimeTLS(ctx, engram, &podSpec)
 
-		// Add environment variables for the SDK
-		podSpec.Spec.Containers[0].Env = append(podSpec.Spec.Containers[0].Env,
-			corev1.EnvVar{Name: "BUBU_STORAGE_PROVIDER", Value: "s3"},
-			corev1.EnvVar{Name: "BUBU_STORAGE_S3_BUCKET", Value: s3Config.Bucket},
-		)
-		if s3Config.Region != "" {
-			podSpec.Spec.Containers[0].Env = append(podSpec.Spec.Containers[0].Env, corev1.EnvVar{Name: "BUBU_STORAGE_S3_REGION", Value: s3Config.Region})
-		}
-		if s3Config.Endpoint != "" {
-			podSpec.Spec.Containers[0].Env = append(podSpec.Spec.Containers[0].Env, corev1.EnvVar{Name: "BUBU_STORAGE_S3_ENDPOINT", Value: s3Config.Endpoint})
-		}
+	return r.newRealtimeDeployment(ctx, engram, labels, replicas, podSpec)
+}
 
-		// Handle secret-based authentication
-		if auth := &s3Config.Authentication; auth.SecretRef != nil {
-			secretName := auth.SecretRef.Name
-			logging.NewControllerLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Info("Using S3 secret reference for authentication", "secretName", secretName)
-			podSpec.Spec.Containers[0].EnvFrom = append(podSpec.Spec.Containers[0].EnvFrom, corev1.EnvFromSource{
-				SecretRef: &corev1.SecretEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-				},
-			})
-		}
+func buildConfigEnvVars(engram *v1alpha1.Engram) []corev1.EnvVar {
+	if engram.Spec.With == nil || len(engram.Spec.With.Raw) == 0 {
+		return nil
+	}
+	return []corev1.EnvVar{
+		{Name: "BUBU_CONFIG", Value: string(engram.Spec.With.Raw)},
+	}
+}
+
+func buildRealtimeBaseEnv(cfg config.EngramControllerConfig) []corev1.EnvVar {
+	return []corev1.EnvVar{
+		{Name: "BUBU_MODE", Value: "deployment"},
+		{Name: "BUBU_EXECUTION_MODE", Value: "streaming"},
+		{Name: "BUBU_GRPC_PORT", Value: fmt.Sprintf("%d", cfg.DefaultGRPCPort)},
+		{Name: "BUBU_MAX_RECURSION_DEPTH", Value: "64"},
+		downwardEnvVar("BUBU_POD_NAME", "metadata.name"),
+		downwardEnvVar("BUBU_POD_NAMESPACE", "metadata.namespace"),
+		downwardEnvVar("POD_NAME", "metadata.name"),
+		downwardEnvVar("POD_NAMESPACE", "metadata.namespace"),
+		downwardEnvVar("SERVICE_ACCOUNT_NAME", "spec.serviceAccountName"),
+		{Name: "BUBU_MAX_INLINE_SIZE", Value: fmt.Sprintf("%d", cfg.DefaultMaxInlineSize)},
+		{Name: "BUBU_STORAGE_TIMEOUT", Value: fmt.Sprintf("%ds", cfg.DefaultStorageTimeoutSeconds)},
+		{Name: "BUBU_GRPC_GRACEFUL_SHUTDOWN_TIMEOUT", Value: fmt.Sprintf("%ds", cfg.DefaultGracefulShutdownTimeoutSeconds)},
+		{Name: "BUBU_GRPC_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", cfg.DefaultMaxRecvMsgBytes)},
+		{Name: "BUBU_GRPC_MAX_SEND_BYTES", Value: fmt.Sprintf("%d", cfg.DefaultMaxSendMsgBytes)},
+		{Name: "BUBU_GRPC_CLIENT_MAX_RECV_BYTES", Value: fmt.Sprintf("%d", cfg.DefaultMaxRecvMsgBytes)},
+		{Name: "BUBU_GRPC_CLIENT_MAX_SEND_BYTES", Value: fmt.Sprintf("%d", cfg.DefaultMaxSendMsgBytes)},
+		{Name: "BUBU_GRPC_DIAL_TIMEOUT", Value: fmt.Sprintf("%ds", cfg.DefaultDialTimeoutSeconds)},
+		{Name: "BUBU_GRPC_CHANNEL_BUFFER_SIZE", Value: fmt.Sprintf("%d", cfg.DefaultChannelBufferSize)},
+		{Name: "BUBU_GRPC_RECONNECT_MAX_RETRIES", Value: fmt.Sprintf("%d", cfg.DefaultReconnectMaxRetries)},
+		{Name: "BUBU_GRPC_RECONNECT_BASE_BACKOFF", Value: fmt.Sprintf("%dms", cfg.DefaultReconnectBaseBackoffMillis)},
+		{Name: "BUBU_GRPC_RECONNECT_MAX_BACKOFF", Value: fmt.Sprintf("%ds", cfg.DefaultReconnectMaxBackoffSeconds)},
+		{Name: "BUBU_GRPC_HANG_TIMEOUT", Value: fmt.Sprintf("%ds", cfg.DefaultHangTimeoutSeconds)},
+		{Name: "BUBU_GRPC_MESSAGE_TIMEOUT", Value: fmt.Sprintf("%ds", cfg.DefaultMessageTimeoutSeconds)},
+		{Name: "BUBU_GRPC_CHANNEL_SEND_TIMEOUT", Value: fmt.Sprintf("%ds", cfg.DefaultMessageTimeoutSeconds)},
+	}
+}
+
+func downwardEnvVar(name, fieldPath string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: name,
+		ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: fieldPath},
+		},
+	}
+}
+
+func (r *RealtimeEngramReconciler) applySecretArtifactsToRealtimePod(template *catalogv1alpha1.EngramTemplate, execCfg *config.ResolvedExecutionConfig, podSpec *corev1.PodTemplateSpec) {
+	if podSpec == nil || len(podSpec.Spec.Containers) == 0 || execCfg.Secrets == nil || template == nil || template.Spec.SecretSchema == nil {
+		return
+	}
+	artifacts := secretutil.BuildArtifacts(template.Spec.SecretSchema, execCfg.Secrets)
+	podSpec.Spec.Volumes = append(podSpec.Spec.Volumes, artifacts.Volumes...)
+
+	container := &podSpec.Spec.Containers[0]
+	container.Env = append(container.Env, artifacts.EnvVars...)
+	container.EnvFrom = append(container.EnvFrom, artifacts.EnvFrom...)
+	container.VolumeMounts = append(container.VolumeMounts, artifacts.VolumeMounts...)
+}
+
+func (r *RealtimeEngramReconciler) configureRealtimeStorage(ctx context.Context, engram *v1alpha1.Engram, execCfg *config.ResolvedExecutionConfig, podSpec *corev1.PodTemplateSpec) {
+	if podSpec == nil || len(podSpec.Spec.Containers) == 0 || execCfg.Storage == nil || execCfg.Storage.S3 == nil {
+		return
 	}
 
-	// Configure TLS via user-provided secret if annotated
+	s3Config := execCfg.Storage.S3
+	logger := logging.NewControllerLogger(ctx, "realtime_engram").WithValues("engram", engram.Name)
+	logger.Info("Configuring pod for S3 object storage access", "bucket", s3Config.Bucket)
+
+	container := &podSpec.Spec.Containers[0]
+	container.Env = append(container.Env,
+		corev1.EnvVar{Name: "BUBU_STORAGE_PROVIDER", Value: "s3"},
+		corev1.EnvVar{Name: "BUBU_STORAGE_S3_BUCKET", Value: s3Config.Bucket},
+	)
+	if s3Config.Region != "" {
+		container.Env = append(container.Env, corev1.EnvVar{Name: "BUBU_STORAGE_S3_REGION", Value: s3Config.Region})
+	}
+	if s3Config.Endpoint != "" {
+		container.Env = append(container.Env, corev1.EnvVar{Name: "BUBU_STORAGE_S3_ENDPOINT", Value: s3Config.Endpoint})
+	}
+
+	if s3Config.Authentication.SecretRef != nil {
+		secretName := s3Config.Authentication.SecretRef.Name
+		logger.Info("Using S3 secret reference for authentication", "secretName", secretName)
+		container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+			},
+		})
+	}
+}
+
+func (r *RealtimeEngramReconciler) configureRealtimeTLS(ctx context.Context, engram *v1alpha1.Engram, podSpec *corev1.PodTemplateSpec) {
+	if podSpec == nil {
+		return
+	}
 	if sec := getTLSSecretName(&engram.ObjectMeta); sec != "" {
-		if err := r.maybeConfigureTLSEnvAndMounts(ctx, engram.Namespace, sec, &podSpec, 0); err != nil {
+		if err := r.maybeConfigureTLSEnvAndMounts(ctx, engram.Namespace, sec, podSpec, 0); err != nil {
 			logging.NewReconcileLogger(ctx, "realtime_engram").WithValues("engram", engram.Name).Error(err, "Failed to configure TLS mounts/envs for Deployment")
 		}
 	}
+}
 
+func (r *RealtimeEngramReconciler) newRealtimeDeployment(ctx context.Context, engram *v1alpha1.Engram, labels map[string]string, replicas int32, podSpec corev1.PodTemplateSpec) *appsv1.Deployment {
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      engram.Name,
@@ -726,9 +765,7 @@ func (r *RealtimeEngramReconciler) deploymentForEngram(ctx context.Context, engr
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: podSpec,
 		},
 	}
@@ -770,6 +807,7 @@ func (r *RealtimeEngramReconciler) serviceForEngram(ctx context.Context, engram 
 // SetupWithManager sets up the controller with the Manager.
 func (r *RealtimeEngramReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Options) error {
 	return ctrl.NewControllerManagedBy(mgr).
+		Named("realtime-engram").
 		For(&v1alpha1.Engram{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).

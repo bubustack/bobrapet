@@ -47,19 +47,20 @@ type EngramTemplateReconciler struct {
 // +kubebuilder:rbac:groups=catalog.bubustack.io,resources=engramtemplates/finalizers,verbs=update
 
 // Reconcile validates and manages EngramTemplate lifecycle
-func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	// Initialize structured logging and metrics
 	rl := logging.NewReconcileLogger(ctx, "engramtemplate")
 	startTime := time.Now()
 
 	defer func() {
 		duration := time.Since(startTime)
-		metrics.RecordControllerReconcile("engramtemplate", duration, nil)
+		metrics.RecordControllerReconcile("engramtemplate", duration, err)
 	}()
 
 	var template catalogv1alpha1.EngramTemplate
-	if err := r.Get(ctx, req.NamespacedName, &template); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	if err = r.Get(ctx, req.NamespacedName, &template); err != nil {
+		err = client.IgnoreNotFound(err)
+		return ctrl.Result{}, err
 	}
 
 	// Add template context to logger
@@ -70,10 +71,10 @@ func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if missingField, handled := r.handleRequiredFields(ctx, &template); handled {
 		r.updateErrorStatus(&template, fmt.Sprintf("%s is required", missingField))
 		rl.ReconcileError(fmt.Errorf("%s missing", missingField), fmt.Sprintf("%s is required for EngramTemplate", missingField))
-		if err := r.updateStatus(ctx, &template); err != nil {
+		if err = r.updateStatus(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, err
 	}
 
 	templateLogger.Info("Validating EngramTemplate", "image", template.Spec.Image, "version", template.Spec.Version)
@@ -92,11 +93,11 @@ func (r *EngramTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	r.updateReadyStatus(&template)
 
 	// List all Engrams that were created from this template (extracted helper)
-	if err := r.setUsageCount(ctx, &template, req.Name); err != nil {
+	if err = r.setUsageCount(ctx, &template, req.Name); err != nil {
 		templateLogger.Error(err, "Failed to list engrams for template")
 	}
 
-	if err := r.updateStatus(ctx, &template); err != nil {
+	if err = r.updateStatus(ctx, &template); err != nil {
 		rl.ReconcileError(err, "Failed to update EngramTemplate status")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}

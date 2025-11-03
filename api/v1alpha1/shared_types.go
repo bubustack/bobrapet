@@ -114,7 +114,7 @@ type ExecutionOverrides struct {
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
 
 	// AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
-	// Defaults to false.
+	// +kubebuilder:default=true
 	// +optional
 	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
 

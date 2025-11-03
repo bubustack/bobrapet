@@ -94,7 +94,7 @@ func (cr *Resolver) ResolveImagePullPolicy(ctx context.Context, step *runsv1alph
 // ResolveExecutionConfig resolves the final execution configuration for a step
 // by merging settings from all levels of the hierarchy.
 // The precedence order is: StepRun -> Story Step -> Engram -> EngramTemplate -> Operator Config -> Hardcoded Defaults.
-func (cr *Resolver) ResolveExecutionConfig(ctx context.Context, step *runsv1alpha1.StepRun, story *v1alpha1.Story, engram *v1alpha1.Engram, template *catalogv1alpha1.EngramTemplate) (*ResolvedExecutionConfig, error) {
+func (cr *Resolver) ResolveExecutionConfig(ctx context.Context, step *runsv1alpha1.StepRun, story *v1alpha1.Story, engram *v1alpha1.Engram, template *catalogv1alpha1.EngramTemplate, storyStep *v1alpha1.Step) (*ResolvedExecutionConfig, error) {
 	operatorConfig := cr.configManager.GetConfig()
 
 	// 1. Start with hardcoded defaults and operator-level configuration.
@@ -107,7 +107,7 @@ func (cr *Resolver) ResolveExecutionConfig(ctx context.Context, step *runsv1alph
 	cr.applyEngramConfig(engram, resolved)
 
 	// 4. Apply Story-level policies and step-specific overrides.
-	cr.applyStoryConfig(story, step, resolved)
+	cr.applyStoryConfig(story, step, storyStep, resolved)
 
 	// 5. Apply StepRun-specific overrides, which have the highest priority.
 	cr.applyStepRunOverrides(step, resolved)
@@ -123,7 +123,7 @@ func (cr *Resolver) ResolveExecutionConfig(ctx context.Context, step *runsv1alph
 
 // getOperatorDefaults initializes the configuration with values from the operator's config map.
 func (cr *Resolver) getOperatorDefaults(config *OperatorConfig) *ResolvedExecutionConfig {
-	return &ResolvedExecutionConfig{
+	resolved := &ResolvedExecutionConfig{
 		ImagePullPolicy: config.Controller.ImagePullPolicy,
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
@@ -149,6 +149,25 @@ func (cr *Resolver) getOperatorDefaults(config *OperatorConfig) *ResolvedExecuti
 		BackoffBase:                  config.Controller.ExponentialBackoffBase,
 		BackoffMax:                   config.Controller.ExponentialBackoffMax,
 	}
+
+	// Operator-level default storage
+	switch config.Controller.DefaultStorageProvider {
+	case "s3":
+		if config.Controller.DefaultS3Bucket != "" {
+			resolved.Storage = &v1alpha1.StoragePolicy{
+				S3: &v1alpha1.S3StorageProvider{
+					Bucket:         config.Controller.DefaultS3Bucket,
+					Region:         config.Controller.DefaultS3Region,
+					Endpoint:       config.Controller.DefaultS3Endpoint,
+					Authentication: v1alpha1.S3Authentication{},
+				},
+			}
+			if name := config.Controller.DefaultS3AuthSecretName; name != "" {
+				resolved.Storage.S3.Authentication.SecretRef = &corev1.LocalObjectReference{Name: name}
+			}
+		}
+	}
+	return resolved
 }
 
 // applyEngramTemplateConfig applies settings from the EngramTemplate.
@@ -410,17 +429,19 @@ func applyProbeOverrides(overrides *v1alpha1.ExecutionOverrides, config *Resolve
 }
 
 // applyStoryConfig applies settings from the Story
-func (cr *Resolver) applyStoryConfig(story *v1alpha1.Story, stepRun *runsv1alpha1.StepRun, config *ResolvedExecutionConfig) {
-	if story == nil || stepRun == nil {
+func (cr *Resolver) applyStoryConfig(story *v1alpha1.Story, stepRun *runsv1alpha1.StepRun, storyStep *v1alpha1.Step, config *ResolvedExecutionConfig) {
+	if story == nil {
 		return
 	}
 
 	// Find the specific step in the story spec that this StepRun is executing
-	var currentStep *v1alpha1.Step
-	for i := range story.Spec.Steps {
-		if story.Spec.Steps[i].Name == stepRun.Spec.StepID {
-			currentStep = &story.Spec.Steps[i]
-			break
+	currentStep := storyStep
+	if currentStep == nil && stepRun != nil {
+		for i := range story.Spec.Steps {
+			if story.Spec.Steps[i].Name == stepRun.Spec.StepID {
+				currentStep = &story.Spec.Steps[i]
+				break
+			}
 		}
 	}
 
@@ -432,6 +453,11 @@ func (cr *Resolver) applyStoryConfig(story *v1alpha1.Story, stepRun *runsv1alpha
 		for k, v := range currentStep.Secrets {
 			config.Secrets[k] = v // Step secrets have higher priority
 		}
+	}
+
+	// Apply step-level execution overrides (service account, security, retries, timeouts, probes).
+	if currentStep != nil {
+		cr.ApplyExecutionOverrides(currentStep.Execution, config)
 	}
 
 	// Wire storage policy from Story into resolved config so controllers can provision PVCs

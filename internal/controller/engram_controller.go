@@ -99,6 +99,10 @@ func (r *EngramReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res
 	})
 
 	if patchErr != nil {
+		if errors.IsNotFound(patchErr) {
+			// Object was removed while we were patching status; nothing left to do.
+			return ctrl.Result{}, nil
+		}
 		log.Error(patchErr, "Failed to update Engram status")
 		return ctrl.Result{}, patchErr
 	}

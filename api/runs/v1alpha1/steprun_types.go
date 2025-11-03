@@ -112,6 +112,12 @@ type StepRunSpec struct {
 	// Can be a list to support fanning out to multiple parallel steps.
 	// +optional
 	DownstreamTargets []DownstreamTarget `json:"downstreamTargets,omitempty"`
+
+	// RequestedManifest lists the metadata fields the controller expects the SDK
+	// to materialize alongside the offloaded output. These are derived from CEL expressions
+	// that reference this step's outputs (e.g., len(steps.foo.output.bar)).
+	// +optional
+	RequestedManifest []ManifestRequest `json:"requestedManifest,omitempty"`
 }
 
 // DownstreamTarget defines the destination for an Engram's output in real-time execution mode.
@@ -140,7 +146,50 @@ type TerminateTarget struct {
 	StopMode enums.StopMode `json:"stopMode"`
 }
 
+// ManifestOperation enumerates the metadata operations supported for step manifests.
+type ManifestOperation string
+
+const (
+	// ManifestOperationExists records whether the referenced field exists/non-nil.
+	ManifestOperationExists ManifestOperation = "exists"
+	// ManifestOperationLength records the length of the referenced field when it is an array, map, or string.
+	ManifestOperationLength ManifestOperation = "length"
+)
+
+// ManifestRequest describes a single output field and the metadata operations required for it.
+type ManifestRequest struct {
+	// Path is the dot/bracket notation path relative to the step output root.
+	// Examples: "result.items", "tools", "items[0].id".
+	// +kubebuilder:validation:MinLength=1
+	Path string `json:"path"`
+	// Operations lists the metadata operations that should be computed for this path.
+	// Defaults to ["exists"] when omitted.
+	// +optional
+	Operations []ManifestOperation `json:"operations,omitempty"`
+}
+
+// StepManifestData captures the metadata emitted by the SDK for a single manifest path.
+type StepManifestData struct {
+	// Exists indicates whether the referenced field was present and non-nil.
+	// +optional
+	Exists *bool `json:"exists,omitempty"`
+	// Length contains the computed length when requested and applicable.
+	// +optional
+	Length *int64 `json:"length,omitempty"`
+	// Truncated signals that the SDK could not compute the full metadata due to limits.
+	// +optional
+	Truncated bool `json:"truncated,omitempty"`
+	// Error contains a warning message emitted by the SDK when it cannot honour the manifest request.
+	// +optional
+	Error string `json:"error,omitempty"`
+	// Sample holds an optional representative slice of the data (implementation-defined).
+	// +optional
+	Sample *runtime.RawExtension `json:"sample,omitempty"`
+}
+
 // StepRunStatus tracks the detailed execution state of this individual step
+// +kubebuilder:validation:XValidation:message="status.conditions reason field must be <= 64 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.reason) || size(c.reason) <= 64)"
+// +kubebuilder:validation:XValidation:message="status.conditions message field must be <= 2048 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.message) || size(c.message) <= 2048)"
 type StepRunStatus struct {
 	// observedGeneration is the most recent generation observed for this StepRun. It corresponds to the
 	// StepRun's generation, which is updated on mutation by the API Server.
@@ -198,6 +247,16 @@ type StepRunStatus struct {
 	// Step coordination - which steps must complete before this one can start
 	// Uses the same "needs" terminology as our Story API for consistency
 	Needs []string `json:"needs,omitempty"` // StepRun names that must complete first
+
+	// Manifest contains metadata captured for this step's output that enables CEL expressions
+	// to execute without hydrating large blobs from storage.
+	// The map key matches the ManifestRequest path.
+	// +optional
+	Manifest map[string]StepManifestData `json:"manifest,omitempty"`
+
+	// ManifestWarnings contains any warnings produced while computing manifest data (e.g., unsupported operations).
+	// +optional
+	ManifestWarnings []string `json:"manifestWarnings,omitempty"`
 }
 
 // +kubebuilder:object:root=true

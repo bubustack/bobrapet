@@ -41,6 +41,16 @@ patches:
   target:
     kind: Deployment
 
+# Patch to override the config-name arg with the actual kustomized name
+# After metrics patch adds arg at index 0, our config-name is at index 4
+- patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/args/4
+      value: --config-name=bobrapet-bobrapet-operator-config
+  target:
+    kind: Deployment
+    name: controller-manager
+
 # Uncomment the patches line if you enable Metrics and CertManager
 # [METRICS-WITH-CERTS] To enable metrics protected with certManager, uncomment the following line.
 # This patch will protect the metrics with certManager self-signed certs.

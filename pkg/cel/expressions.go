@@ -149,7 +149,7 @@ func (r *ExpressionResolver) resolveStepsExpression(ctx context.Context, express
 	err := r.client.List(ctx, &stepRuns,
 		client.InNamespace(r.namespace),
 		client.MatchingLabels{
-			"bobrapet.bubustack.io/story-run": r.storyRun,
+			"bubustack.io/storyrun": r.storyRun,
 		})
 
 	if err != nil {
@@ -303,7 +303,7 @@ func (r *ExpressionResolver) CheckDependencies(ctx context.Context, dependencies
 	err := r.client.List(ctx, &stepRuns,
 		client.InNamespace(r.namespace),
 		client.MatchingLabels{
-			"bobrapet.bubustack.io/story-run": r.storyRun,
+			"bubustack.io/storyrun": r.storyRun,
 		})
 
 	if err != nil {

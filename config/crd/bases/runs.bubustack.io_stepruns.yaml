@@ -192,6 +192,34 @@ spec:
                   - Loop: {"items": ["file1.txt", "file2.txt"], "concurrency": 3}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
+              requestedManifest:
+                description: |-
+                  RequestedManifest lists the metadata fields the controller expects the SDK
+                  to materialize alongside the offloaded output. These are derived from CEL expressions
+                  that reference this step's outputs (e.g., len(steps.foo.output.bar)).
+                items:
+                  description: ManifestRequest describes a single output field and
+                    the metadata operations required for it.
+                  properties:
+                    operations:
+                      description: |-
+                        Operations lists the metadata operations that should be computed for this path.
+                        Defaults to ["exists"] when omitted.
+                      items:
+                        description: ManifestOperation enumerates the metadata operations
+                          supported for step manifests.
+                        type: string
+                      type: array
+                    path:
+                      description: |-
+                        Path is the dot/bracket notation path relative to the step output root.
+                        Examples: "result.items", "tools", "items[0].id".
+                      minLength: 1
+                      type: string
+                  required:
+                  - path
+                  type: object
+                type: array
               retry:
                 description: |-
                   What to do if this step fails?
@@ -371,6 +399,45 @@ spec:
                 type: string
               lastFailureMsg:
                 type: string
+              manifest:
+                additionalProperties:
+                  description: StepManifestData captures the metadata emitted by the
+                    SDK for a single manifest path.
+                  properties:
+                    error:
+                      description: Error contains a warning message emitted by the
+                        SDK when it cannot honour the manifest request.
+                      type: string
+                    exists:
+                      description: Exists indicates whether the referenced field was
+                        present and non-nil.
+                      type: boolean
+                    length:
+                      description: Length contains the computed length when requested
+                        and applicable.
+                      format: int64
+                      type: integer
+                    sample:
+                      description: Sample holds an optional representative slice of
+                        the data (implementation-defined).
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    truncated:
+                      description: Truncated signals that the SDK could not compute
+                        the full metadata due to limits.
+                      type: boolean
+                  type: object
+                description: |-
+                  Manifest contains metadata captured for this step's output that enables CEL expressions
+                  to execute without hydrating large blobs from storage.
+                  The map key matches the ManifestRequest path.
+                type: object
+              manifestWarnings:
+                description: ManifestWarnings contains any warnings produced while
+                  computing manifest data (e.g., unsupported operations).
+                items:
+                  type: string
+                type: array
               needs:
                 description: |-
                   Step coordination - which steps must complete before this one can start
@@ -433,6 +500,13 @@ spec:
                 format: date-time
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: status.conditions reason field must be <= 64 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.reason)
+                || size(c.reason) <= 64)'
+            - message: status.conditions message field must be <= 2048 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.message)
+                || size(c.message) <= 2048)'
         type: object
     served: true
     storage: true

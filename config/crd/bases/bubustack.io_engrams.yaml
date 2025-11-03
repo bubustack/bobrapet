@@ -165,9 +165,9 @@ spec:
                 description: Overrides allows for fine-tuning of execution behavior.
                 properties:
                   automountServiceAccountToken:
-                    description: |-
-                      AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
-                      Defaults to false.
+                    default: true
+                    description: AutomountServiceAccountToken controls whether a service
+                      account token should be automatically mounted.
                     type: boolean
                   imagePullPolicy:
                     description: Image pull policy override

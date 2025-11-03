@@ -313,9 +313,9 @@ spec:
                         Use sparingly - most configuration should be at the story or engram level
                       properties:
                         automountServiceAccountToken:
-                          description: |-
-                            AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
-                            Defaults to false.
+                          default: true
+                          description: AutomountServiceAccountToken controls whether
+                            a service account token should be automatically mounted.
                           type: boolean
                         imagePullPolicy:
                           description: Image pull policy override
@@ -534,6 +534,12 @@ spec:
             required:
             - steps
             type: object
+            x-kubernetes-validations:
+            - message: each step must set exactly one of ref or type
+              rule: self.steps.all(step, has(step.ref) != has(step.type))
+            - message: step names must be unique
+              rule: self.steps.all(step, self.steps.exists_one(other, other.name ==
+                step.name))
           status:
             description: StoryStatus defines the observed state of a Story.
             properties:

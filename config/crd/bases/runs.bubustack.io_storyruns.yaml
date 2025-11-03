@@ -354,6 +354,18 @@ spec:
                 format: int32
                 type: integer
             type: object
+            x-kubernetes-validations:
+            - message: status.conditions must include Ready when conditions are set
+              rule: '!has(self.conditions) || self.conditions.exists(c, c.type ==
+                ''Ready'')'
+            - message: status.conditions entries must set lastTransitionTime
+              rule: '!has(self.conditions) || self.conditions.all(c, has(c.lastTransitionTime))'
+            - message: status.conditions reason field must be <= 64 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.reason)
+                || size(c.reason) <= 64)'
+            - message: status.conditions message field must be <= 2048 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.message)
+                || size(c.message) <= 2048)'
         type: object
     served: true
     storage: true

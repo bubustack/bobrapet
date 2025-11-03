@@ -135,6 +135,14 @@ type ControllerConfig struct {
 	EnableVerboseLogging    bool `json:"enableVerboseLogging,omitempty"`
 	EnableStepOutputLogging bool `json:"enableStepOutputLogging,omitempty"`
 	EnableMetrics           bool `json:"enableMetrics,omitempty"`
+
+	// Operator-level default storage configuration (applied when Story policy is absent)
+	DefaultStorageProvider  string `json:"defaultStorageProvider,omitempty"`
+	DefaultS3Bucket         string `json:"defaultS3Bucket,omitempty"`
+	DefaultS3Region         string `json:"defaultS3Region,omitempty"`
+	DefaultS3Endpoint       string `json:"defaultS3Endpoint,omitempty"`
+	DefaultS3UsePathStyle   bool   `json:"defaultS3UsePathStyle,omitempty"`
+	DefaultS3AuthSecretName string `json:"defaultS3AuthSecretName,omitempty"`
 }
 
 // Telemetry feature gate
@@ -364,6 +372,11 @@ func (c *ControllerConfig) BuildEngramControllerOptions() controller.Options {
 			pickDuration(c.Engram.RateLimiter.MaxDelay, c.RequeueMaxDelay, 1*time.Minute),
 		),
 	}
+}
+
+// BuildRealtimeEngramControllerOptions mirrors the Engram controller options for realtime workloads
+func (c *ControllerConfig) BuildRealtimeEngramControllerOptions() controller.Options {
+	return c.BuildEngramControllerOptions()
 }
 
 // BuildImpulseControllerOptions builds controller.Options for Impulse

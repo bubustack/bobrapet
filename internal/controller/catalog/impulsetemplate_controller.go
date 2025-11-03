@@ -53,19 +53,20 @@ type ImpulseTemplateReconciler struct {
 // +kubebuilder:rbac:groups=catalog.bubustack.io,resources=impulsetemplates/finalizers,verbs=update
 
 // Reconcile validates and manages ImpulseTemplate lifecycle
-func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.Result, err error) {
 	// Initialize structured logging and metrics
 	rl := logging.NewReconcileLogger(ctx, "impulsetemplate")
 	startTime := time.Now()
 
 	defer func() {
 		duration := time.Since(startTime)
-		metrics.RecordControllerReconcile("impulsetemplate", duration, nil)
+		metrics.RecordControllerReconcile("impulsetemplate", duration, err)
 	}()
 
 	var template catalogv1alpha1.ImpulseTemplate
-	if err := r.Get(ctx, req.NamespacedName, &template); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	if err = r.Get(ctx, req.NamespacedName, &template); err != nil {
+		err = client.IgnoreNotFound(err)
+		return ctrl.Result{}, err
 	}
 
 	// Add template context to logger
@@ -76,10 +77,10 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if missing, handled := r.handleRequiredFields(&template); handled {
 		r.updateErrorStatus(&template, fmt.Sprintf("%s is required", missing))
 		rl.ReconcileError(fmt.Errorf("%s missing", missing), fmt.Sprintf("%s is required for ImpulseTemplate", missing))
-		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
+		if err = r.updateStatusWithRetry(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, err
 	}
 
 	templateLogger.Info("Validating ImpulseTemplate", "image", template.Spec.Image, "version", template.Spec.Version)
@@ -88,10 +89,10 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if invalidMode, handled := r.validateSupportedModes(&template); handled {
 		r.updateErrorStatus(&template, fmt.Sprintf("invalid supported mode '%s' for impulse template (must be deployment or statefulset)", invalidMode))
 		rl.ReconcileError(fmt.Errorf("invalid supported mode: %s", invalidMode), "Invalid supported mode for ImpulseTemplate")
-		if err := r.updateStatusWithRetry(ctx, &template); err != nil {
+		if err = r.updateStatusWithRetry(ctx, &template); err != nil {
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, err
 	}
 	templateLogger.V(1).Info("Supported modes validated", "modes", template.Spec.SupportedModes)
 
@@ -117,7 +118,7 @@ func (r *ImpulseTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		template.Status.UsageCount = int32(len(impulses.Items))
 	}
 
-	if err := r.updateStatusWithRetry(ctx, &template); err != nil {
+	if err = r.updateStatusWithRetry(ctx, &template); err != nil {
 		rl.ReconcileError(err, "Failed to update ImpulseTemplate status")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 	}

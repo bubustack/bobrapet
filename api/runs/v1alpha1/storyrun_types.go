@@ -80,6 +80,10 @@ type StoryRunSpec struct {
 }
 
 // StoryRunStatus tracks the current state and results of this story execution
+// +kubebuilder:validation:XValidation:rule="!has(self.conditions) || self.conditions.exists(c, c.type == 'Ready')",message="status.conditions must include Ready when conditions are set"
+// +kubebuilder:validation:XValidation:rule="!has(self.conditions) || self.conditions.all(c, has(c.lastTransitionTime))",message="status.conditions entries must set lastTransitionTime"
+// +kubebuilder:validation:XValidation:message="status.conditions reason field must be <= 64 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.reason) || size(c.reason) <= 64)"
+// +kubebuilder:validation:XValidation:message="status.conditions message field must be <= 2048 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.message) || size(c.message) <= 2048)"
 type StoryRunStatus struct {
 	// observedGeneration is the most recent generation observed for this StoryRun. It corresponds to the
 	// StoryRun's generation, which is updated on mutation by the API Server.

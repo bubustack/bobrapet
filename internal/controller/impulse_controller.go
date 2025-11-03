@@ -36,10 +36,12 @@ import (
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	"github.com/bubustack/bobrapet/api/v1alpha1"
 	config "github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/internal/controller/naming"
 	"github.com/bubustack/bobrapet/pkg/conditions"
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/logging"
 	"github.com/bubustack/bobrapet/pkg/patch"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
 
@@ -64,76 +66,44 @@ type ImpulseReconciler struct {
 func (r *ImpulseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logging.NewReconcileLogger(ctx, "impulse").WithValues("impulse", req.NamespacedName)
 
-	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
+	ctx, cancel := r.withReconcileTimeout(ctx)
+	defer cancel()
 
-	var impulse v1alpha1.Impulse
-	if err := r.Get(ctx, req.NamespacedName, &impulse); err != nil {
+	impulse, err := r.fetchImpulse(ctx, req.NamespacedName)
+	if err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	if !impulse.DeletionTimestamp.IsZero() {
-		// Handle deletion if finalizers are added.
+	if handled := r.handleImpulseShortCircuit(impulse); handled {
 		return ctrl.Result{}, nil
 	}
 
-	if impulse.Status.Phase.IsTerminal() && impulse.Status.ObservedGeneration == impulse.Generation {
-		return ctrl.Result{}, nil
-	}
-
-	// Fetch the template
-	var template catalogv1alpha1.ImpulseTemplate
-	if err := r.Get(ctx, types.NamespacedName{Name: impulse.Spec.TemplateRef.Name}, &template); err != nil {
-		if errors.IsNotFound(err) {
-			log.Error(err, "ImpulseTemplate not found")
-			// Emit event for user visibility (guard recorder for tests)
-			if r.Recorder != nil {
-				r.Recorder.Event(&impulse, corev1.EventTypeWarning, conditions.ReasonTemplateNotFound, fmt.Sprintf("ImpulseTemplate '%s' not found", impulse.Spec.TemplateRef.Name))
-			}
-			err := r.setImpulsePhase(ctx, &impulse, enums.PhaseBlocked, fmt.Sprintf("ImpulseTemplate '%s' not found", impulse.Spec.TemplateRef.Name))
-			return ctrl.Result{}, err // Stop reconciliation, wait for watch to trigger.
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to get ImpulseTemplate: %w", err)
-	}
-
-	// Resolve the full configuration
-	// The resolver expects an EngramTemplate, so we construct one from the ImpulseTemplate's spec.
-	engramTemplate := &catalogv1alpha1.EngramTemplate{
-		Spec: catalogv1alpha1.EngramTemplateSpec{
-			TemplateSpec: catalogv1alpha1.TemplateSpec{
-				Version:        template.Spec.Version,
-				Description:    template.Spec.Description,
-				Image:          template.Spec.Image,
-				SupportedModes: template.Spec.SupportedModes,
-				Execution:      template.Spec.Execution,
-				SecretSchema:   template.Spec.SecretSchema,
-				ConfigSchema:   template.Spec.ConfigSchema,
-			},
-		},
-	}
-	resolvedConfig, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, nil, nil, engramTemplate)
+	template, stop, err := r.loadImpulseTemplate(ctx, impulse, log)
 	if err != nil {
-		err := r.setImpulsePhase(ctx, &impulse, enums.PhaseFailed, fmt.Sprintf("Failed to resolve configuration: %s", err))
-		if err != nil {
-			log.Error(err, "Failed to update impulse status")
-		}
-		return ctrl.Result{}, fmt.Errorf("failed to resolve execution config for impulse '%s': %w", impulse.Name, err)
-	}
-
-	// Reconcile the deployment
-	deployment, err := r.reconcileDeployment(ctx, &impulse, &template, resolvedConfig)
-	if err != nil {
-		err := r.setImpulsePhase(ctx, &impulse, enums.PhaseFailed, fmt.Sprintf("Failed to reconcile Deployment: %s", err))
 		return ctrl.Result{}, err
+	}
+	if stop {
+		return ctrl.Result{}, nil
+	}
+
+	resolvedConfig, err := r.resolveImpulseConfig(ctx, impulse, template, log)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	deployment, reconcileErr := r.reconcileDeployment(ctx, impulse, template, resolvedConfig)
+	if reconcileErr != nil {
+		return ctrl.Result{}, r.handleDeploymentError(ctx, impulse, reconcileErr)
 	}
 
 	// Update status based on the Deployment's state
-	if err := r.updateImpulseStatus(ctx, &impulse, deployment); err != nil {
+	if err := r.updateImpulseStatus(ctx, impulse, deployment); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Reconcile the Service whenever the template exposes ports.
+	if _, serviceErr := r.reconcileService(ctx, impulse, resolvedConfig); serviceErr != nil {
+		return ctrl.Result{}, r.handleServiceError(ctx, impulse, serviceErr)
 	}
 	return ctrl.Result{}, nil
 }
@@ -141,14 +111,15 @@ func (r *ImpulseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *ImpulseReconciler) reconcileDeployment(ctx context.Context, impulse *v1alpha1.Impulse, template *catalogv1alpha1.ImpulseTemplate, execCfg *config.ResolvedExecutionConfig) (*appsv1.Deployment, error) {
 	log := logging.NewReconcileLogger(ctx, "impulse-deployment").WithValues("impulse", impulse.Name)
 	deployment := &appsv1.Deployment{}
-	deploymentName := fmt.Sprintf("%s-%s-impulse", impulse.Name, impulse.Spec.TemplateRef.Name)
+	deploymentName := naming.Compose(impulse.Name, impulse.Spec.TemplateRef.Name, "impulse")
 	deploymentKey := types.NamespacedName{Name: deploymentName, Namespace: impulse.Namespace}
+	engramTemplate := convertImpulseTemplate(template)
 
 	err := r.Get(ctx, deploymentKey, deployment)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Create it
-			newDeployment := r.buildDeploymentForImpulse(impulse, template, execCfg)
+			newDeployment := r.buildDeploymentForImpulse(impulse, engramTemplate, execCfg)
 			if err := controllerutil.SetControllerReference(impulse, newDeployment, r.Scheme); err != nil {
 				return nil, fmt.Errorf("failed to set owner reference on Deployment: %w", err)
 			}
@@ -162,7 +133,7 @@ func (r *ImpulseReconciler) reconcileDeployment(ctx context.Context, impulse *v1
 	}
 
 	// It exists, so check for updates.
-	desiredDeployment := r.buildDeploymentForImpulse(impulse, template, execCfg)
+	desiredDeployment := r.buildDeploymentForImpulse(impulse, engramTemplate, execCfg)
 	// A simple way to check for differences is to compare the pod templates.
 	// For more complex scenarios, a 3-way merge or more specific field comparisons might be needed.
 	if !reflect.DeepEqual(deployment.Spec.Template, desiredDeployment.Spec.Template) {
@@ -175,6 +146,92 @@ func (r *ImpulseReconciler) reconcileDeployment(ctx context.Context, impulse *v1
 	}
 
 	return deployment, nil
+}
+
+func (r *ImpulseReconciler) withReconcileTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := r.ConfigResolver.GetOperatorConfig().Controller.ReconcileTimeout
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func (r *ImpulseReconciler) fetchImpulse(ctx context.Context, key types.NamespacedName) (*v1alpha1.Impulse, error) {
+	var impulse v1alpha1.Impulse
+	if err := r.Get(ctx, key, &impulse); err != nil {
+		return nil, err
+	}
+	return &impulse, nil
+}
+
+func (r *ImpulseReconciler) handleImpulseShortCircuit(impulse *v1alpha1.Impulse) bool {
+	if !impulse.DeletionTimestamp.IsZero() {
+		return true
+	}
+	if impulse.Status.Phase.IsTerminal() && impulse.Status.ObservedGeneration == impulse.Generation {
+		return true
+	}
+	return false
+}
+
+func (r *ImpulseReconciler) loadImpulseTemplate(ctx context.Context, impulse *v1alpha1.Impulse, log *logging.ControllerLogger) (*catalogv1alpha1.ImpulseTemplate, bool, error) {
+	var template catalogv1alpha1.ImpulseTemplate
+	err := r.Get(ctx, types.NamespacedName{Name: impulse.Spec.TemplateRef.Name}, &template)
+	if err == nil {
+		return &template, false, nil
+	}
+	if errors.IsNotFound(err) {
+		log.Error(err, "ImpulseTemplate not found")
+		if r.Recorder != nil {
+			r.Recorder.Event(impulse, corev1.EventTypeWarning, conditions.ReasonTemplateNotFound, fmt.Sprintf("ImpulseTemplate '%s' not found", impulse.Spec.TemplateRef.Name))
+		}
+		if patchErr := r.setImpulsePhase(ctx, impulse, enums.PhaseBlocked, fmt.Sprintf("ImpulseTemplate '%s' not found", impulse.Spec.TemplateRef.Name)); patchErr != nil {
+			return nil, false, patchErr
+		}
+		return nil, true, nil
+	}
+	return nil, false, fmt.Errorf("failed to get ImpulseTemplate: %w", err)
+}
+
+func (r *ImpulseReconciler) resolveImpulseConfig(ctx context.Context, impulse *v1alpha1.Impulse, template *catalogv1alpha1.ImpulseTemplate, log *logging.ControllerLogger) (*config.ResolvedExecutionConfig, error) {
+	engramTemplate := convertImpulseTemplate(template)
+	resolvedConfig, resolveErr := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, nil, nil, engramTemplate, nil)
+	if resolveErr != nil {
+		if r.Recorder != nil {
+			r.Recorder.Event(impulse, corev1.EventTypeWarning, conditions.ReasonInvalidConfiguration, fmt.Sprintf("Failed to resolve execution config: %s", resolveErr))
+		}
+		if patchErr := r.setImpulsePhase(ctx, impulse, enums.PhaseFailed, fmt.Sprintf("Failed to resolve configuration: %s", resolveErr)); patchErr != nil {
+			log.Error(patchErr, "Failed to update impulse status")
+			return nil, patchErr
+		}
+		return nil, fmt.Errorf("failed to resolve execution config for impulse '%s': %w", impulse.Name, resolveErr)
+	}
+
+	if len(impulse.Spec.Secrets) > 0 {
+		if resolvedConfig.Secrets == nil {
+			resolvedConfig.Secrets = make(map[string]string, len(impulse.Spec.Secrets))
+		}
+		for key, value := range impulse.Spec.Secrets {
+			resolvedConfig.Secrets[key] = value
+		}
+	}
+
+	r.ConfigResolver.ApplyExecutionOverrides(impulse.Spec.Execution, resolvedConfig)
+	return resolvedConfig, nil
+}
+
+func (r *ImpulseReconciler) handleDeploymentError(ctx context.Context, impulse *v1alpha1.Impulse, reconcileErr error) error {
+	if patchErr := r.setImpulsePhase(ctx, impulse, enums.PhaseFailed, fmt.Sprintf("Failed to reconcile Deployment: %s", reconcileErr)); patchErr != nil {
+		return patchErr
+	}
+	return fmt.Errorf("failed to reconcile Deployment for impulse '%s': %w", impulse.Name, reconcileErr)
+}
+
+func (r *ImpulseReconciler) handleServiceError(ctx context.Context, impulse *v1alpha1.Impulse, serviceErr error) error {
+	if patchErr := r.setImpulsePhase(ctx, impulse, enums.PhaseFailed, fmt.Sprintf("Failed to reconcile Service: %s", serviceErr)); patchErr != nil {
+		return patchErr
+	}
+	return fmt.Errorf("failed to reconcile Service for impulse '%s': %w", impulse.Name, serviceErr)
 }
 
 func (r *ImpulseReconciler) updateImpulseStatus(ctx context.Context, impulse *v1alpha1.Impulse, deployment *appsv1.Deployment) error {
@@ -249,8 +306,8 @@ func (r *ImpulseReconciler) setImpulsePhase(ctx context.Context, impulse *v1alph
 }
 
 // buildDeploymentForImpulse creates a new Deployment object for an Impulse
-func (r *ImpulseReconciler) buildDeploymentForImpulse(impulse *v1alpha1.Impulse, _ *catalogv1alpha1.ImpulseTemplate, execCfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
-	deploymentName := fmt.Sprintf("%s-%s-impulse", impulse.Name, impulse.Spec.TemplateRef.Name)
+func (r *ImpulseReconciler) buildDeploymentForImpulse(impulse *v1alpha1.Impulse, engramTemplate *catalogv1alpha1.EngramTemplate, execCfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
+	deploymentName := naming.Compose(impulse.Name, impulse.Spec.TemplateRef.Name, "impulse")
 	labels := map[string]string{
 		"app.kubernetes.io/name":       "bobrapet-impulse",
 		"app.kubernetes.io/instance":   impulse.Name,
@@ -272,6 +329,30 @@ func (r *ImpulseReconciler) buildDeploymentForImpulse(impulse *v1alpha1.Impulse,
 		envVars = append(envVars, corev1.EnvVar{Name: "BUBU_IMPULSE_WITH", Value: string(impulse.Spec.With.Raw)})
 	}
 
+	podSpec := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: labels,
+		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName:           execCfg.ServiceAccountName,
+			AutomountServiceAccountToken: ptr.To(execCfg.AutomountServiceAccountToken),
+			SecurityContext:              execCfg.ToPodSecurityContext(),
+			Containers: []corev1.Container{{
+				Name:            "impulse",
+				Image:           execCfg.Image,
+				ImagePullPolicy: execCfg.ImagePullPolicy,
+				LivenessProbe:   execCfg.LivenessProbe,
+				ReadinessProbe:  execCfg.ReadinessProbe,
+				StartupProbe:    execCfg.StartupProbe,
+				SecurityContext: execCfg.ToContainerSecurityContext(),
+				Resources:       execCfg.Resources,
+				Env:             envVars,
+			}},
+		},
+	}
+	applyStorageEnv(execCfg, &podSpec.Spec.Containers[0])
+	applySecretArtifacts(engramTemplate, execCfg, &podSpec)
+
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deploymentName,
@@ -283,23 +364,132 @@ func (r *ImpulseReconciler) buildDeploymentForImpulse(impulse *v1alpha1.Impulse,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: labels,
 			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: execCfg.ServiceAccountName,
-					Containers: []corev1.Container{{
-						Name:  "impulse",
-						Image: execCfg.Image,
-						Env:   envVars,
-					}},
-				},
-			},
+			Template: podSpec,
 		},
 	}
 
 	return deployment
+}
+
+func (r *ImpulseReconciler) reconcileService(ctx context.Context, impulse *v1alpha1.Impulse, execCfg *config.ResolvedExecutionConfig) (*corev1.Service, error) {
+	if execCfg == nil || len(execCfg.ServicePorts) == 0 {
+		return nil, nil
+	}
+
+	log := logging.NewReconcileLogger(ctx, "impulse-service").WithValues("impulse", impulse.Name)
+	serviceName := naming.Compose(impulse.Name, impulse.Spec.TemplateRef.Name, "impulse")
+	serviceKey := types.NamespacedName{Name: serviceName, Namespace: impulse.Namespace}
+	service := &corev1.Service{}
+
+	if err := r.Get(ctx, serviceKey, service); err != nil {
+		if !errors.IsNotFound(err) {
+			return nil, fmt.Errorf("failed to get Service: %w", err)
+		}
+		newSvc := r.buildServiceForImpulse(impulse, execCfg, serviceName)
+		if err := controllerutil.SetControllerReference(impulse, newSvc, r.Scheme); err != nil {
+			return nil, fmt.Errorf("failed to set owner reference on Service: %w", err)
+		}
+		if err := r.Create(ctx, newSvc); err != nil {
+			return nil, fmt.Errorf("failed to create Service: %w", err)
+		}
+		log.Info("Created new Service for Impulse")
+		return newSvc, nil
+	}
+
+	desired := r.buildServiceForImpulse(impulse, execCfg, serviceName)
+	desired.Spec.ClusterIP = service.Spec.ClusterIP
+	desired.Spec.ClusterIPs = append([]string(nil), service.Spec.ClusterIPs...)
+	desired.Spec.IPFamilies = append([]corev1.IPFamily(nil), service.Spec.IPFamilies...)
+	desired.Spec.IPFamilyPolicy = service.Spec.IPFamilyPolicy
+	desired.Spec.HealthCheckNodePort = service.Spec.HealthCheckNodePort
+	desired.ResourceVersion = service.ResourceVersion
+
+	if !reflect.DeepEqual(service.Spec, desired.Spec) ||
+		!reflect.DeepEqual(service.Labels, desired.Labels) ||
+		!reflect.DeepEqual(service.Annotations, desired.Annotations) {
+		original := service.DeepCopy()
+		service.Spec = desired.Spec
+		service.Labels = desired.Labels
+		service.Annotations = desired.Annotations
+		if err := r.Patch(ctx, service, client.MergeFrom(original)); err != nil {
+			return nil, fmt.Errorf("failed to update Service: %w", err)
+		}
+		log.Info("Updated Service for Impulse")
+	}
+
+	return service, nil
+}
+
+func (r *ImpulseReconciler) buildServiceForImpulse(impulse *v1alpha1.Impulse, execCfg *config.ResolvedExecutionConfig, serviceName string) *corev1.Service {
+	selectorLabels := map[string]string{
+		"app.kubernetes.io/name":       "bobrapet-impulse",
+		"app.kubernetes.io/instance":   impulse.Name,
+		"app.kubernetes.io/managed-by": "bobrapet-operator",
+	}
+
+	serviceLabels := make(map[string]string, len(selectorLabels)+len(execCfg.ServiceLabels))
+	for k, v := range selectorLabels {
+		serviceLabels[k] = v
+	}
+	for k, v := range execCfg.ServiceLabels {
+		serviceLabels[k] = v
+	}
+	if impulse.Spec.Service != nil && len(impulse.Spec.Service.Labels) > 0 {
+		for k, v := range impulse.Spec.Service.Labels {
+			serviceLabels[k] = v
+		}
+	}
+
+	annotations := make(map[string]string, len(execCfg.ServiceAnnotations))
+	for k, v := range execCfg.ServiceAnnotations {
+		annotations[k] = v
+	}
+	if impulse.Spec.Service != nil && len(impulse.Spec.Service.Annotations) > 0 {
+		for k, v := range impulse.Spec.Service.Annotations {
+			annotations[k] = v
+		}
+	}
+
+	ports := make([]corev1.ServicePort, len(execCfg.ServicePorts))
+	copy(ports, execCfg.ServicePorts)
+
+	serviceType := corev1.ServiceTypeClusterIP
+	if impulse.Spec.Service != nil && impulse.Spec.Service.Type != "" {
+		serviceType = corev1.ServiceType(impulse.Spec.Service.Type)
+	}
+
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        serviceName,
+			Namespace:   impulse.Namespace,
+			Labels:      serviceLabels,
+			Annotations: annotations,
+		},
+		Spec: corev1.ServiceSpec{
+			Type:     serviceType,
+			Selector: selectorLabels,
+			Ports:    ports,
+		},
+	}
+}
+
+func convertImpulseTemplate(template *catalogv1alpha1.ImpulseTemplate) *catalogv1alpha1.EngramTemplate {
+	if template == nil {
+		return nil
+	}
+	return &catalogv1alpha1.EngramTemplate{
+		Spec: catalogv1alpha1.EngramTemplateSpec{
+			TemplateSpec: catalogv1alpha1.TemplateSpec{
+				Version:        template.Spec.Version,
+				Description:    template.Spec.Description,
+				Image:          template.Spec.Image,
+				SupportedModes: template.Spec.SupportedModes,
+				Execution:      template.Spec.Execution,
+				SecretSchema:   template.Spec.SecretSchema,
+				ConfigSchema:   template.Spec.ConfigSchema,
+			},
+		},
+	}
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -314,6 +504,7 @@ func (r *ImpulseReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.O
 		WithOptions(opts).
 		Owns(&appsv1.Deployment{}).
 		Owns(&appsv1.StatefulSet{}).
+		Owns(&corev1.Service{}).
 		Complete(r)
 }
 

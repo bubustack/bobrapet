@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,25 +42,20 @@ import (
 var storyrunlog = logf.Log.WithName("storyrun-resource")
 
 type StoryRunWebhook struct {
-	Client client.Client
-	Config *config.ControllerConfig
+	Client        client.Client
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
 }
 
 func (wh *StoryRunWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	wh.Client = mgr.GetClient()
-	// Initialize operator config for validation knobs
-	operatorConfigManager := config.NewOperatorConfigManager(
-		mgr.GetClient(),
-		"bobrapet-system",
-		"bobrapet-operator-config",
-	)
-	wh.Config = operatorConfigManager.GetControllerConfig()
 
 	return ctrl.NewWebhookManagedBy(mgr).
 		For(&runsv1alpha1.StoryRun{}).
 		WithValidator(&StoryRunCustomValidator{
-			Client: mgr.GetClient(),
-			Config: wh.Config,
+			Client:        mgr.GetClient(),
+			Config:        wh.Config,
+			ConfigManager: wh.ConfigManager,
 		}).
 		Complete()
 }
@@ -75,11 +71,24 @@ func (wh *StoryRunWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type StoryRunCustomValidator struct {
-	Client client.Client
-	Config *config.ControllerConfig
+	Client        client.Client
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
 }
 
 var _ webhook.CustomValidator = &StoryRunCustomValidator{}
+
+func (v *StoryRunCustomValidator) controllerConfig() *config.ControllerConfig {
+	if v.ConfigManager != nil {
+		if cfg := v.ConfigManager.GetControllerConfig(); cfg != nil {
+			return cfg
+		}
+	}
+	if v.Config != nil {
+		return v.Config
+	}
+	return config.DefaultControllerConfig()
+}
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
 func (v *StoryRunCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
@@ -102,6 +111,21 @@ func (v *StoryRunCustomValidator) ValidateUpdate(ctx context.Context, oldObj, ne
 		return nil, fmt.Errorf("expected a StoryRun object for the newObj but got %T", newObj)
 	}
 	storyrunlog.Info("Validation for StoryRun upon update", "name", storyrun.GetName())
+
+	// Allow metadata-only updates during deletion (e.g., finalizer removal)
+	if storyrun.DeletionTimestamp != nil {
+		return nil, nil
+	}
+
+	// Skip validation if the spec hasn't changed (typical for metadata-only updates)
+	if oldSr, ok := oldObj.(*runsv1alpha1.StoryRun); ok {
+		if err := ensureStoryRunObservedGenerationMonotonic(oldSr, storyrun); err != nil {
+			return nil, err
+		}
+		if reflect.DeepEqual(oldSr.Spec, storyrun.Spec) {
+			return nil, nil
+		}
+	}
 
 	if err := v.validateStoryRun(ctx, storyrun); err != nil {
 		return nil, err
@@ -131,7 +155,8 @@ func (v *StoryRunCustomValidator) validateStoryRun(ctx context.Context, sr *runs
 	if err != nil {
 		return err
 	}
-	if err := validateInputsShapeAndSize(v.Config, sr); err != nil {
+	cfg := v.controllerConfig()
+	if err := validateInputsShapeAndSize(cfg, sr); err != nil {
 		return err
 	}
 	return validateInputsSchema(story, sr)
@@ -199,6 +224,15 @@ func validateInputsSchema(story *bubuv1alpha1.Story, sr *runsv1alpha1.StoryRun) 
 			errs = append(errs, desc.String())
 		}
 		return fmt.Errorf("spec.inputs is invalid against Story schema: %v", errs)
+	}
+	return nil
+}
+
+func ensureStoryRunObservedGenerationMonotonic(oldSR, newSR *runsv1alpha1.StoryRun) error {
+	oldGen := oldSR.Status.ObservedGeneration
+	newGen := newSR.Status.ObservedGeneration
+	if oldGen > 0 && newGen > 0 && newGen < oldGen {
+		return fmt.Errorf("status.observedGeneration must be monotonically increasing (old=%d new=%d)", oldGen, newGen)
 	}
 	return nil
 }

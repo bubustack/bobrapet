@@ -20,10 +20,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"sort"
+	"strings"
 	"time"
 
-	"github.com/xeipuuv/gojsonschema"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,21 +47,24 @@ var storylog = logf.Log.WithName("story-resource")
 // StoryWebhook sets up the webhook for Story in the manager.
 type StoryWebhook struct {
 	client.Client
-	Config *config.ControllerConfig
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
 }
 
 // SetupWebhookWithManager registers the webhook for Story in the manager.
 func (wh *StoryWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	wh.Client = mgr.GetClient()
 
-	operatorConfigManager := config.NewOperatorConfigManager(mgr.GetClient(), "bobrapet-system", "bobrapet-operator-config")
-	wh.Config = operatorConfigManager.GetControllerConfig()
 	return ctrl.NewWebhookManagedBy(mgr).For(&bubushv1alpha1.Story{}).
 		WithValidator(&StoryCustomValidator{
-			Client: wh.Client,
-			Config: wh.Config,
+			Client:        wh.Client,
+			Config:        wh.Config,
+			ConfigManager: wh.ConfigManager,
 		}).
-		WithDefaulter(&StoryCustomDefaulter{}).
+		WithDefaulter(&StoryCustomDefaulter{
+			Config:        wh.Config,
+			ConfigManager: wh.ConfigManager,
+		}).
 		Complete()
 }
 
@@ -71,10 +76,23 @@ func (wh *StoryWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
 type StoryCustomDefaulter struct {
-	// TODO(user): Add more fields as needed for defaulting
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
 }
 
 var _ webhook.CustomDefaulter = &StoryCustomDefaulter{}
+
+func (d *StoryCustomDefaulter) controllerConfig() *config.ControllerConfig {
+	if d.ConfigManager != nil {
+		if cfg := d.ConfigManager.GetControllerConfig(); cfg != nil {
+			return cfg
+		}
+	}
+	if d.Config != nil {
+		return d.Config
+	}
+	return config.DefaultControllerConfig()
+}
 
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Story.
 func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
@@ -84,6 +102,19 @@ func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) er
 		return fmt.Errorf("expected an Story object but got %T", obj)
 	}
 	storylog.Info("Defaulting for Story", "name", story.GetName())
+
+	cfg := d.controllerConfig()
+	if story.Spec.Policy != nil {
+		if story.Spec.Policy.Retries == nil {
+			story.Spec.Policy.Retries = &bubushv1alpha1.StoryRetries{}
+		}
+		story.Spec.Policy.Retries.StepRetryPolicy = ResolveRetryPolicy(cfg, story.Spec.Policy.Retries.StepRetryPolicy)
+	}
+	for i := range story.Spec.Steps {
+		if story.Spec.Steps[i].Execution != nil {
+			story.Spec.Steps[i].Execution.Retry = ResolveRetryPolicy(cfg, story.Spec.Steps[i].Execution.Retry)
+		}
+	}
 
 	return nil
 }
@@ -98,11 +129,24 @@ func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) er
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type StoryCustomValidator struct {
-	Client client.Client
-	Config *config.ControllerConfig
+	Client        client.Client
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
 }
 
 var _ webhook.CustomValidator = &StoryCustomValidator{}
+
+func (v *StoryCustomValidator) controllerConfig() *config.ControllerConfig {
+	if v.ConfigManager != nil {
+		if cfg := v.ConfigManager.GetControllerConfig(); cfg != nil {
+			return cfg
+		}
+	}
+	if v.Config != nil {
+		return v.Config
+	}
+	return config.DefaultControllerConfig()
+}
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Story.
 func (v *StoryCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
@@ -128,6 +172,18 @@ func (v *StoryCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newOb
 		return nil, fmt.Errorf("expected a Story object for the newObj but got %T", newObj)
 	}
 	storylog.Info("Validation for Story upon update", "name", story.GetName())
+
+	// Allow metadata-only updates during deletion (e.g., finalizer removal)
+	if story.DeletionTimestamp != nil {
+		return nil, nil
+	}
+
+	// Skip validation if the spec hasn't changed
+	if oldStory, ok := oldObj.(*bubushv1alpha1.Story); ok {
+		if reflect.DeepEqual(oldStory.Spec, story.Spec) {
+			return nil, nil
+		}
+	}
 
 	webhookCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -158,7 +214,8 @@ func (v *StoryCustomValidator) validateStory(ctx context.Context, story *bubushv
 	if err := validateStorySize(story); err != nil {
 		return err
 	}
-	maxSize := pickStoryMaxWithSize(v.Config)
+	cfg := v.controllerConfig()
+	maxSize := pickStoryMaxWithSize(cfg)
 	if err := validateOutputSize(story, maxSize); err != nil {
 		return err
 	}
@@ -166,6 +223,12 @@ func (v *StoryCustomValidator) validateStory(ctx context.Context, story *bubushv
 		return err
 	}
 	if err := validateNeedsExistence(story); err != nil {
+		return err
+	}
+	if err := validateStepGraphAcyclic(story); err != nil {
+		return err
+	}
+	if err := v.validateExecuteStoryReferences(ctx, story); err != nil {
 		return err
 	}
 	return nil
@@ -184,6 +247,9 @@ func validateStorySize(story *bubushv1alpha1.Story) error {
 }
 
 func pickStoryMaxWithSize(cfg *config.ControllerConfig) int {
+	if cfg == nil {
+		cfg = config.DefaultControllerConfig()
+	}
 	maxSize := cfg.MaxStoryWithBlockSizeBytes
 	if maxSize <= 0 {
 		maxSize = config.DefaultControllerConfig().MaxStoryWithBlockSizeBytes
@@ -239,7 +305,8 @@ func validatePrimitiveShapes(s *bubushv1alpha1.Step) error {
 		}
 		var withConfig struct {
 			StoryRef struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				Namespace string `json:"namespace,omitempty"`
 			} `json:"storyRef"`
 		}
 		if err := json.Unmarshal(s.With.Raw, &withConfig); err != nil {
@@ -247,6 +314,47 @@ func validatePrimitiveShapes(s *bubushv1alpha1.Step) error {
 		}
 		if withConfig.StoryRef.Name == "" {
 			return fmt.Errorf("step '%s' of type 'executeStory' requires 'with.storyRef.name' to be set", s.Name)
+		}
+	}
+	return nil
+}
+
+func (v *StoryCustomValidator) validateExecuteStoryReferences(ctx context.Context, story *bubushv1alpha1.Story) error {
+	if v.Client == nil {
+		return nil
+	}
+	for i := range story.Spec.Steps {
+		step := &story.Spec.Steps[i]
+		if step.Type != enums.StepTypeExecuteStory || step.With == nil {
+			continue
+		}
+		var withConfig struct {
+			StoryRef struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace,omitempty"`
+			} `json:"storyRef"`
+		}
+		if err := json.Unmarshal(step.With.Raw, &withConfig); err != nil {
+			return fmt.Errorf("step '%s' has an invalid 'with' block for type 'executeStory': %w", step.Name, err)
+		}
+		targetNamespace := story.Namespace
+		if withConfig.StoryRef.Namespace != "" {
+			targetNamespace = withConfig.StoryRef.Namespace
+		}
+		if withConfig.StoryRef.Name == "" {
+			continue
+		}
+		if targetNamespace == story.Namespace && withConfig.StoryRef.Name == story.Name {
+			return fmt.Errorf("step '%s' of type 'executeStory' cannot reference the same story", step.Name)
+		}
+
+		var target bubushv1alpha1.Story
+		key := types.NamespacedName{Namespace: targetNamespace, Name: withConfig.StoryRef.Name}
+		if err := v.Client.Get(ctx, key, &target); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("step '%s' of type 'executeStory' references Story '%s/%s' which does not exist", step.Name, targetNamespace, withConfig.StoryRef.Name)
+			}
+			return fmt.Errorf("failed to validate executeStory reference for step '%s': %w", step.Name, err)
 		}
 	}
 	return nil
@@ -268,6 +376,92 @@ func validateNeedsExistence(story *bubushv1alpha1.Story) error {
 	return nil
 }
 
+func validateStepGraphAcyclic(story *bubushv1alpha1.Story) error {
+	if len(story.Spec.Steps) == 0 {
+		return nil
+	}
+
+	indegree, edges, err := buildStepDependencyGraph(story)
+	if err != nil {
+		return err
+	}
+
+	blocked := detectStepGraphCycles(indegree, edges)
+	if len(blocked) > 0 {
+		sort.Strings(blocked)
+		return fmt.Errorf("story contains a dependency cycle involving step(s): %s", strings.Join(blocked, ", "))
+	}
+	return nil
+}
+
+func buildStepDependencyGraph(story *bubushv1alpha1.Story) (map[string]int, map[string][]string, error) {
+	indegree := make(map[string]int, len(story.Spec.Steps))
+	edges := make(map[string][]string, len(story.Spec.Steps))
+	index := make(map[string]int, len(story.Spec.Steps))
+
+	for i := range story.Spec.Steps {
+		name := story.Spec.Steps[i].Name
+		indegree[name] = 0
+		index[name] = i
+	}
+
+	for i := range story.Spec.Steps {
+		step := &story.Spec.Steps[i]
+		seen := make(map[string]struct{}, len(step.Needs))
+		for _, dep := range step.Needs {
+			if dep == step.Name {
+				return nil, nil, fmt.Errorf("step '%s' cannot depend on itself", step.Name)
+			}
+			if depIdx, ok := index[dep]; ok && depIdx >= i {
+				return nil, nil, fmt.Errorf("step '%s' dependency '%s' must be declared before the step", step.Name, dep)
+			}
+			if _, dup := seen[dep]; dup {
+				continue
+			}
+			seen[dep] = struct{}{}
+			edges[dep] = append(edges[dep], step.Name)
+			indegree[step.Name]++
+		}
+	}
+
+	return indegree, edges, nil
+}
+
+func detectStepGraphCycles(indegree map[string]int, edges map[string][]string) []string {
+	queue := make([]string, 0, len(indegree))
+	for name, deg := range indegree {
+		if deg == 0 {
+			queue = append(queue, name)
+		}
+	}
+
+	processed := 0
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		processed++
+
+		for _, child := range edges[current] {
+			indegree[child]--
+			if indegree[child] == 0 {
+				queue = append(queue, child)
+			}
+		}
+	}
+
+	if processed == len(indegree) {
+		return nil
+	}
+
+	blocked := make([]string, 0, len(indegree))
+	for name, deg := range indegree {
+		if deg > 0 {
+			blocked = append(blocked, name)
+		}
+	}
+	return blocked
+}
+
 func (v *StoryCustomValidator) validateEngramStep(ctx context.Context, namespace string, step *bubushv1alpha1.Step) error {
 	// Fetch the Engram
 	var engram bubushv1alpha1.Engram
@@ -276,7 +470,7 @@ func (v *StoryCustomValidator) validateEngramStep(ctx context.Context, namespace
 		engramKey.Namespace = *step.Ref.Namespace
 	}
 	if err := v.Client.Get(ctx, engramKey, &engram); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("step '%s' references engram '%s' which does not exist in namespace '%s'", step.Name, engramKey.Name, engramKey.Namespace)
 		}
 		return fmt.Errorf("failed to get engram for step '%s': %w", step.Name, err)
@@ -285,26 +479,16 @@ func (v *StoryCustomValidator) validateEngramStep(ctx context.Context, namespace
 	// Fetch the EngramTemplate
 	var template v1alpha1.EngramTemplate
 	if err := v.Client.Get(ctx, types.NamespacedName{Name: engram.Spec.TemplateRef.Name, Namespace: ""}, &template); err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			return fmt.Errorf("step '%s' references engram '%s' which in turn references EngramTemplate '%s' that was not found", step.Name, engram.Name, engram.Spec.TemplateRef.Name)
 		}
 		return fmt.Errorf("failed to get EngramTemplate for step '%s': %w", step.Name, err)
 	}
 
-	// Validate the step's 'with' block against the template's inputSchema.
+	// Validate the step's 'with' block against the template's inputSchema using shared validator.
 	if step.With != nil && len(step.With.Raw) > 0 && template.Spec.InputSchema != nil && len(template.Spec.InputSchema.Raw) > 0 {
-		schemaLoader := gojsonschema.NewStringLoader(string(template.Spec.InputSchema.Raw))
-		documentLoader := gojsonschema.NewStringLoader(string(step.With.Raw))
-		result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-		if err != nil {
-			return fmt.Errorf("step '%s': error validating 'with' block against EngramTemplate schema: %w", step.Name, err)
-		}
-		if !result.Valid() {
-			var errs []string
-			for _, desc := range result.Errors() {
-				errs = append(errs, desc.String())
-			}
-			return fmt.Errorf("step '%s': 'with' block is invalid against EngramTemplate schema: %v", step.Name, errs)
+		if err := validateJSONAgainstSchema(step.With.Raw, template.Spec.InputSchema.Raw, "EngramTemplate"); err != nil {
+			return fmt.Errorf("step '%s': %w", step.Name, err)
 		}
 	}
 

@@ -2,6 +2,8 @@ package setup
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -11,6 +13,8 @@ import (
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
 var setupLog = log.Log.WithName("setup")
@@ -23,7 +27,7 @@ func SetupIndexers(ctx context.Context, mgr manager.Manager) {
 
 	mustIndexField(ctx, mgr, &bubushv1alpha1.Engram{}, "spec.templateRef.name", extractEngramTemplateName, "failed to index Engram spec.templateRef.name")
 
-	mustIndexField(ctx, mgr, &runsv1alpha1.StepRun{}, "spec.engramRef", extractStepRunEngramRef, "failed to index StepRun spec.engramRef.name")
+	mustIndexField(ctx, mgr, &runsv1alpha1.StepRun{}, "spec.engramRef.key", extractStepRunEngramRef, "failed to index StepRun spec.engramRef.key")
 
 	mustIndexField(ctx, mgr, &runsv1alpha1.StepRun{}, "spec.storyRunRef.name", extractStepRunStoryRunRef, "failed to index StepRun spec.storyRunRef.name")
 
@@ -35,7 +39,8 @@ func SetupIndexers(ctx context.Context, mgr manager.Manager) {
 
 	mustIndexField(ctx, mgr, &bubushv1alpha1.Impulse{}, "spec.storyRef.name", extractImpulseStoryRefName, "failed to index Impulse spec.storyRef.name")
 
-	mustIndexField(ctx, mgr, &bubushv1alpha1.Story{}, "spec.steps.ref.name", extractStoryStepEngramRefs, "failed to index Story spec.steps.ref.name")
+	mustIndexField(ctx, mgr, &bubushv1alpha1.Story{}, "spec.steps.ref.key", extractStoryStepEngramRefs, "failed to index Story spec.steps.ref.key")
+	mustIndexField(ctx, mgr, &bubushv1alpha1.Story{}, "spec.steps.storyRef.key", extractStoryExecuteStoryRefs, "failed to index Story spec.steps.storyRef.key")
 
 	mustIndexField(ctx, mgr, &catalogv1alpha1.EngramTemplate{}, "spec.description", extractEngramTemplateDescription, "failed to index EngramTemplate spec.description")
 
@@ -70,7 +75,8 @@ func extractStepRunEngramRef(rawObj client.Object) []string {
 	if stepRun.Spec.EngramRef == nil || stepRun.Spec.EngramRef.Name == "" {
 		return nil
 	}
-	return []string{stepRun.Spec.EngramRef.Name}
+	namespace := refs.ResolveNamespace(stepRun, &stepRun.Spec.EngramRef.ObjectReference)
+	return []string{namespacedKey(namespace, stepRun.Spec.EngramRef.Name)}
 }
 
 func extractStepRunStoryRunRef(rawObj client.Object) []string {
@@ -122,8 +128,48 @@ func extractStoryStepEngramRefs(rawObj client.Object) []string {
 	for i := range story.Spec.Steps {
 		step := &story.Spec.Steps[i]
 		if step.Ref != nil && step.Ref.Name != "" {
-			nameSet[step.Ref.Name] = struct{}{}
+			ns := refs.ResolveNamespace(story, &step.Ref.ObjectReference)
+			nameSet[namespacedKey(ns, step.Ref.Name)] = struct{}{}
 		}
+	}
+	if len(nameSet) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(nameSet))
+	for n := range nameSet {
+		out = append(out, n)
+	}
+	return out
+}
+
+func extractStoryExecuteStoryRefs(rawObj client.Object) []string {
+	story := rawObj.(*bubushv1alpha1.Story)
+	if len(story.Spec.Steps) == 0 {
+		return nil
+	}
+	nameSet := make(map[string]struct{})
+	for i := range story.Spec.Steps {
+		step := &story.Spec.Steps[i]
+		if step.Type != enums.StepTypeExecuteStory || step.With == nil || len(step.With.Raw) == 0 {
+			continue
+		}
+		var withBlock struct {
+			StoryRef struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace,omitempty"`
+			} `json:"storyRef"`
+		}
+		if err := json.Unmarshal(step.With.Raw, &withBlock); err != nil {
+			continue
+		}
+		if withBlock.StoryRef.Name == "" {
+			continue
+		}
+		targetNamespace := story.Namespace
+		if withBlock.StoryRef.Namespace != "" {
+			targetNamespace = withBlock.StoryRef.Namespace
+		}
+		nameSet[namespacedKey(targetNamespace, withBlock.StoryRef.Name)] = struct{}{}
 	}
 	if len(nameSet) == 0 {
 		return nil
@@ -145,4 +191,8 @@ func extractEngramTemplateDescription(obj client.Object) []string {
 
 func extractEngramTemplateVersion(obj client.Object) []string {
 	return []string{obj.(*catalogv1alpha1.EngramTemplate).Spec.Version}
+}
+
+func namespacedKey(namespace, name string) string {
+	return fmt.Sprintf("%s/%s", namespace, name)
 }

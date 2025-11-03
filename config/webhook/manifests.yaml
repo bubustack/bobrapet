@@ -76,46 +76,6 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
-      path: /validate-runs-bubustack-io-v1alpha1-steprun
-  failurePolicy: Fail
-  name: vsteprun-v1alpha1.kb.io
-  rules:
-  - apiGroups:
-    - runs.bubustack.io
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - stepruns
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
-      path: /validate-runs-bubustack-io-v1alpha1-storyrun
-  failurePolicy: Fail
-  name: vstoryrun-v1alpha1.kb.io
-  rules:
-  - apiGroups:
-    - runs.bubustack.io
-    apiVersions:
-    - v1alpha1
-    operations:
-    - CREATE
-    - UPDATE
-    resources:
-    - storyruns
-  sideEffects: None
-- admissionReviewVersions:
-  - v1
-  clientConfig:
-    service:
-      name: webhook-service
-      namespace: system
       path: /validate-bubustack-io-v1alpha1-engram
   failurePolicy: Fail
   name: vengram-v1alpha1.kb.io
@@ -169,4 +129,44 @@ webhooks:
     - UPDATE
     resources:
     - stories
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-runs-bubustack-io-v1alpha1-steprun
+  failurePolicy: Fail
+  name: vsteprun-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stepruns
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-runs-bubustack-io-v1alpha1-storyrun
+  failurePolicy: Fail
+  name: vstoryrun-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storyruns
   sideEffects: None

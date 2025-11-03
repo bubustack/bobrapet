@@ -35,13 +35,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # PRs
             type=ref,event=pr
-            # Default branch builds
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=sha
-            # Semver tags
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
@@ -85,4 +82,3 @@ jobs:
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
-

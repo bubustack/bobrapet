@@ -61,8 +61,10 @@ spec:
       - command:
         - /manager
         args:
-          - --leader-elect
-          - --health-probe-bind-address=:8081
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        - --config-namespace=bobrapet-system
+        - --config-name=bobrapet-operator-config
           # metrics-bind-address is configured via kustomize patch to :8443 (HTTPS)
         image: controller:latest
         imagePullPolicy: IfNotPresent

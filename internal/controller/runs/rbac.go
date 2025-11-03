@@ -9,7 +9,7 @@ import (
 	"github.com/bubustack/bobrapet/pkg/logging"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,7 +31,17 @@ func NewRBACManager(k8sClient client.Client, scheme *runtime.Scheme) *RBACManage
 // Reconcile ensures the necessary ServiceAccount, Role, and RoleBinding exist for the StoryRun.
 func (r *RBACManager) Reconcile(ctx context.Context, storyRun *runsv1alpha1.StoryRun) error {
 	log := logging.NewReconcileLogger(ctx, "storyrun-rbac")
-	story, _ := r.getStoryForRun(ctx, storyRun)
+	story, err := r.getStoryForRun(ctx, storyRun)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.WithStoryRun(storyRun).Info("Parent Story not found; continuing RBAC reconciliation without story-scoped annotations")
+		} else {
+			log.WithStoryRun(storyRun).Error(err, "Failed to fetch parent Story for RBAC provisioning")
+			return fmt.Errorf("failed to get Story %s for StoryRun %s: %w",
+				storyRun.Spec.StoryRef.ToNamespacedName(storyRun), storyRun.Name, err)
+		}
+		story = nil
+	}
 
 	saName := fmt.Sprintf("%s-engram-runner", storyRun.Name)
 	if err := r.reconcileServiceAccount(ctx, storyRun, story, saName, log); err != nil {
@@ -67,34 +77,43 @@ func (r *RBACManager) reconcileServiceAccount(ctx context.Context, storyRun *run
 }
 
 func (r *RBACManager) reconcileRole(ctx context.Context, storyRun *runsv1alpha1.StoryRun, saName string, log *logging.ReconcileLogger) error {
-	role := &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: storyRun.Namespace},
-		Rules:      []rbacv1.PolicyRule{{APIGroups: []string{"runs.bubustack.io"}, Resources: []string{"stepruns"}, Verbs: []string{"get", "watch"}}, {APIGroups: []string{"runs.bubustack.io"}, Resources: []string{"stepruns/status"}, Verbs: []string{"patch", "update"}}},
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: storyRun.Namespace}}
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
+		role.Rules = []rbacv1.PolicyRule{
+			{APIGroups: []string{"runs.bubustack.io"}, Resources: []string{"stepruns"}, Verbs: []string{"get", "watch"}},
+			{APIGroups: []string{"runs.bubustack.io"}, Resources: []string{"stepruns/status"}, Verbs: []string{"patch", "update"}},
+		}
+		return controllerutil.SetOwnerReference(storyRun, role, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create or update Role: %w", err)
 	}
-	if err := controllerutil.SetOwnerReference(storyRun, role, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on Role: %w", err)
-	}
-	if err := r.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create Role: %w", err)
-	} else if err == nil {
-		log.Info("Created Role for Engram runner", "role", role.Name)
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled Role for Engram runner", "role", role.Name, "operation", op)
 	}
 	return nil
 }
 
 func (r *RBACManager) reconcileRoleBinding(ctx context.Context, storyRun *runsv1alpha1.StoryRun, saName string, log *logging.ReconcileLogger) error {
-	rb := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: storyRun.Namespace},
-		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: saName, Namespace: storyRun.Namespace}},
-		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: saName},
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: storyRun.Namespace}}
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, rb, func() error {
+		rb.Subjects = []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      saName,
+			Namespace: storyRun.Namespace,
+		}}
+		rb.RoleRef = rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     saName,
+		}
+		return controllerutil.SetOwnerReference(storyRun, rb, r.Scheme)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create or update RoleBinding: %w", err)
 	}
-	if err := controllerutil.SetOwnerReference(storyRun, rb, r.Scheme); err != nil {
-		return fmt.Errorf("failed to set owner reference on RoleBinding: %w", err)
-	}
-	if err := r.Create(ctx, rb); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create RoleBinding: %w", err)
-	} else if err == nil {
-		log.Info("Created RoleBinding for Engram runner", "roleBinding", rb.Name)
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled RoleBinding for Engram runner", "roleBinding", rb.Name, "operation", op)
 	}
 	return nil
 }

@@ -53,6 +53,8 @@ type Story struct {
 }
 
 // StorySpec defines what the workflow does and how it should run
+// +kubebuilder:validation:XValidation:rule="self.steps.all(step, has(step.ref) != has(step.type))",message="each step must set exactly one of ref or type"
+// +kubebuilder:validation:XValidation:rule="self.steps.all(step, self.steps.exists_one(other, other.name == step.name))",message="step names must be unique"
 type StorySpec struct {
 	// Pattern specifies the execution model for the Story.
 	// "batch" stories are run to completion via a StoryRun.

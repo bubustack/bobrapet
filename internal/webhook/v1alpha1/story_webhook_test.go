@@ -1,87 +1,134 @@
-/*
-Copyright 2025 BubuStack.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-
 package v1alpha1
 
 import (
+	"encoding/json"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
-	// TODO (user): Add any additional imports if needed
+	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/pkg/enums"
 )
 
 var _ = Describe("Story Webhook", func() {
 	var (
-		obj       *bubushv1alpha1.Story
-		oldObj    *bubushv1alpha1.Story
 		validator StoryCustomValidator
 		defaulter StoryCustomDefaulter
 	)
 
 	BeforeEach(func() {
-		obj = &bubushv1alpha1.Story{}
-		oldObj = &bubushv1alpha1.Story{}
-		validator = StoryCustomValidator{}
-		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
-		defaulter = StoryCustomDefaulter{}
-		Expect(defaulter).NotTo(BeNil(), "Expected defaulter to be initialized")
-		Expect(oldObj).NotTo(BeNil(), "Expected oldObj to be initialized")
-		Expect(obj).NotTo(BeNil(), "Expected obj to be initialized")
-		// TODO (user): Add any setup logic common to all tests
+		cfg := config.DefaultControllerConfig()
+		validator = StoryCustomValidator{Client: k8sClient, Config: cfg}
+		defaulter = StoryCustomDefaulter{Config: cfg}
+		Expect(defaulter).NotTo(BeNil())
 	})
 
-	AfterEach(func() {
-		// TODO (user): Add any teardown logic common to all tests
+	Context("defaulting", func() {
+		It("applies retry defaults to story policy and steps", func() {
+			story := minimalStory("defaults")
+			story.Spec.Policy = &bubushv1alpha1.StoryPolicy{}
+			story.Spec.Steps[0].Execution = &bubushv1alpha1.ExecutionOverrides{}
+
+			Expect(defaulter.Default(ctx, story)).To(Succeed())
+			Expect(story.Spec.Policy.Retries).NotTo(BeNil())
+			Expect(story.Spec.Policy.Retries.StepRetryPolicy).NotTo(BeNil())
+			Expect(story.Spec.Steps[0].Execution.Retry).NotTo(BeNil())
+		})
 	})
 
-	Context("When creating Story under Defaulting Webhook", func() {
-		// TODO (user): Add logic for defaulting webhooks
-		// Example:
-		// It("Should apply defaults when a required field is empty", func() {
-		//     By("simulating a scenario where defaults should be applied")
-		//     obj.SomeFieldWithDefault = ""
-		//     By("calling the Default method to apply defaults")
-		//     defaulter.Default(ctx, obj)
-		//     By("checking that the default values are set")
-		//     Expect(obj.SomeFieldWithDefault).To(Equal("default_value"))
-		// })
-	})
+	Context("executeStory validation", func() {
+		It("rejects executeStory steps that reference missing stories", func() {
+			story := minimalStory("parent")
+			story.Spec.Steps = append(story.Spec.Steps, bubushv1alpha1.Step{
+				Name: "invoke-child",
+				Type: enums.StepTypeExecuteStory,
+				With: mustRawExtension(map[string]any{
+					"storyRef": map[string]any{"name": "missing"},
+				}),
+			})
 
-	Context("When creating or updating Story under Validating Webhook", func() {
-		// TODO (user): Add logic for validating webhooks
-		// Example:
-		// It("Should deny creation if a required field is missing", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = ""
-		//     Expect(validator.ValidateCreate(ctx, obj)).Error().To(HaveOccurred())
-		// })
-		//
-		// It("Should admit creation if all required fields are present", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = "valid_value"
-		//     Expect(validator.ValidateCreate(ctx, obj)).To(BeNil())
-		// })
-		//
-		// It("Should validate updates correctly", func() {
-		//     By("simulating a valid update scenario")
-		//     oldObj.SomeRequiredField = "updated_value"
-		//     obj.SomeRequiredField = "updated_value"
-		//     Expect(validator.ValidateUpdate(ctx, oldObj, obj)).To(BeNil())
-		// })
-	})
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("does not exist"))
+		})
 
+		It("rejects executeStory steps that reference the same story", func() {
+			story := minimalStory("loop")
+			story.Spec.Steps = append(story.Spec.Steps, bubushv1alpha1.Step{
+				Name: "self",
+				Type: enums.StepTypeExecuteStory,
+				With: mustRawExtension(map[string]any{
+					"storyRef": map[string]any{"name": "loop"},
+				}),
+			})
+
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("cannot reference the same story"))
+		})
+
+		It("allows executeStory steps that reference existing stories", func() {
+			child := minimalStory("child")
+			Expect(k8sClient.Create(ctx, child)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, child)
+			})
+
+			story := minimalStory("parent")
+			story.Spec.Steps = append(story.Spec.Steps, bubushv1alpha1.Step{
+				Name: "invoke-child",
+				Type: enums.StepTypeExecuteStory,
+				With: mustRawExtension(map[string]any{
+					"storyRef": map[string]any{"name": "child"},
+				}),
+			})
+
+			warnings, err := validator.ValidateCreate(ctx, story)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(warnings).To(BeNil())
+		})
+	})
 })
+
+func minimalStory(name string) *bubushv1alpha1.Story {
+	return &bubushv1alpha1.Story{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      name,
+		},
+		Spec: bubushv1alpha1.StorySpec{
+			Steps: []bubushv1alpha1.Step{{
+				Name: "prepare",
+				Type: enums.StepTypeSetData,
+			}},
+		},
+	}
+}
+
+func mustRawExtension(payload any) *runtime.RawExtension {
+	raw, err := toRawExtension(payload)
+	Expect(err).NotTo(HaveOccurred())
+	return raw
+}
+
+func toRawExtension(payload any) (*runtime.RawExtension, error) {
+	if payload == nil {
+		return nil, nil
+	}
+	switch v := payload.(type) {
+	case *runtime.RawExtension:
+		return v.DeepCopy(), nil
+	case []byte:
+		return &runtime.RawExtension{Raw: append([]byte(nil), v...)}, nil
+	default:
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		return &runtime.RawExtension{Raw: data}, nil
+	}
+}

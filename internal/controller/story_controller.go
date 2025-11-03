@@ -29,6 +29,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
@@ -43,14 +44,23 @@ import (
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/internal/controller/mergeutil"
+	"github.com/bubustack/bobrapet/internal/controller/naming"
+	"github.com/bubustack/bobrapet/internal/controller/secretutil"
 	"github.com/bubustack/bobrapet/pkg/metrics"
 	"github.com/bubustack/bobrapet/pkg/refs"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/utils/ptr"
 )
 
 const (
 	// StoryFinalizer is the name of the finalizer used by the Story controller.
 	StoryFinalizer = "story.bubustack.io/finalizer"
+)
+
+const (
+	storyStepEngramIndexField = "spec.steps.ref.key"
+	storyStepStoryIndexField  = "spec.steps.storyRef.key"
 )
 
 type executeStoryWith struct {
@@ -66,9 +76,9 @@ type StoryReconciler struct {
 // +kubebuilder:rbac:groups=bubustack.io,resources=stories,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=bubustack.io,resources=stories/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=bubustack.io,resources=stories/finalizers,verbs=update
-// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -186,7 +196,7 @@ func (r *StoryReconciler) cleanupOwnedResources(ctx context.Context, story *bubu
 	// Delete Deployments
 	for _, step := range story.Spec.Steps {
 		if step.Ref != nil {
-			deploymentName := fmt.Sprintf("%s-%s", story.Name, step.Name)
+			deploymentName := naming.Compose(story.Name, step.Name)
 			deployment := &appsv1.Deployment{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      deploymentName,
@@ -199,7 +209,7 @@ func (r *StoryReconciler) cleanupOwnedResources(ctx context.Context, story *bubu
 			}
 
 			// Delete Services
-			serviceName := fmt.Sprintf("%s-%s", story.Name, step.Name)
+			serviceName := naming.Compose(story.Name, step.Name)
 			service := &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      serviceName,
@@ -221,7 +231,8 @@ func (r *StoryReconciler) reconcilePerStoryStreaming(ctx context.Context, story 
 	logger := log.FromContext(ctx)
 	logger.Info("Reconciling workloads for streaming Story with PerStory strategy")
 
-	for _, step := range story.Spec.Steps {
+	for i := range story.Spec.Steps {
+		step := &story.Spec.Steps[i]
 		if step.Ref == nil {
 			continue // This step is not an engram, so nothing to deploy.
 		}
@@ -241,17 +252,32 @@ func (r *StoryReconciler) reconcilePerStoryStreaming(ctx context.Context, story 
 			logger.Error(err, "Failed to get EngramTemplate for streaming step", "engramTemplate", engram.Spec.TemplateRef.Name)
 			return err
 		}
-		resolved, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, story, &engram, template)
+		resolved, err := r.ConfigResolver.ResolveExecutionConfig(ctx, nil, story, &engram, template, step)
 		if err != nil {
 			logger.Error(err, "Failed to resolve execution config for streaming step")
 			return err
 		}
-		deployment := r.deploymentForStreamingStepWithConfig(story, &step, &engram, resolved)
+		if step.Secrets != nil {
+			if resolved.Secrets == nil {
+				resolved.Secrets = make(map[string]string, len(step.Secrets))
+			}
+			for k, v := range step.Secrets {
+				resolved.Secrets[k] = v
+			}
+		}
+
+		mergedWith, err := mergeutil.MergeWithBlocks(engram.Spec.With, step.With)
+		if err != nil {
+			logger.Error(err, "Failed to merge 'with' block for streaming step", "step", step.Name)
+			return err
+		}
+
+		deployment := r.deploymentForStreamingStepWithConfig(story, step, template, resolved, mergedWith)
 		if err := r.reconcileOwnedDeployment(ctx, story, deployment); err != nil {
 			return err
 		}
 
-		service := r.serviceForStreamingStepWithConfig(story, &step, &engram, resolved)
+		service := r.serviceForStreamingStepWithConfig(story, step, &engram, resolved)
 		if err := r.reconcileOwnedService(ctx, story, service); err != nil {
 			return err
 		}
@@ -333,8 +359,8 @@ func (r *StoryReconciler) reconcileOwnedService(ctx context.Context, owner *bubu
 	return nil
 }
 
-func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, _ *bubuv1alpha1.Engram, cfg *config.ResolvedExecutionConfig) *appsv1.Deployment {
-	name := fmt.Sprintf("%s-%s", story.Name, step.Name)
+func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, template *catalogv1alpha1.EngramTemplate, cfg *config.ResolvedExecutionConfig, mergedWith *runtime.RawExtension) *appsv1.Deployment {
+	name := naming.Compose(story.Name, step.Name)
 	labels := map[string]string{
 		"app.kubernetes.io/name":       "bobrapet-streaming-engram",
 		"app.kubernetes.io/managed-by": "story-controller",
@@ -342,7 +368,37 @@ func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alph
 		"bubustack.io/step":            step.Name,
 	}
 	replicas := int32(1)
-	return &appsv1.Deployment{
+	podSpec := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Labels: labels},
+		Spec: corev1.PodSpec{
+			ServiceAccountName:           cfg.ServiceAccountName,
+			AutomountServiceAccountToken: ptr.To(cfg.AutomountServiceAccountToken),
+			SecurityContext:              cfg.ToPodSecurityContext(),
+			Containers: []corev1.Container{{
+				Name:            "engram",
+				Image:           cfg.Image,
+				ImagePullPolicy: cfg.ImagePullPolicy,
+				LivenessProbe:   cfg.LivenessProbe,
+				ReadinessProbe:  cfg.ReadinessProbe,
+				StartupProbe:    cfg.StartupProbe,
+				SecurityContext: cfg.ToContainerSecurityContext(),
+				Resources:       cfg.Resources,
+				Ports: []corev1.ContainerPort{{
+					Name:          "grpc",
+					ContainerPort: int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
+				}},
+			}},
+		},
+	}
+	envVars := buildRealtimeBaseEnv(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig)
+	if mergedWith != nil && len(mergedWith.Raw) > 0 {
+		envVars = append(envVars, corev1.EnvVar{Name: "BUBU_CONFIG", Value: string(mergedWith.Raw)})
+	}
+	podSpec.Spec.Containers[0].Env = append(podSpec.Spec.Containers[0].Env, envVars...)
+	applyStorageEnv(cfg, &podSpec.Spec.Containers[0])
+	applySecretArtifacts(template, cfg, &podSpec)
+
+	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: story.Namespace,
@@ -351,49 +407,86 @@ func (r *StoryReconciler) deploymentForStreamingStepWithConfig(story *bubuv1alph
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: cfg.ServiceAccountName,
-					Containers: []corev1.Container{{
-						Name:            "engram",
-						Image:           cfg.Image,
-						ImagePullPolicy: cfg.ImagePullPolicy,
-						LivenessProbe:   cfg.LivenessProbe,
-						ReadinessProbe:  cfg.ReadinessProbe,
-						StartupProbe:    cfg.StartupProbe,
-						Ports: []corev1.ContainerPort{{
-							Name:          "grpc",
-							ContainerPort: int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
-						}},
-						Env: []corev1.EnvVar{{Name: "BUBU_EXECUTION_MODE", Value: "streaming"}},
-					}},
-				},
-			},
+			Template: podSpec,
+		},
+	}
+	return dep
+}
+
+func (r *StoryReconciler) serviceForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, _ *bubuv1alpha1.Engram, cfg *config.ResolvedExecutionConfig) *corev1.Service {
+	name := naming.Compose(story.Name, step.Name)
+	selectorLabels := map[string]string{
+		"bubustack.io/story": story.Name,
+		"bubustack.io/step":  step.Name,
+	}
+	serviceLabels := make(map[string]string, len(selectorLabels)+len(cfg.ServiceLabels))
+	for k, v := range selectorLabels {
+		serviceLabels[k] = v
+	}
+	for k, v := range cfg.ServiceLabels {
+		serviceLabels[k] = v
+	}
+	serviceAnnotations := make(map[string]string, len(cfg.ServiceAnnotations))
+	for k, v := range cfg.ServiceAnnotations {
+		serviceAnnotations[k] = v
+	}
+	ports := make([]corev1.ServicePort, len(cfg.ServicePorts))
+	if len(cfg.ServicePorts) > 0 {
+		copy(ports, cfg.ServicePorts)
+	} else {
+		ports = []corev1.ServicePort{{
+			Protocol:   corev1.ProtocolTCP,
+			Port:       int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
+			TargetPort: intstr.FromString("grpc"),
+		}}
+	}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   story.Namespace,
+			Labels:      serviceLabels,
+			Annotations: serviceAnnotations,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: selectorLabels,
+			Ports:    ports,
 		},
 	}
 }
 
-func (r *StoryReconciler) serviceForStreamingStepWithConfig(story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, _ *bubuv1alpha1.Engram, _ *config.ResolvedExecutionConfig) *corev1.Service {
-	name := fmt.Sprintf("%s-%s", story.Name, step.Name)
-	labels := map[string]string{
-		"bubustack.io/story": story.Name,
-		"bubustack.io/step":  step.Name,
+func applyStorageEnv(cfg *config.ResolvedExecutionConfig, container *corev1.Container) {
+	if container == nil || cfg == nil || cfg.Storage == nil || cfg.Storage.S3 == nil {
+		return
 	}
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: story.Namespace,
-		},
-		Spec: corev1.ServiceSpec{
-			Selector: labels,
-			Ports: []corev1.ServicePort{{
-				Protocol:   corev1.ProtocolTCP,
-				Port:       int32(r.ConfigResolver.GetOperatorConfig().Controller.Engram.EngramControllerConfig.DefaultGRPCPort),
-				TargetPort: intstr.FromString("grpc"),
-			}},
-		},
+	s3Config := cfg.Storage.S3
+	container.Env = append(container.Env,
+		corev1.EnvVar{Name: "BUBU_STORAGE_PROVIDER", Value: "s3"},
+		corev1.EnvVar{Name: "BUBU_STORAGE_S3_BUCKET", Value: s3Config.Bucket},
+	)
+	if s3Config.Region != "" {
+		container.Env = append(container.Env, corev1.EnvVar{Name: "BUBU_STORAGE_S3_REGION", Value: s3Config.Region})
 	}
+	if s3Config.Endpoint != "" {
+		container.Env = append(container.Env, corev1.EnvVar{Name: "BUBU_STORAGE_S3_ENDPOINT", Value: s3Config.Endpoint})
+	}
+	if s3Config.Authentication.SecretRef != nil {
+		container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
+			SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: s3Config.Authentication.SecretRef.Name}},
+		})
+	}
+}
+
+func applySecretArtifacts(template *catalogv1alpha1.EngramTemplate, cfg *config.ResolvedExecutionConfig, podSpec *corev1.PodTemplateSpec) {
+	if podSpec == nil || len(podSpec.Spec.Containers) == 0 || template == nil || cfg == nil || template.Spec.SecretSchema == nil {
+		return
+	}
+	artifacts := secretutil.BuildArtifacts(template.Spec.SecretSchema, cfg.Secrets)
+	podSpec.Spec.Volumes = append(podSpec.Spec.Volumes, artifacts.Volumes...)
+
+	container := &podSpec.Spec.Containers[0]
+	container.Env = append(container.Env, artifacts.EnvVars...)
+	container.EnvFrom = append(container.EnvFrom, artifacts.EnvFrom...)
+	container.VolumeMounts = append(container.VolumeMounts, artifacts.VolumeMounts...)
 }
 
 func (r *StoryReconciler) validateEngramReferences(ctx context.Context, story *bubuv1alpha1.Story) error {
@@ -447,7 +540,21 @@ func (r *StoryReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Opt
 	r.Recorder = mgr.GetEventRecorderFor("story-controller")
 	mapEngramToStories := func(ctx context.Context, obj client.Object) []reconcile.Request {
 		var stories bubuv1alpha1.StoryList
-		if err := r.List(ctx, &stories, client.InNamespace(obj.GetNamespace()), client.MatchingFields{"spec.steps.ref.name": obj.GetName()}); err != nil {
+		indexKey := fmt.Sprintf("%s/%s", obj.GetNamespace(), obj.GetName())
+		if err := r.List(ctx, &stories, client.MatchingFields{storyStepEngramIndexField: indexKey}); err != nil {
+			return nil
+		}
+		reqs := make([]reconcile.Request, 0, len(stories.Items))
+		for i := range stories.Items {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: stories.Items[i].Name, Namespace: stories.Items[i].Namespace}})
+		}
+		return reqs
+	}
+
+	mapStoryToStories := func(ctx context.Context, obj client.Object) []reconcile.Request {
+		var stories bubuv1alpha1.StoryList
+		indexKey := fmt.Sprintf("%s/%s", obj.GetNamespace(), obj.GetName())
+		if err := r.List(ctx, &stories, client.MatchingFields{storyStepStoryIndexField: indexKey}); err != nil {
 			return nil
 		}
 		reqs := make([]reconcile.Request, 0, len(stories.Items))
@@ -460,6 +567,7 @@ func (r *StoryReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.Opt
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&bubuv1alpha1.Story{}).
 		Watches(&bubuv1alpha1.Engram{}, handler.EnqueueRequestsFromMapFunc(mapEngramToStories)).
+		Watches(&bubuv1alpha1.Story{}, handler.EnqueueRequestsFromMapFunc(mapStoryToStories)).
 		WithOptions(opts).
 		Complete(r)
 }

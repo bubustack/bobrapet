@@ -60,6 +60,7 @@ var _ = Describe("Impulse Controller", func() {
 					TemplateSpec: catalogv1alpha1.TemplateSpec{
 						Version:        "1.0.0",
 						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeDeployment},
+						Image:          "ghcr.io/bubustack/impulse-default:latest",
 					},
 				},
 			}

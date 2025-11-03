@@ -97,6 +97,9 @@ type TemplateExecutionPolicy struct {
 	// Health check probes (liveness, readiness, startup)
 	// These are defined using standard Kubernetes probe format
 	Probes *TemplateProbePolicy `json:"probes,omitempty"`
+
+	// Storage recommendations for workloads that offload large inputs/outputs.
+	Storage *TemplateStoragePolicy `json:"storage,omitempty"`
 }
 
 // TemplateImagePolicy defines image-related template defaults
@@ -189,6 +192,38 @@ type TemplateProbePolicy struct {
 	Startup *corev1.Probe `json:"startup,omitempty"`
 }
 
+// TemplateStoragePolicy defines default storage configuration for templates.
+type TemplateStoragePolicy struct {
+	S3             *TemplateS3StorageProvider   `json:"s3,omitempty"`
+	File           *TemplateFileStorageProvider `json:"file,omitempty"`
+	TimeoutSeconds int                          `json:"timeoutSeconds,omitempty"`
+}
+
+// TemplateS3StorageProvider mirrors S3 storage configuration for templates.
+type TemplateS3StorageProvider struct {
+	Bucket         string                   `json:"bucket"`
+	Region         string                   `json:"region,omitempty"`
+	Endpoint       string                   `json:"endpoint,omitempty"`
+	Authentication TemplateS3Authentication `json:"authentication"`
+
+	// UsePathStyle forces path-style addressing when this template targets S3-compatible stores.
+	// +optional
+	UsePathStyle bool `json:"usePathStyle,omitempty"`
+}
+
+// TemplateS3Authentication defines S3 auth defaults for templates.
+type TemplateS3Authentication struct {
+	ServiceAccountAnnotations map[string]string            `json:"serviceAccountAnnotations,omitempty"`
+	SecretRef                 *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+}
+
+// TemplateFileStorageProvider configures file storage for templates.
+type TemplateFileStorageProvider struct {
+	Path            string                       `json:"path,omitempty"`
+	VolumeClaimName string                       `json:"volumeClaimName,omitempty"`
+	EmptyDir        *corev1.EmptyDirVolumeSource `json:"emptyDir,omitempty"`
+}
+
 // SecretDefinition defines the structure and requirements of a secret
 // This handles both simple key-value secrets and complex structured secrets
 type SecretDefinition struct {
@@ -231,7 +266,8 @@ type TemplateStatus struct {
 
 	// How many Engrams/Impulses are currently using this template
 	// Useful for understanding template popularity and impact of changes
-	UsageCount int32 `json:"usageCount,omitempty"`
+	// +optional
+	UsageCount int32 `json:"usageCount"`
 
 	// Whether this template passed validation checks
 	ValidationStatus enums.ValidationStatus `json:"validationStatus,omitempty"`

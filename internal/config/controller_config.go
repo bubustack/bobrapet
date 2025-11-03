@@ -17,15 +17,25 @@ limitations under the License.
 package config
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bubustack/bobrapet/pkg/cel"
+	"github.com/bubustack/bobrapet/pkg/kubeutil"
+	"github.com/bubustack/bobrapet/pkg/logging"
+	"github.com/bubustack/bobrapet/pkg/metrics"
+	"github.com/bubustack/bobrapet/pkg/observability"
+	"github.com/bubustack/core/contracts"
+	"github.com/bubustack/core/runtime/featuretoggles"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -34,6 +44,7 @@ import (
 // consistent access to shared services like configuration resolvers and CEL evaluators.
 type ControllerDependencies struct {
 	client.Client
+	APIReader      client.Reader
 	Scheme         *runtime.Scheme
 	ConfigResolver *Resolver
 	CELEvaluator   cel.Evaluator
@@ -59,29 +70,35 @@ type ControllerConfig struct {
 	// Template controllers configuration
 	Template TemplateConfig `json:"template,omitempty"`
 
+	// Transport controller configuration
+	TransportController TransportControllerConfig `json:"transportController,omitempty"`
+
 	// MaxStoryWithBlockSizeBytes is the maximum allowed size for a Story's spec.steps.with block.
 	// This prevents oversized resources from being stored in etcd.
 	// +optional
 	MaxStoryWithBlockSizeBytes int `json:"maxStoryWithBlockSizeBytes,omitempty"`
 
-	DefaultEngramImage    string `json:"defaultEngramImage,omitempty"`
-	DefaultImpulseImage   string `json:"defaultImpulseImage,omitempty"`
-	DefaultEngramGRPCPort int    `json:"defaultEngramGRPCPort,omitempty"`
-	DefaultCPURequest     string `json:"defaultCPURequest,omitempty"`
-	DefaultCPULimit       string `json:"defaultCPULimit,omitempty"`
-	DefaultMemoryRequest  string `json:"defaultMemoryRequest,omitempty"`
-	DefaultMemoryLimit    string `json:"defaultMemoryLimit,omitempty"`
+	DefaultEngramImage   string `json:"defaultEngramImage,omitempty"`
+	DefaultImpulseImage  string `json:"defaultImpulseImage,omitempty"`
+	DefaultCPURequest    string `json:"defaultCPURequest,omitempty"`
+	DefaultCPULimit      string `json:"defaultCPULimit,omitempty"`
+	DefaultMemoryRequest string `json:"defaultMemoryRequest,omitempty"`
+	DefaultMemoryLimit   string `json:"defaultMemoryLimit,omitempty"`
 
 	// Global Controller Configuration
-	MaxConcurrentReconciles int             `json:"maxConcurrentReconciles,omitempty"`
-	RequeueBaseDelay        time.Duration   `json:"requeueBaseDelay,omitempty"`
-	RequeueMaxDelay         time.Duration   `json:"requeueMaxDelay,omitempty"`
-	HealthCheckInterval     time.Duration   `json:"healthCheckInterval,omitempty"`
-	CleanupInterval         metav1.Duration `json:"cleanupInterval,omitempty"`
+	// Note: Per-controller MaxConcurrentReconciles are in StoryRun, StepRun, Story, etc.
+	RequeueBaseDelay time.Duration   `json:"requeueBaseDelay,omitempty"`
+	RequeueMaxDelay  time.Duration   `json:"requeueMaxDelay,omitempty"`
+	CleanupInterval  metav1.Duration `json:"cleanupInterval,omitempty"`
+	// MaxConcurrentReconciles provides a global fallback when per-controller values are zero.
+	MaxConcurrentReconciles int `json:"maxConcurrentReconciles,omitempty"`
 
 	// ReconcileTimeout bounds the duration of a single reconcile loop.
 	// Set to 0 to disable deadline (not recommended for production).
 	ReconcileTimeout time.Duration `json:"reconcileTimeout,omitempty"`
+
+	// Transport configuration for hybrid execution
+	Transport TransportConfig `json:"transport,omitempty"`
 
 	// Image Configuration
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
@@ -94,8 +111,6 @@ type ControllerConfig struct {
 
 	// Retry and Timeout Configuration
 	MaxRetries             int           `json:"maxRetries,omitempty"`
-	ExponentialBackoffBase time.Duration `json:"exponentialBackoffBase,omitempty"`
-	ExponentialBackoffMax  time.Duration `json:"exponentialBackoffMax,omitempty"`
 	DefaultStepTimeout     time.Duration `json:"defaultStepTimeout,omitempty"`
 	ApprovalDefaultTimeout time.Duration `json:"approvalDefaultTimeout,omitempty"`
 	ExternalDataTimeout    time.Duration `json:"externalDataTimeout,omitempty"`
@@ -116,11 +131,13 @@ type ControllerConfig struct {
 	RunAsUser                int64    `json:"runAsUser,omitempty"`
 
 	// Job Configuration
-	JobBackoffLimit              int32                `json:"jobBackoffLimit,omitempty"`
-	JobRestartPolicy             corev1.RestartPolicy `json:"jobRestartPolicy,omitempty"`
-	TTLSecondsAfterFinished      int32                `json:"ttlSecondsAfterFinished,omitempty"`
-	ServiceAccountName           string               `json:"serviceAccountName,omitempty"`
-	AutomountServiceAccountToken bool                 `json:"automountServiceAccountToken,omitempty"`
+	JobBackoffLimit                  int32                `json:"jobBackoffLimit,omitempty"`
+	JobRestartPolicy                 corev1.RestartPolicy `json:"jobRestartPolicy,omitempty"`
+	TTLSecondsAfterFinished          int32                `json:"ttlSecondsAfterFinished,omitempty"`
+	StreamingTTLSecondsAfterFinished int32                `json:"streamingTTLSecondsAfterFinished,omitempty"`
+	StoryRunRetentionSeconds         int32                `json:"storyRunRetentionSeconds,omitempty"`
+	ServiceAccountName               string               `json:"serviceAccountName,omitempty"`
+	AutomountServiceAccountToken     bool                 `json:"automountServiceAccountToken,omitempty"`
 
 	// CEL Configuration
 	CELEvaluationTimeout   time.Duration `json:"celEvaluationTimeout,omitempty"`
@@ -135,16 +152,275 @@ type ControllerConfig struct {
 	EnableVerboseLogging    bool `json:"enableVerboseLogging,omitempty"`
 	EnableStepOutputLogging bool `json:"enableStepOutputLogging,omitempty"`
 	EnableMetrics           bool `json:"enableMetrics,omitempty"`
+
+	// Operator-level default storage configuration (applied when Story policy is absent)
+	DefaultStorageProvider  string `json:"defaultStorageProvider,omitempty"`
+	DefaultS3Bucket         string `json:"defaultS3Bucket,omitempty"`
+	DefaultS3Region         string `json:"defaultS3Region,omitempty"`
+	DefaultS3Endpoint       string `json:"defaultS3Endpoint,omitempty"`
+	DefaultS3UsePathStyle   bool   `json:"defaultS3UsePathStyle,omitempty"`
+	DefaultS3AuthSecretName string `json:"defaultS3AuthSecretName,omitempty"`
 }
 
-// Telemetry feature gate
-var telemetryEnabled bool
+// Telemetry feature gate logger
+var (
+	toggleLogger = logf.Log.WithName("config-toggles")
+)
 
-// EnableTelemetry enables or disables OpenTelemetry spans in controllers
-func EnableTelemetry(enabled bool) { telemetryEnabled = enabled }
+// ApplyRuntimeToggles wires global observability/logging knobs from config.
+func ApplyRuntimeToggles(cfg *ControllerConfig) {
+	if cfg == nil {
+		return
+	}
 
-// IsTelemetryEnabled reports whether OpenTelemetry spans should be emitted
-func IsTelemetryEnabled() bool { return telemetryEnabled }
+	featuretoggles.Apply(
+		featuretoggles.Features{
+			TelemetryEnabled:         cfg.TelemetryEnabled,
+			TracePropagationEnabled:  cfg.TracePropagationEnabled,
+			VerboseLoggingEnabled:    cfg.EnableVerboseLogging,
+			StepOutputLoggingEnabled: cfg.EnableStepOutputLogging,
+			MetricsEnabled:           cfg.EnableMetrics,
+		},
+		featuretoggles.Sink{
+			EnableTelemetry:         observability.EnableTracing,
+			EnableTracePropagation:  observability.EnableTracePropagation,
+			EnableVerboseLogging:    logging.EnableVerboseLogging,
+			EnableStepOutputLogging: logging.EnableStepOutputLogging,
+			EnableMetrics:           metrics.Enable,
+		},
+	)
+
+	toggleLogger.Info("runtime toggles applied",
+		"telemetry", cfg.TelemetryEnabled,
+		"tracePropagation", cfg.TracePropagationEnabled,
+		"verboseLogging", cfg.EnableVerboseLogging,
+		"stepOutputLogging", cfg.EnableStepOutputLogging,
+		"metrics", cfg.EnableMetrics,
+	)
+}
+
+// Validation constants for controller configuration bounds.
+const (
+	// MinReconcileTimeout is the minimum allowed reconcile timeout to prevent aggressive cancellation.
+	MinReconcileTimeout = 5 * time.Second
+	// MaxReconcileTimeout is the maximum allowed reconcile timeout to prevent runaway reconciles.
+	MaxReconcileTimeout = 30 * time.Minute
+	// MinCleanupInterval is the minimum cleanup interval to prevent GC spinning.
+	MinCleanupInterval = 10 * time.Second
+	// MinRequeueDelay is the minimum requeue delay to prevent hot-loop requeues.
+	MinRequeueDelay = 10 * time.Millisecond
+	// MinHeartbeatInterval is the minimum heartbeat interval.
+	MinHeartbeatInterval = 1 * time.Second
+)
+
+// ValidateControllerConfig ensures operator-provided knobs are sane.
+//
+// Behavior:
+//   - Validates all controller configuration fields for safety bounds.
+//   - Normalizes DropCapabilities (uppercase, trim whitespace).
+//   - Accumulates all validation errors and returns them joined.
+//
+// Arguments:
+//   - cfg *ControllerConfig: the configuration to validate.
+//
+// Returns:
+//   - error: joined validation errors, or nil if valid.
+//
+// Side Effects:
+//   - Mutates cfg.DropCapabilities in-place (normalization).
+//
+// Notes:
+//   - Called after parsing ConfigMap to ensure safe runtime behavior.
+//   - Negative durations are treated as unset by the duration helpers, but we validate them here.
+func ValidateControllerConfig(cfg *ControllerConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("controller config is nil")
+	}
+	var errs []error
+
+	errs = append(errs, validateLoopSettings(cfg)...)
+	errs = append(errs, validateCELSettings(cfg)...)
+	errs = append(errs, validateTransportSettings(cfg)...)
+	errs = append(errs, validateReconcileTimeoutBounds(cfg.ReconcileTimeout)...)
+	errs = append(errs, validateCleanupIntervalBounds(cfg.CleanupInterval.Duration)...)
+
+	// RequeueDelay validation
+	errs = append(errs, validateRequeueDelays(cfg.RequeueBaseDelay, cfg.RequeueMaxDelay, "controller")...)
+
+	// Per-controller rate limiter validation
+	errs = append(errs, validateRateLimiter(cfg.StoryRun.RateLimiter, "storyrun")...)
+	errs = append(errs, validateRateLimiter(cfg.StepRun.RateLimiter, "steprun")...)
+	errs = append(errs, validateRateLimiter(cfg.Story.RateLimiter, "story")...)
+	errs = append(errs, validateRateLimiter(cfg.Engram.RateLimiter, "engram")...)
+	errs = append(errs, validateRateLimiter(cfg.Impulse.RateLimiter, "impulse")...)
+	errs = append(errs, validateRateLimiter(cfg.Template.RateLimiter, "template")...)
+	errs = append(errs, validateRateLimiter(cfg.TransportController.RateLimiter, "transport")...)
+
+	errs = append(errs, normalizeAndValidateCapabilities(cfg)...)
+
+	return errors.Join(errs...)
+}
+
+func validateLoopSettings(cfg *ControllerConfig) []error {
+	var errs []error
+	if cfg.MaxLoopIterations <= 0 {
+		errs = append(errs, fmt.Errorf("loop.max-iterations must be greater than 0"))
+	}
+	if cfg.DefaultLoopBatchSize < 0 {
+		errs = append(errs, fmt.Errorf("loop.default-batch-size cannot be negative"))
+	}
+	if cfg.MaxLoopBatchSize < 0 {
+		errs = append(errs, fmt.Errorf("loop.max-batch-size cannot be negative"))
+	}
+	if cfg.MaxLoopBatchSize > 0 && cfg.DefaultLoopBatchSize > cfg.MaxLoopBatchSize {
+		errs = append(errs, fmt.Errorf("loop.default-batch-size cannot exceed loop.max-batch-size"))
+	}
+	if cfg.MaxLoopConcurrency < 0 {
+		errs = append(errs, fmt.Errorf("loop.max-concurrency cannot be negative"))
+	}
+	if cfg.MaxConcurrencyLimit < 0 {
+		errs = append(errs, fmt.Errorf("loop.max-concurrency-limit cannot be negative"))
+	}
+	if cfg.MaxConcurrencyLimit > 0 && cfg.MaxLoopConcurrency > cfg.MaxConcurrencyLimit {
+		errs = append(errs, fmt.Errorf("loop.max-concurrency cannot exceed loop.max-concurrency-limit"))
+	}
+	return errs
+}
+
+func validateCELSettings(cfg *ControllerConfig) []error {
+	var errs []error
+	if cfg.CELEvaluationTimeout < 0 {
+		errs = append(errs, fmt.Errorf("cel.evaluation-timeout cannot be negative"))
+	}
+	if cfg.CELMaxExpressionLength < 0 {
+		errs = append(errs, fmt.Errorf("cel.max-expression-length cannot be negative"))
+	}
+	return errs
+}
+
+func validateTransportSettings(cfg *ControllerConfig) []error {
+	var errs []error
+	if cfg.Transport.HeartbeatInterval <= 0 {
+		errs = append(errs, fmt.Errorf("controller.transport.heartbeat-interval must be greater than 0"))
+	} else if cfg.Transport.HeartbeatInterval < MinHeartbeatInterval {
+		errs = append(errs, fmt.Errorf("controller.transport.heartbeat-interval must be at least %v", MinHeartbeatInterval))
+	}
+	if cfg.Engram.EngramControllerConfig.DefaultGRPCHeartbeatIntervalSeconds <= 0 {
+		errs = append(errs, fmt.Errorf("engram.default-grpc-heartbeat-interval-seconds must be greater than 0"))
+	}
+	return errs
+}
+
+func validateReconcileTimeoutBounds(timeout time.Duration) []error {
+	var errs []error
+	if timeout <= 0 {
+		return errs
+	}
+	if timeout < MinReconcileTimeout {
+		errs = append(errs, fmt.Errorf("controller.reconcile-timeout must be at least %v to prevent aggressive cancellation", MinReconcileTimeout))
+	}
+	if timeout > MaxReconcileTimeout {
+		errs = append(errs, fmt.Errorf("controller.reconcile-timeout must not exceed %v to prevent runaway reconciles", MaxReconcileTimeout))
+	}
+	return errs
+}
+
+func validateCleanupIntervalBounds(interval time.Duration) []error {
+	if interval <= 0 {
+		return nil
+	}
+	if interval < MinCleanupInterval {
+		return []error{fmt.Errorf("controller.cleanup-interval must be at least %v to prevent GC spinning", MinCleanupInterval)}
+	}
+	return nil
+}
+
+func normalizeAndValidateCapabilities(cfg *ControllerConfig) []error {
+	for _, cap := range cfg.DropCapabilities {
+		if strings.TrimSpace(cap) == "" {
+			cfg.DropCapabilities = NormalizeCapabilities(cfg.DropCapabilities)
+			return []error{fmt.Errorf("security.drop-capabilities contains an empty entry")}
+		}
+	}
+	cfg.DropCapabilities = NormalizeCapabilities(cfg.DropCapabilities)
+	return nil
+}
+
+// validateRequeueDelays validates base and max delay consistency.
+func validateRequeueDelays(base, max time.Duration, prefix string) []error {
+	var errs []error
+	if base < 0 {
+		errs = append(errs, fmt.Errorf("%s.requeue-base-delay cannot be negative", prefix))
+	}
+	if max < 0 {
+		errs = append(errs, fmt.Errorf("%s.requeue-max-delay cannot be negative", prefix))
+	}
+	if base > 0 && base < MinRequeueDelay {
+		errs = append(errs, fmt.Errorf("%s.requeue-base-delay must be at least %v", prefix, MinRequeueDelay))
+	}
+	if base > 0 && max > 0 && base > max {
+		errs = append(errs, fmt.Errorf("%s.requeue-base-delay cannot exceed %s.requeue-max-delay", prefix, prefix))
+	}
+	return errs
+}
+
+// validateRateLimiter validates a rate limiter configuration.
+func validateRateLimiter(rl RateLimiterConfig, prefix string) []error {
+	var errs []error
+	if rl.BaseDelay < 0 {
+		errs = append(errs, fmt.Errorf("%s.rate-limiter.base-delay cannot be negative", prefix))
+	}
+	if rl.MaxDelay < 0 {
+		errs = append(errs, fmt.Errorf("%s.rate-limiter.max-delay cannot be negative", prefix))
+	}
+	if rl.BaseDelay > 0 && rl.BaseDelay < MinRequeueDelay {
+		errs = append(errs, fmt.Errorf("%s.rate-limiter.base-delay must be at least %v", prefix, MinRequeueDelay))
+	}
+	if rl.BaseDelay > 0 && rl.MaxDelay > 0 && rl.BaseDelay > rl.MaxDelay {
+		errs = append(errs, fmt.Errorf("%s.rate-limiter.base-delay cannot exceed %s.rate-limiter.max-delay", prefix, prefix))
+	}
+	return errs
+}
+
+// NormalizeCapabilities trims whitespace, uppercases, and filters empty entries
+// from a capability slice. Returns ["ALL"] if the result is empty.
+//
+// Behavior:
+//   - Trims whitespace and uppercases each entry.
+//   - Filters out empty entries after trimming.
+//   - Returns ["ALL"] if no valid capabilities remain.
+//
+// Arguments:
+//   - caps []string: slice of capability names.
+//
+// Returns:
+//   - []string: normalized slice of uppercase capability names, or ["ALL"] if empty.
+//
+// Notes:
+//   - Used by both parseDropCapabilities and ValidateControllerConfig to ensure consistent normalization.
+func NormalizeCapabilities(caps []string) []string {
+	var result []string
+	for _, cap := range caps {
+		trimmed := strings.ToUpper(strings.TrimSpace(cap))
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return []string{"ALL"}
+	}
+	return result
+}
+
+// BindingControllerTuning captures throttling knobs for TransportBinding mutations.
+type BindingControllerTuning struct {
+	// MaxMutationsPerReconcile bounds how many bindings a controller may mutate
+	// during a single reconcile loop. Zero or negative disables throttling.
+	MaxMutationsPerReconcile int `json:"maxMutationsPerReconcile,omitempty"`
+	// ThrottleRequeueDelay defines how long to wait before retrying once the
+	// controller hits the mutation budget.
+	ThrottleRequeueDelay time.Duration `json:"throttleRequeueDelay,omitempty"`
+}
 
 // StoryRunConfig contains StoryRun controller settings
 type StoryRunConfig struct {
@@ -157,6 +433,9 @@ type StoryRunConfig struct {
 	// MaxInlineInputsSize is the maximum size in bytes for StoryRun spec.inputs.
 	// Payloads larger than this will be rejected by the controller if webhooks are disabled.
 	MaxInlineInputsSize int `json:"maxInlineInputsSize,omitempty"`
+
+	// Binding config controls TransportBinding fan-out during reconciles.
+	Binding BindingControllerTuning `json:"binding,omitempty"`
 }
 
 // StepRunConfig contains StepRun controller settings
@@ -175,6 +454,9 @@ type StoryConfig struct {
 
 	// RateLimiter configuration
 	RateLimiter RateLimiterConfig `json:"rateLimiter,omitempty"`
+
+	// Binding config controls TransportBinding fan-out during reconciles.
+	Binding BindingControllerTuning `json:"binding,omitempty"`
 }
 
 // EngramConfig contains Engram controller settings
@@ -206,6 +488,18 @@ type TemplateConfig struct {
 	RateLimiter RateLimiterConfig `json:"rateLimiter,omitempty"`
 }
 
+// TransportControllerConfig contains Transport controller settings.
+type TransportControllerConfig struct {
+	// MaxConcurrentReconciles is the maximum number of concurrent reconciles
+	MaxConcurrentReconciles int `json:"maxConcurrentReconciles,omitempty"`
+
+	// RateLimiter configuration
+	RateLimiter RateLimiterConfig `json:"rateLimiter,omitempty"`
+
+	// HeartbeatTimeout is how long the operator waits before marking a transport binding stale.
+	HeartbeatTimeout time.Duration `json:"heartbeatTimeout,omitempty"`
+}
+
 // RateLimiterConfig contains rate limiter settings
 type RateLimiterConfig struct {
 	// BaseDelay is the base delay for exponential backoff
@@ -219,6 +513,8 @@ type RateLimiterConfig struct {
 type EngramControllerConfig struct {
 	// DefaultGRPCPort is the default port used for gRPC communication with realtime engrams.
 	DefaultGRPCPort int `json:"defaultGRPCPort,omitempty"`
+	// DefaultGRPCHeartbeatIntervalSeconds defines how frequently SDKs send heartbeat pings to the hub.
+	DefaultGRPCHeartbeatIntervalSeconds int `json:"defaultGRPCHeartbeatIntervalSeconds,omitempty"`
 	// DefaultMaxInlineSize is the default maximum size in bytes for inputs/outputs
 	// to be passed directly as environment variables. Larger values will be offloaded
 	// to the configured storage backend.
@@ -233,7 +529,8 @@ type EngramControllerConfig struct {
 	DefaultGracefulShutdownTimeoutSeconds int `json:"defaultGracefulShutdownTimeoutSeconds,omitempty"`
 	// DefaultTerminationGracePeriodSeconds is the grace period for pod termination.
 	// Applies to both batch Jobs and streaming Deployments.
-	DefaultTerminationGracePeriodSeconds int64 `json:"defaultTerminationGracePeriodSeconds,omitempty"`
+	// Note: Cast to *int64 when assigning to PodSpec.TerminationGracePeriodSeconds.
+	DefaultTerminationGracePeriodSeconds int `json:"defaultTerminationGracePeriodSeconds,omitempty"`
 
 	// DefaultMaxRecvMsgBytes is the default max gRPC message size for receiving.
 	DefaultMaxRecvMsgBytes int `json:"defaultMaxRecvMsgBytes,omitempty"`
@@ -255,9 +552,40 @@ type EngramControllerConfig struct {
 	DefaultMessageTimeoutSeconds int `json:"defaultMessageTimeoutSeconds,omitempty"`
 }
 
+// TransportConfig holds configuration for the gRPC transport layer.
+type TransportConfig struct {
+	GRPC              GRPCConfig    `json:"grpc,omitempty"`
+	HeartbeatInterval time.Duration `json:"heartbeatInterval,omitempty"`
+}
+
+// GRPCConfig holds gRPC-related settings for the operator and SDKs.
+type GRPCConfig struct {
+	// EnableDownstreamTargets controls whether the operator computes and injects
+	// `BUBU_DOWNSTREAM_TARGETS` into batch-mode StepRuns that are upstream of
+	// any streaming-mode Engrams in a Story.
+	EnableDownstreamTargets bool `json:"enableDownstreamTargets,omitempty"`
+	// DefaultTLSSecret provides a fallback TLS Secret when Engrams do not specify one.
+	DefaultTLSSecret string `json:"defaultTLSSecret,omitempty"`
+}
+
 // DefaultControllerConfig returns the default configuration
-func DefaultControllerConfig() *ControllerConfig {
-	return &ControllerConfig{
+func controllerConfigDefaults() ControllerConfig {
+	return ControllerConfig{
+		ImagePullPolicy:                  corev1.PullIfNotPresent,
+		MaxConcurrentReconciles:          contracts.DefaultControllerMaxConcurrentReconciles,
+		ServiceAccountName:               "default",
+		AutomountServiceAccountToken:     false,
+		DefaultCPURequest:                "100m",
+		DefaultCPULimit:                  "500m",
+		DefaultMemoryRequest:             "128Mi",
+		DefaultMemoryLimit:               "512Mi",
+		JobBackoffLimit:                  3,
+		JobRestartPolicy:                 corev1.RestartPolicyNever,
+		TTLSecondsAfterFinished:          3600,
+		StreamingTTLSecondsAfterFinished: 0,
+		MaxRetries:                       3,
+		CleanupInterval:                  metav1.Duration{Duration: time.Hour},
+		ReconcileTimeout:                 30 * time.Second,
 		StoryRun: StoryRunConfig{
 			MaxConcurrentReconciles: 8,
 			RateLimiter: RateLimiterConfig{
@@ -265,6 +593,10 @@ func DefaultControllerConfig() *ControllerConfig {
 				MaxDelay:  5 * time.Minute,
 			},
 			MaxInlineInputsSize: 1 * 1024, // 1 KiB
+			Binding: BindingControllerTuning{
+				MaxMutationsPerReconcile: 8,
+				ThrottleRequeueDelay:     2 * time.Second,
+			},
 		},
 		StepRun: StepRunConfig{
 			MaxConcurrentReconciles: 15,
@@ -279,6 +611,10 @@ func DefaultControllerConfig() *ControllerConfig {
 				BaseDelay: 200 * time.Millisecond,
 				MaxDelay:  1 * time.Minute,
 			},
+			Binding: BindingControllerTuning{
+				MaxMutationsPerReconcile: 4,
+				ThrottleRequeueDelay:     3 * time.Second,
+			},
 		},
 		Engram: EngramConfig{
 			MaxConcurrentReconciles: 5,
@@ -288,6 +624,7 @@ func DefaultControllerConfig() *ControllerConfig {
 			},
 			EngramControllerConfig: EngramControllerConfig{
 				DefaultGRPCPort:                       50051,
+				DefaultGRPCHeartbeatIntervalSeconds:   10,
 				DefaultMaxInlineSize:                  1 * 1024,         // 1 KiB
 				DefaultStorageTimeoutSeconds:          300,              // 5 minutes (aligns with SDK default)
 				DefaultGracefulShutdownTimeoutSeconds: 20,               // 20s (aligns with SDK default)
@@ -317,78 +654,200 @@ func DefaultControllerConfig() *ControllerConfig {
 				MaxDelay:  10 * time.Minute,       // Longer backoff
 			},
 		},
+		TransportController: TransportControllerConfig{
+			MaxConcurrentReconciles: 2,
+			RateLimiter: RateLimiterConfig{
+				BaseDelay: 200 * time.Millisecond,
+				MaxDelay:  1 * time.Minute,
+			},
+			HeartbeatTimeout: 2 * time.Minute,
+		},
 		MaxStoryWithBlockSizeBytes: 64 * 1024, // 64 KiB
-		ReconcileTimeout:           1 * time.Minute,
+		Transport: TransportConfig{
+			HeartbeatInterval: 30 * time.Second,
+			GRPC: GRPCConfig{
+				EnableDownstreamTargets: true,
+			},
+		},
+		MaxLoopIterations:    10000,
+		DefaultLoopBatchSize: 100,
+		MaxLoopBatchSize:     1000,
+		MaxLoopConcurrency:   10,
+		MaxConcurrencyLimit:  50,
+		DropCapabilities:     []string{"ALL"},
 	}
 }
 
-// BuildControllerOptions builds controller.Options from config
+// DefaultControllerConfig returns the default configuration
+func DefaultControllerConfig() *ControllerConfig {
+	cfg := controllerConfigDefaults()
+	return &cfg
+}
+
+// buildControllerOptions builds controller.Options with an exponential failure rate limiter.
+//
+// The limiter delays prefer the per-controller RateLimiterConfig over the global
+// ControllerConfig Requeue*Delay settings, falling back to the provided defaults.
+func (c *ControllerConfig) buildControllerOptions(maxConcurrentReconciles int, limiter RateLimiterConfig, defaultBaseDelay, defaultMaxDelay time.Duration) controller.Options {
+	concurrency := maxConcurrentReconciles
+	if concurrency <= 0 {
+		concurrency = c.MaxConcurrentReconciles
+	}
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	return controller.Options{
+		MaxConcurrentReconciles: concurrency,
+		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
+			kubeutil.FirstPositiveDuration(limiter.BaseDelay, c.RequeueBaseDelay, defaultBaseDelay),
+			kubeutil.FirstPositiveDuration(limiter.MaxDelay, c.RequeueMaxDelay, defaultMaxDelay),
+		),
+	}
+}
+
+// BuildStoryRunControllerOptions builds controller.Options for the StoryRun controller
+// by applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Sets MaxConcurrentReconciles from c.StoryRun.MaxConcurrentReconciles.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.StoryRun.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildStoryRunControllerOptions() controller.Options {
-	return controller.Options{
-		MaxConcurrentReconciles: c.StoryRun.MaxConcurrentReconciles,
-		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			pickDuration(c.StoryRun.RateLimiter.BaseDelay, c.RequeueBaseDelay, 100*time.Millisecond),
-			pickDuration(c.StoryRun.RateLimiter.MaxDelay, c.RequeueMaxDelay, 2*time.Minute),
-		),
-	}
+	return c.buildControllerOptions(
+		c.StoryRun.MaxConcurrentReconciles,
+		c.StoryRun.RateLimiter,
+		100*time.Millisecond,
+		2*time.Minute,
+	)
 }
 
-// BuildStepRunControllerOptions builds controller.Options for StepRun
+// BuildStepRunControllerOptions builds controller.Options for the StepRun controller
+// by applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Sets MaxConcurrentReconciles from c.StepRun.MaxConcurrentReconciles.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.StepRun.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildStepRunControllerOptions() controller.Options {
-	return controller.Options{
-		MaxConcurrentReconciles: c.StepRun.MaxConcurrentReconciles,
-		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			pickDuration(c.StepRun.RateLimiter.BaseDelay, c.RequeueBaseDelay, 100*time.Millisecond),
-			pickDuration(c.StepRun.RateLimiter.MaxDelay, c.RequeueMaxDelay, 2*time.Minute),
-		),
-	}
+	return c.buildControllerOptions(
+		c.StepRun.MaxConcurrentReconciles,
+		c.StepRun.RateLimiter,
+		100*time.Millisecond,
+		2*time.Minute,
+	)
 }
 
-// BuildStoryControllerOptions builds controller.Options for Story
+// BuildStoryControllerOptions builds controller.Options for the Story controller by
+// applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Sets MaxConcurrentReconciles from c.Story.MaxConcurrentReconciles.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.Story.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildStoryControllerOptions() controller.Options {
-	return controller.Options{
-		MaxConcurrentReconciles: c.Story.MaxConcurrentReconciles,
-		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			pickDuration(c.Story.RateLimiter.BaseDelay, c.RequeueBaseDelay, 200*time.Millisecond),
-			pickDuration(c.Story.RateLimiter.MaxDelay, c.RequeueMaxDelay, 1*time.Minute),
-		),
-	}
+	return c.buildControllerOptions(
+		c.Story.MaxConcurrentReconciles,
+		c.Story.RateLimiter,
+		200*time.Millisecond,
+		1*time.Minute,
+	)
 }
 
-// BuildEngramControllerOptions builds controller.Options for Engram
+// BuildEngramControllerOptions builds controller.Options for the Engram controller by
+// applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Sets MaxConcurrentReconciles from c.Engram.MaxConcurrentReconciles.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.Engram.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildEngramControllerOptions() controller.Options {
-	return controller.Options{
-		MaxConcurrentReconciles: c.Engram.MaxConcurrentReconciles,
-		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			pickDuration(c.Engram.RateLimiter.BaseDelay, c.RequeueBaseDelay, 200*time.Millisecond),
-			pickDuration(c.Engram.RateLimiter.MaxDelay, c.RequeueMaxDelay, 1*time.Minute),
-		),
-	}
+	return c.buildControllerOptions(
+		c.Engram.MaxConcurrentReconciles,
+		c.Engram.RateLimiter,
+		200*time.Millisecond,
+		1*time.Minute,
+	)
 }
 
-// BuildImpulseControllerOptions builds controller.Options for Impulse
+// BuildImpulseControllerOptions builds controller.Options for the Impulse controller by
+// applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Sets MaxConcurrentReconciles from c.Impulse.MaxConcurrentReconciles.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.Impulse.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildImpulseControllerOptions() controller.Options {
-	return controller.Options{
-		MaxConcurrentReconciles: c.Impulse.MaxConcurrentReconciles,
-		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			pickDuration(c.Impulse.RateLimiter.BaseDelay, c.RequeueBaseDelay, 200*time.Millisecond),
-			pickDuration(c.Impulse.RateLimiter.MaxDelay, c.RequeueMaxDelay, 1*time.Minute),
-		),
-	}
+	return c.buildControllerOptions(
+		c.Impulse.MaxConcurrentReconciles,
+		c.Impulse.RateLimiter,
+		200*time.Millisecond,
+		1*time.Minute,
+	)
 }
 
-// BuildTemplateControllerOptions builds controller.Options for Template controllers
+// BuildTemplateControllerOptions builds controller.Options for template reconcilers by
+// applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Sets MaxConcurrentReconciles from c.Template.MaxConcurrentReconciles.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.Template.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildTemplateControllerOptions() controller.Options {
-	return controller.Options{
-		MaxConcurrentReconciles: c.Template.MaxConcurrentReconciles,
-		RateLimiter: workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](
-			pickDuration(c.Template.RateLimiter.BaseDelay, c.RequeueBaseDelay, 500*time.Millisecond),
-			pickDuration(c.Template.RateLimiter.MaxDelay, c.RequeueMaxDelay, 10*time.Minute),
-		),
-	}
+	return c.buildControllerOptions(
+		c.Template.MaxConcurrentReconciles,
+		c.Template.RateLimiter,
+		500*time.Millisecond,
+		10*time.Minute,
+	)
 }
 
-// BuildCleanupControllerOptions builds controller.Options for Cleanup
+// BuildTransportControllerOptions builds controller.Options for the Transport controller by
+// applying configured concurrency and exponential failure backoff.
+//
+// Behavior:
+//   - Uses c.TransportController.MaxConcurrentReconciles when positive, otherwise defaults
+//     to 2.
+//   - Uses an exponential failure rate limiter with base/max delays resolved via kubeutil.FirstPositiveDuration,
+//     preferring c.TransportController.RateLimiter over the global c.Requeue*Delay settings.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
+func (c *ControllerConfig) BuildTransportControllerOptions() controller.Options {
+	max := c.TransportController.MaxConcurrentReconciles
+	if max <= 0 {
+		max = 2
+	}
+	return c.buildControllerOptions(
+		max,
+		c.TransportController.RateLimiter,
+		200*time.Millisecond,
+		1*time.Minute,
+	)
+}
+
+// BuildCleanupControllerOptions builds controller.Options for cleanup controllers with
+// conservative concurrency and a fixed exponential failure backoff.
+//
+// Returns:
+//   - controller.Options: configured options used during controller registration.
 func (c *ControllerConfig) BuildCleanupControllerOptions() controller.Options {
 	return controller.Options{
 		MaxConcurrentReconciles: 1, // Only one cleanup at a time
@@ -397,16 +856,4 @@ func (c *ControllerConfig) BuildCleanupControllerOptions() controller.Options {
 			time.Hour,   // Max delay
 		),
 	}
-}
-
-// pickDuration returns the first non-zero duration in priority order,
-// falling back to a sane default to prevent zero-delay hot requeues.
-func pickDuration(primary, secondary, def time.Duration) time.Duration {
-	if primary > 0 {
-		return primary
-	}
-	if secondary > 0 {
-		return secondary
-	}
-	return def
 }

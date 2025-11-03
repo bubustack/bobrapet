@@ -9,6 +9,8 @@ resources:
 - bases/runs.bubustack.io_stepruns.yaml
 - bases/catalog.bubustack.io_engramtemplates.yaml
 - bases/catalog.bubustack.io_impulsetemplates.yaml
+- bases/transport.bubustack.io_transports.yaml
+- bases/transport.bubustack.io_transportbindings.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 # patches:

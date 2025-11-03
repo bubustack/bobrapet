@@ -72,6 +72,22 @@ type ImpulseTemplateStatus struct {
 	TemplateStatus `json:",inline"`
 }
 
+// GetTemplateStatus returns a pointer to the embedded TemplateStatus.
+// This enables shared status update helpers to operate on both template types.
+func (t *ImpulseTemplate) GetTemplateStatus() *TemplateStatus {
+	return &t.Status.TemplateStatus
+}
+
+// GetImage returns the template's container image.
+func (t *ImpulseTemplate) GetImage() string {
+	return t.Spec.Image
+}
+
+// GetVersion returns the template's version.
+func (t *ImpulseTemplate) GetVersion() string {
+	return t.Spec.Version
+}
+
 // +kubebuilder:object:root=true
 type ImpulseTemplateList struct {
 	metav1.TypeMeta `json:",inline"`

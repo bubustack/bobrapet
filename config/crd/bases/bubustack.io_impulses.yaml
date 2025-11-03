@@ -20,7 +20,7 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.templateRef
+    - jsonPath: .spec.templateRef.name
       name: Template
       type: string
     - jsonPath: .spec.storyRef.name
@@ -39,16 +39,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Impulse represents a trigger that launches Stories when events occur
-
-          Think of Impulses as the "event handlers" of your story system:
-          - GitHub webhook → trigger CI/CD Story
-          - File upload → trigger data processing Story
-          - Schedule/timer → trigger backup Story
-          - Queue message → trigger order processing Story
-          - Slack mention → trigger support Story
-
-          # Impulses are always-on services that listen for events and launch stories
+          Impulse defines an always-on trigger that listens for external events and
+          launches Stories in response.
         properties:
           apiVersion:
             description: |-
@@ -68,40 +60,71 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              ImpulseSpec defines how to set up an event trigger that launches Stories
-
-              The flow is: External Event → Impulse (processes event) → Story (runs story)
-              For example: GitHub push → webhook impulse → CI/CD story
+            description: ImpulseSpec describes a trigger instance and the Story it
+              activates.
             properties:
               execution:
-                description: Fine-tune execution behavior for special cases
+                description: Execution provides instance-level execution overrides.
                 properties:
                   automountServiceAccountToken:
-                    description: |-
-                      AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
-                      Defaults to false.
+                    default: true
+                    description: AutomountServiceAccountToken toggles automountServiceAccountToken
+                      on the pod spec.
+                    type: boolean
+                  debug:
+                    description: Debug enables verbose, component-level logging when
+                      true.
                     type: boolean
                   imagePullPolicy:
-                    description: Image pull policy override
+                    description: ImagePullPolicy overrides the container pull policy.
                     type: string
+                  loop:
+                    description: Loop tunes fan-out semantics for loop primitives.
+                    properties:
+                      defaultBatchSize:
+                        description: DefaultBatchSize controls how many iterations
+                          are launched per reconcile.
+                        format: int32
+                        type: integer
+                      maxBatchSize:
+                        description: MaxBatchSize bounds the controller-driven batch
+                          size.
+                        format: int32
+                        type: integer
+                      maxConcurrency:
+                        description: MaxConcurrency limits in-flight loop iterations.
+                        format: int32
+                        type: integer
+                      maxConcurrencyLimit:
+                        description: MaxConcurrencyLimit caps MaxConcurrency even
+                          when higher values are requested.
+                        format: int32
+                        type: integer
+                    type: object
+                  maxInlineSize:
+                    description: MaxInlineSize overrides the inline payload threshold
+                      in bytes. Set to 0 to always offload.
+                    type: integer
                   probes:
                     description: |-
-                      Probe overrides allow disabling template-defined probes at instance level
-                      Note: You can only disable probes, not redefine them
+                      Probes allows disabling template-defined probes; probe definitions themselves
+                      remain owned by the template.
                     properties:
                       disableLiveness:
-                        description: DisableLiveness disables the liveness probe
+                        description: DisableLiveness disables the liveness probe when
+                          true.
                         type: boolean
                       disableReadiness:
                         description: DisableReadiness disables the readiness probe
+                          when true.
                         type: boolean
                       disableStartup:
-                        description: DisableStartup disables the startup probe
+                        description: DisableStartup disables the startup probe when
+                          true.
                         type: boolean
                     type: object
                   retry:
-                    description: Retry policy override
+                    description: Retry overrides the resolved retry policy.
                     properties:
                       backoff:
                         description: |-
@@ -129,7 +152,7 @@ spec:
                         type: integer
                     type: object
                   security:
-                    description: Security context override
+                    description: Security overrides pod-level security settings.
                     properties:
                       allowPrivilegeEscalation:
                         description: Whether to allow privilege escalation
@@ -151,28 +174,126 @@ spec:
                         type: integer
                     type: object
                   serviceAccountName:
-                    description: ServiceAccount to use for the workload.
+                    description: ServiceAccountName overrides the ServiceAccount in
+                      use.
                     type: string
+                  storage:
+                    description: Storage overrides the resolved storage policy (e.g.,
+                      enable S3 or file providers).
+                    properties:
+                      file:
+                        description: File specifies configuration for a filesystem-backed
+                          object store.
+                        properties:
+                          emptyDir:
+                            description: |-
+                              EmptyDir defines an ephemeral volume to provision for file storage. When both
+                              EmptyDir and VolumeClaimName are omitted, an EmptyDir{} volume is used by default.
+                            properties:
+                              medium:
+                                description: |-
+                                  medium represents what type of storage medium should back this directory.
+                                  The default is "" which means to use the node's default medium.
+                                  Must be an empty string (default) or Memory.
+                                  More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                type: string
+                              sizeLimit:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                  The size limit is also applicable for memory medium.
+                                  The maximum usage on memory medium EmptyDir would be the minimum value between
+                                  the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                  The default is nil which means that the limit is undefined.
+                                  More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            type: object
+                          path:
+                            description: |-
+                              Path is the directory inside the container where the storage backend should write files.
+                              Defaults to "/var/run/bubu/storage" when omitted.
+                            type: string
+                          volumeClaimName:
+                            description: |-
+                              VolumeClaimName references an existing PersistentVolumeClaim mounted to the workload.
+                              Mutually exclusive with EmptyDir.
+                            type: string
+                        type: object
+                      s3:
+                        description: S3 specifies the configuration for an S3-compatible
+                          object store.
+                        properties:
+                          authentication:
+                            description: Authentication configures how the workload
+                              authenticates with S3.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef references a Kubernetes Secret that contains the credentials.
+                                  The secret must contain keys 'accessKeyID' and 'secretAccessKey'.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              serviceAccountAnnotations:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  ServiceAccountAnnotations allows specifying annotations to be added to the
+                                  auto-generated ServiceAccount. This is the recommended approach for
+                                  IAM-based authentication on cloud providers (e.g., IRSA on EKS).
+                                  The key-value pairs will be added to the ServiceAccount's metadata.annotations.
+                                type: object
+                            type: object
+                          bucket:
+                            description: Bucket is the name of the S3 bucket.
+                            type: string
+                          endpoint:
+                            description: Endpoint is the S3 endpoint URL. Useful for
+                              S3-compatible stores like MinIO.
+                            type: string
+                          region:
+                            description: Region is the AWS region of the bucket.
+                            type: string
+                          usePathStyle:
+                            description: UsePathStyle forces path-style addressing
+                              for S3-compatible providers that require it.
+                            type: boolean
+                        required:
+                        - authentication
+                        - bucket
+                        type: object
+                      timeoutSeconds:
+                        description: 'NOTE: GCS, AzureBlob, etc., can be added here
+                          in the future.'
+                        type: integer
+                    type: object
                   timeout:
-                    description: Timeout for execution
+                    description: Timeout overrides the resolved execution timeout
+                      (Go duration string).
                     type: string
                 type: object
               mapping:
-                description: |-
-                  How to transform the trigger event into Story inputs
-                  You have complete freedom here - map any event data to any Story input
-                  Examples:
-                  - GitHub: {"repo": "{{ event.repository.name }}", "branch": "{{ event.ref }}"}
-                  - File: {"filename": "{{ event.object.key }}", "size": "{{ event.object.size }}"}
+                description: Mapping describes how an incoming event is converted
+                  into Story inputs.
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               secrets:
                 additionalProperties:
                   type: string
-                description: |-
-                  Secrets configuration for this impulse instance
-                  Maps template secret definitions to actual Kubernetes secrets
-                  Example: {"authToken": "webhook-secret", "apiKey": "external-service-key"}
+                description: Secrets maps template-defined secret inputs to concrete
+                  namespace Secrets.
                 type: object
               service:
                 description: |-
@@ -183,22 +304,20 @@ spec:
                   annotations:
                     additionalProperties:
                       type: string
-                    description: Additional annotations to attach to the Service
+                    description: Annotations are merged into the Service metadata.
                     type: object
                   labels:
                     additionalProperties:
                       type: string
-                    description: Additional labels to attach to the Service
+                    description: Labels are merged into the Service metadata.
                     type: object
                   type:
-                    description: Type of Service to create (ClusterIP default, NodePort,
-                      LoadBalancer)
+                    description: Type is the Service type (ClusterIP, NodePort, LoadBalancer).
                     type: string
                 type: object
               storyRef:
-                description: |-
-                  Which Story to launch when an event is received
-                  This is the story that will run in response to the trigger
+                description: StoryRef identifies the Story executed when the trigger
+                  fires.
                 properties:
                   name:
                     description: |-
@@ -234,9 +353,8 @@ spec:
                 - name
                 type: object
               templateRef:
-                description: |-
-                  Which template to use for handling events
-                  Examples: "github-webhook", "slack-handler", "file-watcher", "cron-scheduler"
+                description: TemplateRef selects the ImpulseTemplate that implements
+                  the trigger mechanics.
                 properties:
                   name:
                     description: Name of the referenced ImpulseTemplate.
@@ -250,57 +368,53 @@ spec:
                 - name
                 type: object
               with:
-                description: |-
-                  How to configure this specific trigger instance
-                  Examples:
-                  - Webhook: {"port": 8080, "path": "/webhook"}
-                  - File watcher: {"bucket": "my-bucket", "prefix": "uploads/"}
-                  - Scheduler: {"schedule": "0 2 * * *", "timezone": "UTC"}
+                description: With carries template-specific configuration and is validated
+                  by the template.
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               workload:
-                description: |-
-                  How to run this impulse (deployment or statefulset only - must be always-on)
-                  Impulses can't be jobs because they need to continuously listen for events
+                description: Workload controls the backing workload for the impulse
+                  (deployment or statefulset).
                 properties:
                   job:
-                    description: Job-specific settings (only applies when mode=job)
+                    description: Job config applies when Mode is job.
                     properties:
                       activeDeadlineSeconds:
-                        description: Time after which job is considered failed
+                        description: ActiveDeadlineSeconds mirrors spec.activeDeadlineSeconds.
                         format: int64
                         type: integer
                       backoffLimit:
-                        description: Number of retries before marking as failed
+                        description: BackoffLimit mirrors spec.backoffLimit.
                         format: int32
                         type: integer
                       completions:
-                        description: Number of successful completions needed
+                        description: Completions mirrors spec.completions.
                         format: int32
                         type: integer
                       parallelism:
-                        description: Number of pods to run in parallel
+                        description: Parallelism mirrors spec.parallelism.
                         format: int32
                         type: integer
                       ttlSecondsAfterFinished:
-                        description: TTL for cleanup after completion
+                        description: TTLSecondsAfterFinished mirrors spec.ttlSecondsAfterFinished.
                         format: int32
                         type: integer
                     type: object
                   mode:
                     default: job
                     description: |-
-                      How to run this workload - the fundamental execution pattern
-                      - job: Run once and complete (like a batch script or CI job)
-                      - deployment: Always-on stateless service (like a web API or webhook listener)
-                      - statefulset: Always-on stateful service (like a database or file processor with persistent storage)
+                      Mode selects the workload controller backing the component.
+                        * job        – short-lived, run-to-completion executions
+                        * deployment – continuously running, stateless processes
+                        * statefulset – continuously running processes with sticky identity
                     enum:
                     - job
                     - deployment
                     - statefulset
                     type: string
                   resources:
-                    description: Resource requirements (CPU, memory, etc.)
+                    description: Resources specifies pod-level resource guarantees
+                      and limits.
                     properties:
                       limits:
                         description: ResourceLimits defines maximum allowed resources
@@ -333,20 +447,21 @@ spec:
                         type: array
                     type: object
                   statefulSet:
-                    description: StatefulSet-specific settings (only applies when
-                      mode=statefulset)
+                    description: StatefulSet config applies when Mode is statefulset.
                     properties:
                       podManagementPolicy:
-                        description: Pod management policy
+                        description: PodManagementPolicy mirrors spec.podManagementPolicy.
                         type: string
                       serviceName:
-                        description: Service name for StatefulSet
+                        description: ServiceName is the headless Service used for
+                          stable network identities.
                         type: string
                     required:
                     - serviceName
                     type: object
                   updateStrategy:
-                    description: How to handle updates/upgrades
+                    description: UpdateStrategy determines how the workload should
+                      roll out changes.
                     properties:
                       rollingUpdate:
                         description: Rolling update configuration (only applies when
@@ -379,11 +494,11 @@ spec:
             - templateRef
             type: object
           status:
-            description: ImpulseStatus shows the current state and activity of this
-              trigger
+            description: ImpulseStatus reports observed trigger state and counters.
             properties:
               conditions:
-                description: Standard Kubernetes conditions (Ready, Available, etc.)
+                description: Conditions is the standard Kubernetes condition set (Ready,
+                  etc.).
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -440,12 +555,18 @@ spec:
                   type: object
                 type: array
               failedTriggers:
+                description: FailedTriggers counts events that failed validation or
+                  launch.
                 format: int64
                 type: integer
               lastSuccess:
+                description: LastSuccess records the timestamp of the most recent
+                  successful Story launch.
                 format: date-time
                 type: string
               lastTrigger:
+                description: LastTrigger records the timestamp of the most recent
+                  event.
                 format: date-time
                 type: string
               observedGeneration:
@@ -461,15 +582,17 @@ spec:
                   to provide a unified view of execution state.
 
                   The phase progression typically follows:
-                  Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
+                  Pending → Running → {Succeeded|Failed|Finished|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
 
                   Some resources may also support Paused for manual intervention scenarios.
+
                   nolint:lll
                 enum:
                 - Pending
                 - Running
                 - Succeeded
                 - Failed
+                - Finished
                 - Canceled
                 - Compensated
                 - Paused
@@ -482,16 +605,17 @@ spec:
                 format: int32
                 type: integer
               replicas:
-                description: Current workload status - how many trigger instances
-                  are running (managed by KEDA/HPA)
+                description: Replicas and ReadyReplicas surface readiness information
+                  reported by the backing workload.
                 format: int32
                 type: integer
               storiesLaunched:
+                description: StoriesLaunched counts StoryRuns successfully started
+                  from events.
                 format: int64
                 type: integer
               triggersReceived:
-                description: Event processing statistics - useful for monitoring and
-                  debugging
+                description: TriggersReceived counts all events seen by the impulse.
                 format: int64
                 type: integer
             type: object

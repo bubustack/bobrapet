@@ -24,25 +24,17 @@ import (
 	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
-// Story represents a workflow definition - a sequence of steps that accomplish a business goal
-//
-// Stories are the main workflows in your system. Think of them like:
-// - GitHub Actions workflows
-// - Jenkins pipelines
-// - Zapier automations
-// - Any business process you want to automate
-//
-// Stories orchestrate Engrams (the workers) to create powerful workflows:
-// - CI/CD pipeline: checkout → test → build → deploy
-// - Data processing: extract → transform → load → notify
-// - E-commerce: validate order → charge payment → ship → update inventory
-// - Content moderation: analyze → classify → approve/reject → notify
+// Story defines a workflow that coordinates Engrams and primitive steps.
+// It captures orchestration logic, dependency ordering, and configuration that is
+// shared across every StoryRun derived from the Story.
 //
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=story,categories={bubu,ai,workflows}
 // +kubebuilder:printcolumn:name="Steps",type=integer,JSONPath=".status.stepsTotal"
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.validationStatus"
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=".status.usageCount"
+// +kubebuilder:printcolumn:name="Triggers",type=integer,JSONPath=".status.triggers"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 type Story struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -52,23 +44,15 @@ type Story struct {
 	Status StoryStatus `json:"status,omitempty"`
 }
 
-// StorySpec defines what the workflow does and how it should run
+// StorySpec captures the desired workflow topology and policy.
+// +kubebuilder:validation:XValidation:rule="self.steps.all(step, has(step.ref) != has(step.type))",message="each step must set exactly one of ref or type"
+// +kubebuilder:validation:XValidation:rule="self.steps.all(step, self.steps.exists_one(other, other.name == step.name))",message="step names must be unique"
 type StorySpec struct {
-	// Pattern specifies the execution model for the Story.
-	// "batch" stories are run to completion via a StoryRun.
-	// "streaming" stories create long-running workloads that process data continuously.
+	// Pattern selects the execution model. Batch stories produce short-lived StoryRuns;
+	// streaming stories maintain long-lived streaming topologies.
 	// +kubebuilder:validation:Enum=batch;streaming
 	// +kubebuilder:default=batch
 	Pattern enums.StoryPattern `json:"pattern,omitempty"`
-
-	// StreamingStrategy defines the deployment strategy for long-running engrams in a streaming story.
-	// "PerStory" creates a single, shared set of long-running engrams for the Story.
-	// "PerStoryRun" creates a dedicated set of long-running engrams for each StoryRun.
-	// This field is only applicable when `pattern` is "streaming".
-	// +kubebuilder:validation:Enum=PerStory;PerStoryRun
-	// +kubebuilder:default=PerStory
-	// +optional
-	StreamingStrategy enums.StreamingStrategy `json:"streamingStrategy,omitempty"`
 
 	// InputsSchema defines the schema for the data required to start a StoryRun.
 	// +optional
@@ -87,98 +71,116 @@ type StorySpec struct {
 	// +optional
 	Output *runtime.RawExtension `json:"output,omitempty"`
 
-	// The actual workflow steps - this is where the magic happens!
-	// Steps run in sequence unless you use parallel/condition logic
+	// Steps enumerates the workflow graph. Control-flow primitives and Engram
+	// references are represented here.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=100
 	Steps []Step `json:"steps"`
 
-	// How should this Story behave? (timeouts, retries, storage, etc.)
+	// Policy provides optional story-wide defaults such as timeouts and storage.
 	Policy *StoryPolicy `json:"policy,omitempty"`
+
+	// Transports declares named media/stream transports that steps can publish to
+	// or subscribe from. Controllers surface these to StoryRuns so engrams know
+	// whether to keep payloads on the transport ("hot") or fall back to storage.
+	// +optional
+	Transports []StoryTransport `json:"transports,omitempty"`
 }
 
-// Step defines a single unit of work within a Story.
-// Steps are the building blocks of stories, defining everything from custom logic
-// to control flow like loops, conditions, and parallel execution.
+// Step defines a node in the workflow graph. Nodes may refer to Engrams or to
+// built-in primitives such as condition, loop, parallel, or executeStory.
 type Step struct {
-	// Name is a human-readable identifier for the step.
-	// It's used to reference this step's outputs in other steps.
-	// e.g., '{{ steps.my-step-name.outputs.some_field }}'
+	// Name uniquely identifies the step within the Story. Outputs and dependencies
+	// are referenced by this name.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 	Name string `json:"name"`
 
-	// ID is an optional, unique identifier for a step instance.
-	// While 'name' identifies the step in logs and outputs, 'id' can be used
-	// programmatically to reference a specific node in the workflow graph.
+	// ID optionally provides a stable identifier distinct from Name. It is useful
+	// for programmatic processing of the workflow graph.
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
 	// +optional
 	ID string `json:"id,omitempty"`
 
-	// Needs explicitly defines a list of step names that must be completed before this step can run.
-	// This is used to create an execution order for steps that don't have an implicit data dependency.
+	// Needs lists predecessor step names that must complete before this step starts.
 	// +optional
 	Needs []string `json:"needs,omitempty"`
 
-	// Type determines the kind of operation this step performs.
-	// Use built-in types for common patterns. If omitted and 'ref' is present, the step is an 'engram' step.
-	//
-	// Built-in primitive types:
-	// - condition: if/then/else logic
-	// - loop: iterate over arrays or repeat N times
-	// - parallel: run multiple steps simultaneously
-	// - sleep: wait for a specified duration
-	// - stop: halt story execution (success or failure)
-	// - switch: multi-way branching like switch/case
-	// - filter: filter arrays or objects based on conditions
-	// - transform: modify data structure or format
-	// - executeStory: run another story as a sub-story
-	// - setData: set variables or update context
-	// - mergeData: combine data from multiple sources
-	// - wait: wait for external conditions
-	// - throttle: rate limiting
-	// - batch: group operations
-	// - gate: wait for a manual approval
+	// Type selects a built-in primitive. When omitted and Ref is set, the step
+	// executes an Engram.
 	// +optional
 	Type enums.StepType `json:"type,omitempty"`
 
-	// If provides a condition for executing this step.
-	// The step is only executed if the CEL expression evaluates to true.
+	// If gates execution on a CEL expression that evaluates to true.
 	// +optional
 	If *string `json:"if,omitempty"`
 
-	// Ref points to an Engram to execute.
-	// This is a shortcut for a step of type 'engram'.
-	// If 'ref' is used, 'type' should be omitted.
+	// Ref points to the Engram executed by this step.
 	// +optional
 	Ref *refs.EngramReference `json:"ref,omitempty"`
 
-	// With provides the configuration for the step. The expected structure of this block
-	// is determined by the step 'type'. For example:
-	// - for 'engram': the inputs to the engram.
-	// - for 'executeStory': contains 'storyRef', 'waitForCompletion', and 'with'.
-	// - for 'loop': contains 'items' and 'template'.
-	// The structure is validated at runtime by the controller.
+	// With carries step configuration and parameters for the Engram.
+	// Evaluation timing depends on execution mode:
+	//
+	// Batch/Job Mode:
+	//   - Evaluated ONCE when the job starts
+	//   - Has access to story inputs (trigger.*) and outputs from completed predecessor steps (steps.*)
+	//   - Passed as BUBU_STEP_CONFIG environment variable
+	//
+	// Realtime/Streaming Mode:
+	//   - Evaluated ONCE at deployment creation (static configuration)
+	//   - Has access to story inputs (trigger.*) only
+	//   - Step outputs are NOT available (they're per-packet, use 'runtime' field instead)
+	//   - Passed as BUBU_STEP_CONFIG environment variable
+	//
+	// Examples:
+	//   Batch: with: {inputFile: "{{ steps.fetch.outputs.filename }}", config: "{{ trigger.settings }}"}
+	//   Realtime: with: {model: "gpt-4o-mini", systemPrompt: "{{ trigger.prompt }}"}
+	//
 	// +kubebuilder:pruning:PreserveUnknownFields
 	// +optional
 	With *runtime.RawExtension `json:"with,omitempty"`
 
-	// Secrets maps template secret definitions to actual Kubernetes secrets for this step.
-	// This is only applicable to 'engram' steps and overrides any secret mappings on the Engram itself.
-	// Example: {"apiKey": "openai-credentials", "database": "postgres-creds"}
+	// Runtime carries dynamic per-packet configuration for realtime/streaming steps.
+	// This field is ONLY used in realtime mode and is evaluated by the hub for each packet.
+	//
+	// CEL expressions can reference:
+	//   - upstream.*: Outputs from predecessor steps (per-packet data)
+	//   - trigger.*: Story trigger inputs (static)
+	//   - packet.*: Current packet metadata
+	//
+	// The hub evaluates this configuration for each packet and passes the result
+	// in StreamMessage.Inputs to the engram.
+	//
+	// Batch Mode: This field is ignored (use 'with' field instead)
+	//
+	// Examples:
+	//   runtime: {userPrompt: "{{ upstream.transcribe.text }}", speakerId: "{{ packet.identity }}"}
+	//
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +optional
+	Runtime *runtime.RawExtension `json:"runtime,omitempty"`
+
+	// Transport selects a named transport declared in Story.spec.transports. Streaming
+	// steps use this to bind to the correct connector.
+	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	// +optional
+	Transport string `json:"transport,omitempty"`
+
+	// Secrets overrides template secret bindings for Engram steps.
 	// +optional
 	Secrets map[string]string `json:"secrets,omitempty"`
 
-	// Override execution settings for this specific step
-	// Use sparingly - most configuration should be at the story or engram level
+	// Execution carries per-step execution overrides. Prefer story- or template-level
+	// configuration when possible.
 	Execution *ExecutionOverrides `json:"execution,omitempty"`
 }
 
-// Simplified StoryPolicy focused on essential workflow controls
+// StoryPolicy aggregates optional defaults applied across the Story.
 type StoryPolicy struct {
 	// Timeouts
 	Timeouts *StoryTimeouts `json:"timeouts,omitempty"`
@@ -231,6 +233,24 @@ type StoryStatus struct {
 	// This provides a quick way to understand the complexity of the story.
 	// +optional
 	StepsTotal int32 `json:"stepsTotal,omitempty"`
+
+	// Transports mirrors the declared transports with lightweight readiness info.
+	// +optional
+	Transports []StoryTransportStatus `json:"transports,omitempty"`
+
+	// ValidationStatus indicates whether this Story's specification passed validation.
+	ValidationStatus enums.ValidationStatus `json:"validationStatus,omitempty"`
+	// ValidationErrors captures human-readable validation problems, when present.
+	ValidationErrors []string `json:"validationErrors,omitempty"`
+
+	// UsageCount reports how many Impulses reference this Story.
+	// +optional
+	UsageCount int32 `json:"usageCount"`
+
+	// Triggers reports how many StoryRuns currently reference this Story.
+	// This approximates how frequently the story has been executed.
+	// +optional
+	Triggers int64 `json:"triggers"`
 }
 
 // +kubebuilder:object:root=true
@@ -238,6 +258,34 @@ type StoryList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Story `json:"items"`
+}
+
+// StoryTransport describes a named transport binding available to steps.
+type StoryTransport struct {
+	// Name references the transport from steps (e.g. "realtime-audio").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+	Name string `json:"name"`
+	// TransportRef references the Transport CR providing this functionality.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	TransportRef string `json:"transportRef"`
+	// Description provides optional human-readable context.
+	// +optional
+	Description string `json:"description,omitempty"`
+	// Settings contain provider-specific overrides evaluated per StoryRun.
+	// +optional
+	Settings *runtime.RawExtension `json:"settings,omitempty"`
+}
+
+// StoryTransportStatus mirrors declared transports in status.
+type StoryTransportStatus struct {
+	Name         string              `json:"name"`
+	TransportRef string              `json:"transportRef"`
+	Mode         enums.TransportMode `json:"mode,omitempty"`
+	// ModeReason explains why the controller selected the effective mode (e.g., "declarative-default", "requires-primitives").
+	// +optional
+	ModeReason string `json:"modeReason,omitempty"`
 }
 
 func init() {

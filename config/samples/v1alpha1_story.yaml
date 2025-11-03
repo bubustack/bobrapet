@@ -2,6 +2,7 @@
 apiVersion: bubustack.io/v1alpha1
 kind: Story
 metadata:
+  namespace: default
   name: summarize-website-story
 spec:
   inputsSchema:
@@ -27,13 +28,13 @@ spec:
         endpoint: http://minio.default.svc.cluster.local:9000
   steps:
   - name: fetch-content
-    ref: 
+    ref:
       name: http-request-engram
     with:
       url: '{{ inputs.url }}'
   - if: steps["fetch-content"].outputs.statusCode == 200
     name: summarize
-    ref: 
+    ref:
       name: openai-summarizer-engram
     needs:
     - fetch-content

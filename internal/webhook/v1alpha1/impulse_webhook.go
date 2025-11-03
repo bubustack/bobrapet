@@ -32,9 +32,10 @@ import (
 	"github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/pkg/conditions"
+	"github.com/bubustack/bobrapet/pkg/validation"
 )
 
-// nolint:unused
 // log is for logging in this package.
 var impulselog = logf.Log.WithName("impulse-resource")
 
@@ -44,6 +45,17 @@ type ImpulseWebhook struct {
 }
 
 // SetupWebhookWithManager registers the webhook for Impulse in the manager.
+//
+// Behavior:
+//   - Stores the manager's client for template lookups during validation.
+//   - Creates both defaulter and validator webhooks for Impulse resources.
+//
+// Arguments:
+//   - mgr ctrl.Manager: the controller-runtime manager.
+//
+// Returns:
+//   - nil on success.
+//   - Error if webhook registration fails.
 func (wh *ImpulseWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	wh.Client = mgr.GetClient()
 
@@ -61,21 +73,26 @@ func (wh *ImpulseWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
 type ImpulseCustomDefaulter struct {
-	// TODO(user): Add more fields as needed for defaulting
+	// No fields needed; Impulse defaults are intentionally minimal.
 }
 
 var _ webhook.CustomDefaulter = &ImpulseCustomDefaulter{}
 
-// Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Impulse.
+// Default implements webhook.CustomDefaulter for Impulse resources.
+//
+// Behavior:
+//   - Currently a no-op; Impulse defaults are intentionally minimal.
+//   - Controller handles defaulting at reconcile time.
+//
+// Arguments:
+//   - ctx context.Context: unused but required by interface.
+//   - obj runtime.Object: expected to be *bubushv1alpha1.Impulse.
+//
+// Returns:
+//   - nil on success.
+//   - Error if obj is not an Impulse.
 func (d *ImpulseCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
-	impulse, ok := obj.(*bubushv1alpha1.Impulse)
-
-	if !ok {
-		return fmt.Errorf("expected an Impulse object but got %T", obj)
-	}
-	impulselog.Info("Defaulting for Impulse", "name", impulse.GetName())
-
-	return nil
+	return DefaultResource[*bubushv1alpha1.Impulse](obj, "Impulse", impulselog, nil)
 }
 
 // NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
@@ -94,21 +111,37 @@ type ImpulseCustomValidator struct {
 
 var _ webhook.CustomValidator = &ImpulseCustomValidator{}
 
-// ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
+// ValidateCreate implements webhook.CustomValidator for Impulse creation.
+//
+// Behavior:
+//   - Type-asserts obj to Impulse and validates spec.
+//   - Validates required fields, with/mapping blocks, and workload mode.
+//
+// Arguments:
+//   - ctx context.Context: for template lookup.
+//   - obj runtime.Object: expected to be *bubushv1alpha1.Impulse.
+//
+// Returns:
+//   - nil, nil if validation passes.
+//   - nil, error if type assertion fails or validation errors exist.
 func (v *ImpulseCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	impulse, ok := obj.(*bubushv1alpha1.Impulse)
-	if !ok {
-		return nil, fmt.Errorf("expected a Impulse object but got %T", obj)
-	}
-	impulselog.Info("Validation for Impulse upon creation", "name", impulse.GetName())
-
-	if err := v.validateImpulse(ctx, impulse); err != nil {
-		return nil, err
-	}
-	return nil, nil
+	return ValidateCreateResource[*bubushv1alpha1.Impulse](ctx, obj, "Impulse", impulselog, v.validateImpulse)
 }
 
-// ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
+// ValidateUpdate implements webhook.CustomValidator for Impulse updates.
+//
+// Behavior:
+//   - Type-asserts newObj to Impulse and validates spec.
+//   - Validates required fields, with/mapping blocks, and workload mode.
+//
+// Arguments:
+//   - ctx context.Context: for template lookup.
+//   - oldObj runtime.Object: previous Impulse state.
+//   - newObj runtime.Object: proposed Impulse state.
+//
+// Returns:
+//   - nil, nil if validation passes.
+//   - nil, error if type assertion fails or validation errors exist.
 func (v *ImpulseCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	impulse, ok := newObj.(*bubushv1alpha1.Impulse)
 	if !ok {
@@ -122,51 +155,93 @@ func (v *ImpulseCustomValidator) ValidateUpdate(ctx context.Context, oldObj, new
 	return nil, nil
 }
 
-// ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
+// ValidateDelete implements webhook.CustomValidator for Impulse deletion.
+//
+// Behavior:
+//   - Always allows deletion (no-op validation).
+//   - Exists as scaffold placeholder; delete verb not enabled in annotation.
+//
+// Arguments:
+//   - ctx context.Context: unused.
+//   - obj runtime.Object: expected to be *bubushv1alpha1.Impulse.
+//
+// Returns:
+//   - nil, nil (deletion always allowed).
 func (v *ImpulseCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	impulse, ok := obj.(*bubushv1alpha1.Impulse)
-	if !ok {
-		return nil, fmt.Errorf("expected a Impulse object but got %T", obj)
-	}
-	impulselog.Info("Validation for Impulse upon deletion", "name", impulse.GetName())
-
-	return nil, nil
+	return ValidateDeleteResource[*bubushv1alpha1.Impulse](obj, "Impulse", impulselog, nil)
 }
 
 // validateImpulse performs basic invariants validation for Impulse specs.
-// - templateRef.name and storyRef.name must be set
-// - with and mapping, if present, must be JSON objects (not array/primitive)
-// - workload.mode must not be 'job' (impulse must be always-on)
+//
+// Behavior:
+//   - Validates templateRef.name and storyRef.name are set.
+//   - Validates with/mapping blocks are JSON objects (not array/primitive).
+//   - Validates workload.mode is not "job" (Impulse must be always-on).
+//   - Validates with/mapping against template schemas if defined.
+//   - Aggregates multiple validation errors for comprehensive feedback.
+//
+// Arguments:
+//   - ctx context.Context: for template lookup.
+//   - impulse *bubushv1alpha1.Impulse: the Impulse to validate.
+//
+// Returns:
+//   - nil if all validations pass.
+//   - Aggregated field.ErrorList containing all validation failures.
 func (v *ImpulseCustomValidator) validateImpulse(ctx context.Context, impulse *bubushv1alpha1.Impulse) error {
-	if err := v.validateRequiredFields(impulse); err != nil {
-		return err
-	}
-	template, err := v.fetchTemplate(ctx, impulse.Spec.TemplateRef.Name)
-	if err != nil {
-		return err
-	}
-	if err := v.validateWithBlock(impulse, template); err != nil {
-		return err
-	}
-	if err := v.validateMappingBlock(impulse, template); err != nil {
-		return err
-	}
-	if err := v.validateWorkloadMode(impulse); err != nil {
-		return err
-	}
-	return nil
-}
+	agg := validation.NewAggregator()
 
-func (v *ImpulseCustomValidator) validateRequiredFields(impulse *bubushv1alpha1.Impulse) error {
+	// Validate required fields first
 	if impulse.Spec.TemplateRef.Name == "" {
-		return fmt.Errorf("spec.templateRef.name is required")
+		agg.AddFieldError("spec.templateRef.name", conditions.ReasonTemplateNotFound, "spec.templateRef.name is required")
 	}
 	if impulse.Spec.StoryRef.Name == "" {
-		return fmt.Errorf("spec.storyRef.name is required")
+		agg.AddFieldError("spec.storyRef.name", conditions.ReasonStoryReferenceInvalid, "spec.storyRef.name is required")
+	}
+
+	// Only proceed with template lookup if templateRef is valid
+	var template *v1alpha1.ImpulseTemplate
+	if impulse.Spec.TemplateRef.Name != "" {
+		var err error
+		template, err = v.fetchTemplate(ctx, impulse.Spec.TemplateRef.Name)
+		if err != nil {
+			agg.AddFieldError("spec.templateRef.name", conditions.ReasonTemplateNotFound, err.Error())
+		}
+	}
+
+	// Validate with/mapping blocks if template was found
+	if template != nil {
+		if err := v.validateWithBlock(impulse, template); err != nil {
+			agg.AddFieldError("spec.with", conditions.ReasonValidationFailed, err.Error())
+		}
+		if err := v.validateMappingBlock(impulse, template); err != nil {
+			agg.AddFieldError("spec.mapping", conditions.ReasonValidationFailed, err.Error())
+		}
+	}
+
+	// Validate workload mode regardless of template
+	if err := v.validateWorkloadMode(impulse); err != nil {
+		agg.AddFieldError("spec.workload.mode", conditions.ReasonValidationFailed, err.Error())
+	}
+
+	if agg.HasErrors() {
+		return agg.ToFieldErrors().ToAggregate()
 	}
 	return nil
 }
 
+// fetchTemplate retrieves the cluster-scoped ImpulseTemplate by name.
+//
+// Behavior:
+//   - Fetches the ImpulseTemplate from the API server.
+//   - Returns user-friendly error if template does not exist.
+//
+// Arguments:
+//   - ctx context.Context: for API call.
+//   - name string: ImpulseTemplate name.
+//
+// Returns:
+//   - *v1alpha1.ImpulseTemplate if found.
+//   - Error if not found or API call fails.
 func (v *ImpulseCustomValidator) fetchTemplate(ctx context.Context, name string) (*v1alpha1.ImpulseTemplate, error) {
 	var template v1alpha1.ImpulseTemplate
 	if err := v.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: ""}, &template); err != nil {
@@ -178,16 +253,31 @@ func (v *ImpulseCustomValidator) fetchTemplate(ctx context.Context, name string)
 	return &template, nil
 }
 
+// validateWithBlock validates the Impulse's spec.with block.
+//
+// Behavior:
+//   - Skips validation if with block is empty.
+//   - Ensures with block is a JSON object (not array or primitive).
+//   - Ensures with block doesn't exceed configured max inline size.
+//   - Validates against template's configSchema if defined.
+//
+// Arguments:
+//   - impulse *bubushv1alpha1.Impulse: the Impulse to validate.
+//   - template *v1alpha1.ImpulseTemplate: for configSchema validation.
+//
+// Returns:
+//   - nil if with block is valid or absent.
+//   - Error describing the validation failure.
 func (v *ImpulseCustomValidator) validateWithBlock(impulse *bubushv1alpha1.Impulse, template *v1alpha1.ImpulseTemplate) error {
 	if impulse.Spec.With == nil || len(impulse.Spec.With.Raw) == 0 {
 		return nil
 	}
-	b := trimLeadingSpace(impulse.Spec.With.Raw)
-	if err := ensureJSONObject("spec.with", b); err != nil {
+	b := TrimLeadingSpace(impulse.Spec.With.Raw)
+	if err := EnsureJSONObject("spec.with", b); err != nil {
 		return err
 	}
-	maxBytes := pickMaxInline(v.Config)
-	if err := enforceMaxBytes("spec.with", impulse.Spec.With.Raw, maxBytes); err != nil {
+	maxBytes := PickMaxInlineBytes(v.Config)
+	if err := EnforceMaxBytes("spec.with", impulse.Spec.With.Raw, maxBytes, "Provide large payloads via object storage and references instead of inlining"); err != nil {
 		return err
 	}
 	if template.Spec.ConfigSchema != nil && len(template.Spec.ConfigSchema.Raw) > 0 {
@@ -198,16 +288,31 @@ func (v *ImpulseCustomValidator) validateWithBlock(impulse *bubushv1alpha1.Impul
 	return nil
 }
 
+// validateMappingBlock validates the Impulse's spec.mapping block.
+//
+// Behavior:
+//   - Skips validation if mapping block is empty.
+//   - Ensures mapping block is a JSON object (not array or primitive).
+//   - Ensures mapping block doesn't exceed configured max inline size.
+//   - Validates against template's contextSchema if defined.
+//
+// Arguments:
+//   - impulse *bubushv1alpha1.Impulse: the Impulse to validate.
+//   - template *v1alpha1.ImpulseTemplate: for contextSchema validation.
+//
+// Returns:
+//   - nil if mapping block is valid or absent.
+//   - Error describing the validation failure.
 func (v *ImpulseCustomValidator) validateMappingBlock(impulse *bubushv1alpha1.Impulse, template *v1alpha1.ImpulseTemplate) error {
 	if impulse.Spec.Mapping == nil || len(impulse.Spec.Mapping.Raw) == 0 {
 		return nil
 	}
-	b := trimLeadingSpace(impulse.Spec.Mapping.Raw)
-	if err := ensureJSONObject("spec.mapping", b); err != nil {
+	b := TrimLeadingSpace(impulse.Spec.Mapping.Raw)
+	if err := EnsureJSONObject("spec.mapping", b); err != nil {
 		return err
 	}
-	maxBytes := pickMaxInline(v.Config)
-	if err := enforceMaxBytes("spec.mapping", impulse.Spec.Mapping.Raw, maxBytes); err != nil {
+	maxBytes := PickMaxInlineBytes(v.Config)
+	if err := EnforceMaxBytes("spec.mapping", impulse.Spec.Mapping.Raw, maxBytes, "Provide large payloads via object storage and references instead of inlining"); err != nil {
 		return err
 	}
 	if template.Spec.ContextSchema != nil && len(template.Spec.ContextSchema.Raw) > 0 {
@@ -218,6 +323,18 @@ func (v *ImpulseCustomValidator) validateMappingBlock(impulse *bubushv1alpha1.Im
 	return nil
 }
 
+// validateWorkloadMode ensures Impulse workload mode is not "job".
+//
+// Behavior:
+//   - Rejects Impulses with workload.mode set to "job".
+//   - Impulses must be long-running (always-on) processes.
+//
+// Arguments:
+//   - impulse *bubushv1alpha1.Impulse: the Impulse to validate.
+//
+// Returns:
+//   - nil if workload mode is valid or not set.
+//   - Error if mode is "job".
 func (v *ImpulseCustomValidator) validateWorkloadMode(impulse *bubushv1alpha1.Impulse) error {
 	if impulse.Spec.Workload != nil && impulse.Spec.Workload.Mode == "job" {
 		return fmt.Errorf("spec.workload.mode must not be 'job' for Impulse (must be always-on)")

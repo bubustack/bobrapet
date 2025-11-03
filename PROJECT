@@ -86,4 +86,22 @@ resources:
   kind: ImpulseTemplate
   path: github.com/bubustack/bobrapet/api/catalog/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubustack.io
+  group: transport
+  kind: Transport
+  path: github.com/bubustack/bobrapet/api/transport/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubustack.io
+  group: transport
+  kind: TransportBinding
+  path: github.com/bubustack/bobrapet/api/transport/v1alpha1
+  version: v1alpha1
 version: "3"

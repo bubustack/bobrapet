@@ -1,0 +1,301 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: transports.transport.bubustack.io
+spec:
+  group: transport.bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    kind: Transport
+    listKind: TransportList
+    plural: transports
+    shortNames:
+    - transport
+    singular: transport
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Transport defines a reusable transport configuration.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TransportSpec defines a provider-neutral transport description.
+            properties:
+              configSchema:
+                description: configSchema optionally captures a JSONSchema for provider-specific
+                  settings.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              connectorImage:
+                description: connectorImage optionally declares the recommended connector
+                  image implementing this driver.
+                type: string
+              defaultSettings:
+                description: defaultSettings contains default provider-specific settings
+                  serialized as JSON.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              driver:
+                description: driver is the connector driver identifier that should
+                  be used for bindings.
+                minLength: 1
+                type: string
+              provider:
+                description: provider is the human-readable provider name (e.g., livekit,
+                  twilio, custom).
+                minLength: 1
+                type: string
+              supportedAudio:
+                description: supportedAudio lists the audio codecs supported by this
+                  transport.
+                items:
+                  description: AudioCodec describes a negotiated audio codec.
+                  properties:
+                    channels:
+                      description: channels indicates the number of channels carried
+                        by this codec.
+                      format: int32
+                      type: integer
+                    name:
+                      description: name of the codec (e.g., pcm16, opus, g711-mu)
+                      enum:
+                      - pcm16
+                      - pcm24
+                      - opus
+                      - g711-mu
+                      - g711-a
+                      - g722
+                      - aac
+                      - mp3
+                      - flac
+                      - raw
+                      type: string
+                    sampleRateHz:
+                      description: sampleRateHz indicates the sampling rate for this
+                        codec.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              supportedBinary:
+                description: supportedBinary lists MIME types supported for generic
+                  binary payloads.
+                items:
+                  type: string
+                type: array
+              supportedVideo:
+                description: supportedVideo lists the video codecs supported by this
+                  transport.
+                items:
+                  description: VideoCodec describes a negotiated video codec or raw
+                    pixel format.
+                  properties:
+                    name:
+                      description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                      enum:
+                      - h264
+                      - vp8
+                      - vp9
+                      - av1
+                      - raw-yuv420
+                      - raw-rgb
+                      - raw-bgr
+                      type: string
+                    profile:
+                      description: profile or format hint (e.g., baseline, high, rgb)
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - driver
+            - provider
+            type: object
+          status:
+            description: TransportStatus reports validation/usage state for a transport
+              template.
+            properties:
+              availableAudio:
+                description: negotiatedAudio lists the codecs the connector actually
+                  exposes/negotiates.
+                items:
+                  description: AudioCodec describes a negotiated audio codec.
+                  properties:
+                    channels:
+                      description: channels indicates the number of channels carried
+                        by this codec.
+                      format: int32
+                      type: integer
+                    name:
+                      description: name of the codec (e.g., pcm16, opus, g711-mu)
+                      enum:
+                      - pcm16
+                      - pcm24
+                      - opus
+                      - g711-mu
+                      - g711-a
+                      - g722
+                      - aac
+                      - mp3
+                      - flac
+                      - raw
+                      type: string
+                    sampleRateHz:
+                      description: sampleRateHz indicates the sampling rate for this
+                        codec.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              availableBinary:
+                description: negotiatedBinary lists MIME types the connector supports
+                  for binary payloads.
+                items:
+                  type: string
+                type: array
+              availableVideo:
+                description: negotiatedVideo lists the video codecs the connector
+                  supports.
+                items:
+                  description: VideoCodec describes a negotiated video codec or raw
+                    pixel format.
+                  properties:
+                    name:
+                      description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                      enum:
+                      - h264
+                      - vp8
+                      - vp9
+                      - av1
+                      - raw-yuv420
+                      - raw-rgb
+                      - raw-bgr
+                      type: string
+                    profile:
+                      description: profile or format hint (e.g., baseline, high, rgb)
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastHeartbeatTime:
+                description: lastHeartbeat records when a binding last reported capabilities.
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              pendingBindings:
+                description: pendingBindings tracks how many bindings still await
+                  negotiation.
+                format: int32
+                type: integer
+              usageCount:
+                format: int32
+                type: integer
+              validationErrors:
+                items:
+                  type: string
+                type: array
+              validationStatus:
+                description: |-
+                  ValidationStatus defines template validation states.
+                  Templates undergo validation to ensure they're properly configured and secure.
+                enum:
+                - valid
+                - invalid
+                - unknown
+                - pending
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

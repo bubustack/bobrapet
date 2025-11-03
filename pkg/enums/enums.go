@@ -26,11 +26,12 @@ package enums
 // to provide a unified view of execution state.
 //
 // The phase progression typically follows:
-// Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
+// Pending → Running → {Succeeded|Failed|Finished|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
 //
 // Some resources may also support Paused for manual intervention scenarios.
+// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Finished;Canceled;Compensated;Paused;Blocked;Scheduling;Timeout;Aborted;
+//
 // nolint:lll
-// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Canceled;Compensated;Paused;Blocked;Scheduling;Timeout;Aborted
 type Phase string
 
 const (
@@ -57,11 +58,15 @@ const (
 	// Manual intervention or recreation may be required.
 	PhaseFailed Phase = "Failed"
 
-	// PhaseCanceled indicates that the resource execution was canceled.
+	// PhaseFinished indicates that the resource execution was finished.
 	// This is a terminal state that can result from:
 	// - User-initiated cancellation
 	// - System-initiated cancellation (e.g., policy violations)
 	// - Parent resource cancellation
+	// - Normal completion of streaming workflows
+	PhaseFinished Phase = "Finished"
+
+	// PhaseCanceled indicates that the resource execution was canceled.
 	PhaseCanceled Phase = "Canceled"
 
 	// PhaseCompensated indicates that the resource has been compensated using saga pattern.
@@ -95,7 +100,14 @@ const (
 // IsTerminal returns true if the Phase is a terminal state.
 func (p Phase) IsTerminal() bool {
 	switch p {
-	case PhaseSucceeded, PhaseFailed, PhaseCanceled, PhaseCompensated, PhaseTimeout, PhaseAborted, PhaseSkipped:
+	case PhaseSucceeded,
+		PhaseFailed,
+		PhaseFinished,
+		PhaseCanceled,
+		PhaseCompensated,
+		PhaseTimeout,
+		PhaseAborted,
+		PhaseSkipped:
 		return true
 	default:
 		return false
@@ -118,15 +130,16 @@ const (
 	StopModeFailure StopMode = "failure"
 
 	// StopModeCancel indicates cancellation.
-	// The workflow should terminate with a Canceled phase.
+	// The workflow should terminate with a Finished phase.
 	StopModeCancel StopMode = "cancel"
 )
 
 // StepType defines the type of step in a story workflow.
 // BubuStack provides built-in primitives for common workflow patterns,
 // reducing the need for custom code in many scenarios.
-// nolint:lll
 // +kubebuilder:validation:Enum=condition;loop;parallel;sleep;stop;switch;filter;transform;wait;throttle;batch;executeStory;setData;mergeData;gate
+//
+// nolint:lll
 type StepType string
 
 const (
@@ -194,6 +207,17 @@ const (
 	StepTypeGate StepType = "gate"
 )
 
+// TransportMode captures how a transport is intended to be used in a Story.
+// "hot" transports remain in-band/low-latency, whereas "fallback" transports
+// act as spillover targets (e.g. object storage).
+// +kubebuilder:validation:Enum=hot;fallback
+type TransportMode string
+
+const (
+	TransportModeHot      TransportMode = "hot"
+	TransportModeFallback TransportMode = "fallback"
+)
+
 // WorkloadMode defines how a workload should be executed in Kubernetes.
 // This determines the fundamental execution pattern and lifecycle management.
 //
@@ -215,16 +239,6 @@ const (
 	// Best for: Stateful services, persistent storage, ordered deployment.
 	// Characteristics: Stable network identity, persistent storage, ordered scaling.
 	WorkloadModeStatefulSet WorkloadMode = "statefulset"
-)
-
-// StreamingStrategy defines the deployment strategy for long-running engrams in a streaming story.
-type StreamingStrategy string
-
-const (
-	// StreamingStrategyPerStory creates a single, shared set of long-running engrams for the Story.
-	StreamingStrategyPerStory StreamingStrategy = "PerStory"
-	// StreamingStrategyPerStoryRun creates a dedicated set of long-running engrams for each StoryRun.
-	StreamingStrategyPerStoryRun StreamingStrategy = "PerStoryRun"
 )
 
 // BackoffStrategy defines retry backoff strategies for failed operations.

@@ -81,19 +81,21 @@ var _ = Describe("Engram Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &bubushv1alpha1.Engram{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
 			By("Cleanup the specific resource instance Engram")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			resource := &bubushv1alpha1.Engram{}
+			if err := k8sClient.Get(ctx, typeNamespacedName, resource); err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+			} else {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
 
 			// Delete the EngramTemplate
 			engramTemplate := &catalogv1alpha1.EngramTemplate{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: templateName}, engramTemplate)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Delete(ctx, engramTemplate)).To(Succeed())
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: templateName}, engramTemplate); err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+			} else {
+				Expect(k8sClient.Delete(ctx, engramTemplate)).To(Succeed())
+			}
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")

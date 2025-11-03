@@ -21,146 +21,168 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// Shared types used across Engrams, Impulses, and Stories
-// These types implement the hierarchical configuration system where settings cascade down:
-// Controller defaults → Template → Engram/Impulse → Namespace → Story → Step → StepRun
-
-// WorkloadSpec defines HOW to run something in Kubernetes
-// This is where you specify whether it's a one-shot job, always-on service, or stateful application
+// WorkloadSpec captures the execution primitive that should back an Engram, Impulse,
+// or Story step. Higher-level defaults flow from controller configuration down to
+// the individual resource and finally to the generated Kubernetes workload.
 //
-// Note: Replica counts are NOT specified here - they're managed by external autoscaling tools:
-// - Use KEDA for event-driven autoscaling (queue depth, HTTP requests, etc.)
-// - Use HPA for metric-based autoscaling (CPU, memory, custom metrics)
-// - Use VPA for vertical scaling (adjusting resource requests/limits)
-// - Current replica counts are reported in the status section
+// Replica counts are intentionally absent; autoscaling is delegated to purpose-built
+// controllers (HPA, KEDA, VPA). The API only declares the shape of the workload.
 type WorkloadSpec struct {
-	// How to run this workload - the fundamental execution pattern
-	// - job: Run once and complete (like a batch script or CI job)
-	// - deployment: Always-on stateless service (like a web API or webhook listener)
-	// - statefulset: Always-on stateful service (like a database or file processor with persistent storage)
+	// Mode selects the workload controller backing the component.
+	//   * job        – short-lived, run-to-completion executions
+	//   * deployment – continuously running, stateless processes
+	//   * statefulset – continuously running processes with sticky identity
 	// +kubebuilder:default="job"
 	Mode enums.WorkloadMode `json:"mode,omitempty"`
 
-	// Job-specific settings (only applies when mode=job)
+	// Job config applies when Mode is job.
 	Job *JobWorkloadConfig `json:"job,omitempty"`
 
-	// StatefulSet-specific settings (only applies when mode=statefulset)
+	// StatefulSet config applies when Mode is statefulset.
 	StatefulSet *StatefulSetWorkloadConfig `json:"statefulSet,omitempty"`
 
-	// Resource requirements (CPU, memory, etc.)
+	// Resources specifies pod-level resource guarantees and limits.
 	Resources *WorkloadResources `json:"resources,omitempty"`
 
-	// How to handle updates/upgrades
+	// UpdateStrategy determines how the workload should roll out changes.
 	UpdateStrategy *UpdateStrategy `json:"updateStrategy,omitempty"`
 }
 
-// ServiceExposure defines instance-level Service settings for exposing a workload
-// Intended to be used by Impulse/Engram specs to choose exposure mode and metadata.
-// Ports and health checks come from the template; this controls only exposure knobs.
+// ServiceExposure declares how a generated Service should be materialised for a given
+// workload. Template authors own the port definitions; this struct lets instance authors
+// override exposure type or metadata.
 type ServiceExposure struct {
-	// Type of Service to create (ClusterIP default, NodePort, LoadBalancer)
+	// Type is the Service type (ClusterIP, NodePort, LoadBalancer).
 	Type string `json:"type,omitempty"`
-	// Additional labels to attach to the Service
+	// Labels are merged into the Service metadata.
 	Labels map[string]string `json:"labels,omitempty"`
-	// Additional annotations to attach to the Service
+	// Annotations are merged into the Service metadata.
 	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
-// JobWorkloadConfig contains job-specific settings
+// JobWorkloadConfig contains knobs that map directly onto batch/v1 Job fields.
 type JobWorkloadConfig struct {
-	// Number of pods to run in parallel
+	// Parallelism mirrors spec.parallelism.
 	Parallelism *int32 `json:"parallelism,omitempty"`
 
-	// Number of successful completions needed
+	// Completions mirrors spec.completions.
 	Completions *int32 `json:"completions,omitempty"`
 
-	// Number of retries before marking as failed
+	// BackoffLimit mirrors spec.backoffLimit.
 	BackoffLimit *int32 `json:"backoffLimit,omitempty"`
 
-	// Time after which job is considered failed
+	// ActiveDeadlineSeconds mirrors spec.activeDeadlineSeconds.
 	ActiveDeadlineSeconds *int64 `json:"activeDeadlineSeconds,omitempty"`
 
-	// TTL for cleanup after completion
+	// TTLSecondsAfterFinished mirrors spec.ttlSecondsAfterFinished.
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
 }
 
-// StatefulSetWorkloadConfig contains statefulset-specific settings
-// Note: For storage, we use controller-managed PVs instead of VolumeClaimTemplates
-// This ensures RWX compatibility and single PV per StoryRun
+// StatefulSetWorkloadConfig includes the subset of StatefulSet fields we support.
+// Storage is provisioned by the controller; VolumeClaimTemplates are purposefully hidden.
 type StatefulSetWorkloadConfig struct {
-	// Service name for StatefulSet
+	// ServiceName is the headless Service used for stable network identities.
 	ServiceName string `json:"serviceName"`
 
-	// Pod management policy
+	// PodManagementPolicy mirrors spec.podManagementPolicy.
 	PodManagementPolicy *string `json:"podManagementPolicy,omitempty"`
 }
 
-// ExecutionOverrides allows overriding template/policy defaults at instance level
+// ExecutionOverrides lets an instance tune execution characteristics while inheriting
+// from template and controller defaults.
 type ExecutionOverrides struct {
-	// Timeout for execution
+	// Timeout overrides the resolved execution timeout (Go duration string).
 	Timeout *string `json:"timeout,omitempty"`
 
-	// Retry policy override
+	// Retry overrides the resolved retry policy.
 	Retry *RetryPolicy `json:"retry,omitempty"`
 
-	// Security context override
+	// Debug enables verbose, component-level logging when true.
+	// +optional
+	Debug *bool `json:"debug,omitempty"`
+
+	// Security overrides pod-level security settings.
 	Security *WorkloadSecurity `json:"security,omitempty"`
 
-	// Image pull policy override
+	// ImagePullPolicy overrides the container pull policy.
 	ImagePullPolicy *string `json:"imagePullPolicy,omitempty"`
 
-	// ServiceAccount to use for the workload.
+	// MaxInlineSize overrides the inline payload threshold in bytes. Set to 0 to always offload.
+	// +optional
+	MaxInlineSize *int `json:"maxInlineSize,omitempty"`
+
+	// ServiceAccountName overrides the ServiceAccount in use.
 	// +optional
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
 
-	// AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
-	// Defaults to false.
+	// AutomountServiceAccountToken toggles automountServiceAccountToken on the pod spec.
+	// +kubebuilder:default=true
 	// +optional
 	AutomountServiceAccountToken *bool `json:"automountServiceAccountToken,omitempty"`
 
-	// Probe overrides allow disabling template-defined probes at instance level
-	// Note: You can only disable probes, not redefine them
+	// Probes allows disabling template-defined probes; probe definitions themselves
+	// remain owned by the template.
 	// +optional
 	Probes *ProbeOverrides `json:"probes,omitempty"`
+
+	// Storage overrides the resolved storage policy (e.g., enable S3 or file providers).
+	// +optional
+	Storage *StoragePolicy `json:"storage,omitempty"`
+
+	// Loop tunes fan-out semantics for loop primitives.
+	// +optional
+	Loop *LoopPolicy `json:"loop,omitempty"`
 }
 
-// ProbeOverrides allows disabling specific probes at instance level
-// All fields default to false (probes enabled). Set to true to disable.
+// ProbeOverrides disables controller-provided probes on a per-instance basis.
+// Fields default to false which keeps the template-defined probe behaviour.
 type ProbeOverrides struct {
-	// DisableLiveness disables the liveness probe
+	// DisableLiveness disables the liveness probe when true.
 	// +optional
 	DisableLiveness bool `json:"disableLiveness,omitempty"`
 
-	// DisableReadiness disables the readiness probe
+	// DisableReadiness disables the readiness probe when true.
 	// +optional
 	DisableReadiness bool `json:"disableReadiness,omitempty"`
 
-	// DisableStartup disables the startup probe
+	// DisableStartup disables the startup probe when true.
 	// +optional
 	DisableStartup bool `json:"disableStartup,omitempty"`
 }
 
-// ExecutionPolicy defines execution configuration with hierarchical resolution:
-// Controller defaults -> Template -> Engram/Impulse -> Namespace -> Story -> Step -> StepRun
+// ExecutionPolicy represents the fully materialised policy after hierarchical
+// resolution (controller → template → namespace → story → step).
 type ExecutionPolicy struct {
-	// Resource configuration (actual values, not defaults)
+	// Resources enumerates the concrete pod resource assignments.
 	Resources *ResourcePolicy `json:"resources,omitempty"`
 
-	// Security configuration
+	// Security enumerates the concrete pod security settings.
 	Security *SecurityPolicy `json:"security,omitempty"`
 
-	// Job configuration
+	// Job enumerates the job controller settings.
 	Job *JobPolicy `json:"job,omitempty"`
 
-	// Retry configuration
+	// Retry enumerates the retry configuration.
 	Retry *RetryPolicy `json:"retry,omitempty"`
 
-	// Timeout configuration
+	// Timeout is the execution deadline expressed as a Go duration string.
 	Timeout *string `json:"timeout,omitempty"`
 
-	// ServiceAccount to use for workloads created from this policy.
+	// ServiceAccountName identifies the ServiceAccount used by derived workloads.
 	// +optional
 	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
+
+	// Storage enumerates the resolved storage policy applied to the workload.
+	// +optional
+	Storage *StoragePolicy `json:"storage,omitempty"`
+
+	// Loop specifies default loop execution characteristics applied at the story policy level.
+	// +optional
+	Loop *LoopPolicy `json:"loop,omitempty"`
+
+	// Realtime enumerates streaming-specific execution settings (e.g., TTL for lingering pods).
+	// +optional
+	Realtime *RealtimePolicy `json:"realtime,omitempty"`
 }
 
 type ResourcePolicy struct {
@@ -191,15 +213,53 @@ type SecurityPolicy struct {
 	RunAsUser *int64 `json:"runAsUser,omitempty"`
 }
 
+// RealtimePolicy captures streaming-specific execution settings.
+type RealtimePolicy struct {
+	// TTLSecondsAfterFinished controls how long realtime resources (Deployments, Services) remain after finish.
+	// Set to 0 to delete immediately, negative to keep indefinitely, or positive seconds to keep temporarily.
+	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+}
+
 type JobPolicy struct {
 	// Backoff limit for jobs
 	BackoffLimit *int32 `json:"backoffLimit,omitempty"`
 
-	// TTL for job cleanup
+	// TTL for cleaning up child resources (StepRuns, Pods) after StoryRun finishes.
+	// After this period expires, child resources are deleted to free up cluster resources.
+	// The parent StoryRun record is preserved for observability.
+	// Default: 3600 (1 hour)
 	TTLSecondsAfterFinished *int32 `json:"ttlSecondsAfterFinished,omitempty"`
+
+	// Retention period for the StoryRun record itself after it finishes.
+	// After this period expires, the StoryRun is deleted to prevent etcd overload.
+	// Set to 0 to keep StoryRuns forever (requires manual cleanup).
+	// Set to -1 to delete StoryRun immediately after child cleanup (not recommended).
+	// Recommended: 86400 (24 hours) to 604800 (7 days) for production systems.
+	// Default: 86400 (24 hours)
+	// +optional
+	StoryRunRetentionSeconds *int32 `json:"storyRunRetentionSeconds,omitempty"`
 
 	// Restart policy
 	RestartPolicy *string `json:"restartPolicy,omitempty"`
+}
+
+// LoopPolicy customizes fan-out behaviour for loop primitives.
+type LoopPolicy struct {
+	// DefaultBatchSize controls how many iterations are launched per reconcile.
+	// +optional
+	DefaultBatchSize *int32 `json:"defaultBatchSize,omitempty"`
+
+	// MaxBatchSize bounds the controller-driven batch size.
+	// +optional
+	MaxBatchSize *int32 `json:"maxBatchSize,omitempty"`
+
+	// MaxConcurrency limits in-flight loop iterations.
+	// +optional
+	MaxConcurrency *int32 `json:"maxConcurrency,omitempty"`
+
+	// MaxConcurrencyLimit caps MaxConcurrency even when higher values are requested.
+	// +optional
+	MaxConcurrencyLimit *int32 `json:"maxConcurrencyLimit,omitempty"`
 }
 
 // RetryPolicy defines retry behavior for steps and execution
@@ -292,7 +352,12 @@ type StoragePolicy struct {
 	// S3 specifies the configuration for an S3-compatible object store.
 	// +optional
 	S3 *S3StorageProvider `json:"s3,omitempty"`
+
+	// File specifies configuration for a filesystem-backed object store.
+	// +optional
+	File *FileStorageProvider `json:"file,omitempty"`
 	// NOTE: GCS, AzureBlob, etc., can be added here in the future.
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 }
 
 // S3StorageProvider configures access to an S3 or S3-compatible object store.
@@ -312,6 +377,27 @@ type S3StorageProvider struct {
 	// Authentication configures how the workload authenticates with S3.
 	// +kubebuilder:validation:Required
 	Authentication S3Authentication `json:"authentication"`
+
+	// UsePathStyle forces path-style addressing for S3-compatible providers that require it.
+	// +optional
+	UsePathStyle bool `json:"usePathStyle,omitempty"`
+}
+
+// FileStorageProvider configures access to a filesystem-backed storage location.
+type FileStorageProvider struct {
+	// Path is the directory inside the container where the storage backend should write files.
+	// Defaults to "/var/run/bubu/storage" when omitted.
+	Path string `json:"path,omitempty"`
+
+	// VolumeClaimName references an existing PersistentVolumeClaim mounted to the workload.
+	// Mutually exclusive with EmptyDir.
+	// +optional
+	VolumeClaimName string `json:"volumeClaimName,omitempty"`
+
+	// EmptyDir defines an ephemeral volume to provision for file storage. When both
+	// EmptyDir and VolumeClaimName are omitted, an EmptyDir{} volume is used by default.
+	// +optional
+	EmptyDir *corev1.EmptyDirVolumeSource `json:"emptyDir,omitempty"`
 }
 
 // S3Authentication defines the authentication method for S3.

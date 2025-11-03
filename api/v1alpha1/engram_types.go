@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/refs"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -28,7 +29,9 @@ import (
 // +kubebuilder:resource:scope=Namespaced,shortName=engram,categories={bubu,ai}
 // +kubebuilder:printcolumn:name="Template",type=string,JSONPath=".spec.templateRef.name"
 // +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=".status.conditions[?(@.type=='Ready')].status"
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.validationStatus"
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=".status.usageCount"
+// +kubebuilder:printcolumn:name="Triggers",type=integer,JSONPath=".status.triggers"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 type Engram struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -38,57 +41,95 @@ type Engram struct {
 	Status EngramStatus `json:"status,omitempty"`
 }
 
-// EngramSpec defines the configuration and behavior of a specific engram instance
+// EngramSpec describes the desired behaviour for an Engram.
 type EngramSpec struct {
-	// Which template to use for this engram instance
-	// This connects the specific configuration below to a reusable component
+	// TemplateRef selects the EngramTemplate that provides defaults, validation,
+	// and base artifacts for this instance.
 	// +kubebuilder:validation:Required
 	TemplateRef refs.EngramTemplateReference `json:"templateRef"`
 
-	// Mode specifies how the Engram should be run.
-	// Supported values are "job", "deployment", "statefulset".
-	// If not specified, it defaults to the template's supported mode or "job".
+	// Mode optionally overrides the workload controller selected by the template.
+	// Supported values are job, deployment, and statefulset.
 	// +kubebuilder:validation:Enum=job;deployment;statefulset
 	Mode enums.WorkloadMode `json:"mode,omitempty"`
 
-	// How to configure this specific engram instance
-	// This data gets validated against the EngramTemplate's configSchema
+	// With carries template-specific configuration. The template schema determines
+	// the structure and validation rules applied to this payload.
 	// +kubebuilder:pruning:PreserveUnknownFields
 	With *runtime.RawExtension `json:"with,omitempty"`
 
-	// Secrets maps template secret definitions to actual Kubernetes secrets.
+	// Secrets maps named secret inputs defined by the template to concrete Secret
+	// resources in the tenant namespace.
 	Secrets map[string]string `json:"secrets,omitempty"`
 
-	// ExecutionPolicy defines the execution configuration for this Engram.
-	// These settings override any defaults from the EngramTemplate.
+	// ExecutionPolicy captures the fully-resolved execution policy after hierarchical
+	// merge. Template defaults feed into this value.
 	// +optional
 	ExecutionPolicy *ExecutionPolicy `json:"executionPolicy,omitempty"`
 
-	// Overrides allows for fine-tuning of execution behavior.
+	// Overrides allows callers to apply instance-specific execution adjustments.
 	Overrides *ExecutionOverrides `json:"overrides,omitempty"`
+
+	// Transport carries transport-level overrides such as TLS configuration.
+	// +optional
+	Transport *EngramTransportSpec `json:"transport,omitempty"`
 }
 
-// EngramStatus defines the observed state of Engram
+// EngramTransportSpec defines transport-related overrides for an Engram.
+type EngramTransportSpec struct {
+	// TLS configures TLS secrets for hybrid transports.
+	// +optional
+	TLS *EngramTLSSpec `json:"tls,omitempty"`
+}
+
+// EngramTLSSpec describes TLS secret resolution behavior.
+type EngramTLSSpec struct {
+	// SecretRef references a Secret containing tls.key/tls.crt data.
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// UseDefaultTLS requests the operator's default TLS secret when true.
+	// Defaults to true when SecretRef is unset.
+	// +optional
+	UseDefaultTLS *bool `json:"useDefaultTLS,omitempty"`
+}
+
+// EngramStatus reports observed workload state.
 type EngramStatus struct {
-	// ObservedGeneration is the most recent generation observed for this Engram.
+	// ObservedGeneration reflects the last reconciled generation.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// This will indicate if the Engram's syntax is valid and its template is resolved.
+	// Conditions conveys per-condition status such as Ready.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Current workload status - what's actually running.
-	// These fields are ONLY populated for Engrams running as a Deployment or StatefulSet.
-	// For job-based engrams, these will be empty.
-	Replicas      int32       `json:"replicas,omitempty"`      // How many pods are currently running
-	ReadyReplicas int32       `json:"readyReplicas,omitempty"` // How many pods are actually ready to serve traffic
-	Phase         enums.Phase `json:"phase,omitempty"`         // Overall state: Pending, Running, Succeeded, Failed
+	// Replicas and ReadyReplicas surface pod readiness information for controllers
+	// that expose it (Deployments/StatefulSets). Jobs leave these fields at zero.
+	Replicas      int32       `json:"replicas,omitempty"`
+	ReadyReplicas int32       `json:"readyReplicas,omitempty"`
+	Phase         enums.Phase `json:"phase,omitempty"`
 
-	// Additional useful information for debugging and monitoring
-	LastExecutionTime *metav1.Time `json:"lastExecutionTime,omitempty"` // When did this last run (for jobs)
-	TotalExecutions   int32        `json:"totalExecutions,omitempty"`   // How many times has this run
-	FailedExecutions  int32        `json:"failedExecutions,omitempty"`  // How many executions failed
+	// ValidationStatus reflects whether the engram spec passed validation.
+	ValidationStatus enums.ValidationStatus `json:"validationStatus,omitempty"`
+	// ValidationErrors contains messages describing validation failures.
+	ValidationErrors []string `json:"validationErrors,omitempty"`
+
+	// UsageCount reports how many Stories reference this Engram.
+	// +optional
+	UsageCount int32 `json:"usageCount"`
+
+	// Triggers reports how many StepRuns currently reference this Engram.
+	// Useful for understanding runtime fan-out and utilisation.
+	// +optional
+	Triggers int64 `json:"triggers"`
+
+	// LastExecutionTime captures the completion timestamp for the most recent run.
+	LastExecutionTime *metav1.Time `json:"lastExecutionTime,omitempty"`
+	// TotalExecutions counts the number of completed runs for job workloads.
+	TotalExecutions int32 `json:"totalExecutions,omitempty"`
+	// FailedExecutions counts runs that ended in a failure state.
+	FailedExecutions int32 `json:"failedExecutions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

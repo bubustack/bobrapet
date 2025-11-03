@@ -81,6 +81,22 @@ type EngramTemplateStatus struct {
 	TemplateStatus `json:",inline"`
 }
 
+// GetTemplateStatus returns a pointer to the embedded TemplateStatus.
+// This enables shared status update helpers to operate on both template types.
+func (t *EngramTemplate) GetTemplateStatus() *TemplateStatus {
+	return &t.Status.TemplateStatus
+}
+
+// GetImage returns the template's container image.
+func (t *EngramTemplate) GetImage() string {
+	return t.Spec.Image
+}
+
+// GetVersion returns the template's version.
+func (t *EngramTemplate) GetVersion() string {
+	return t.Spec.Version
+}
+
 // +kubebuilder:object:root=true
 type EngramTemplateList struct {
 	metav1.TypeMeta `json:",inline"`

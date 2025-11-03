@@ -30,6 +30,7 @@ kind-delete: ## Delete the kind cluster
 
 .PHONY: kind-get-kubeconfig
 kind-get-kubeconfig: ## Get the kubeconfig for the kind cluster
+	@mkdir -p $(HOME)/.kube
 	@kind get kubeconfig --name $(KIND_CLUSTER_NAME) > $(KUBECONFIG)
 	@echo "Kubeconfig saved to $(KUBECONFIG)"
 
@@ -40,7 +41,6 @@ ifndef IMAGE
 endif
 	@echo "Loading image $(IMAGE) into kind cluster '$(KIND_CLUSTER_NAME)'..."
 	@kind load docker-image $(IMAGE) --name $(KIND_CLUSTER_NAME)
-	@kind load docker-image docker.io/library/$(IMAGE) --name $(KIND_CLUSTER_NAME)
 	@echo "Image loaded successfully!"
 
 .PHONY: kind-load-controller

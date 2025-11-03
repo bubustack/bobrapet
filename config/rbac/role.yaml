@@ -16,11 +16,18 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - persistentvolumeclaims
-  - services
+  - events
   verbs:
   - create
-  - delete
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - secrets
+  verbs:
+  - create
   - get
   - list
   - patch
@@ -36,10 +43,14 @@ rules:
   - ""
   resources:
   - serviceaccounts
+  - services
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - apps
@@ -73,8 +84,6 @@ rules:
   - impulses
   - stories
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -104,20 +113,9 @@ rules:
   - engramtemplates
   - impulsetemplates
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
-- apiGroups:
-  - catalog.bubustack.io
-  resources:
-  - engramtemplates/finalizers
-  - impulsetemplates/finalizers
-  verbs:
-  - update
 - apiGroups:
   - catalog.bubustack.io
   resources:
@@ -134,8 +132,11 @@ rules:
   - roles
   verbs:
   - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - runs.bubustack.io
@@ -162,6 +163,56 @@ rules:
   resources:
   - stepruns/status
   - storyruns/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - transport.bubustack.io
+  resources:
+  - transportbindings
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transport.bubustack.io
+  resources:
+  - transportbindings/status
+  - transports/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - transport.bubustack.io
+  resources:
+  - transports
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transportutil.bubustack.io
+  resources:
+  - transportbindings
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transportutil.bubustack.io
+  resources:
+  - transportbindings/status
   verbs:
   - get
   - patch

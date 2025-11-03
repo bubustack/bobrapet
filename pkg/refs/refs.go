@@ -31,6 +31,9 @@ limitations under the License.
 package refs
 
 import (
+	"fmt"
+	"strings"
+
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -198,4 +201,15 @@ func (ref *ObjectReference) ToNamespacedName(referencingObject client.Object) ty
 		Name:      ref.Name,
 		Namespace: ResolveNamespace(referencingObject, ref),
 	}
+}
+
+// NamespacedKey returns a stable "namespace/name" key for indexing and selectors.
+// If namespace is empty, it returns name.
+//
+// Use this consistently anywhere you generate index keys so indexers and lookups match.
+func NamespacedKey(namespace, name string) string {
+	if strings.TrimSpace(namespace) == "" {
+		return strings.TrimSpace(name)
+	}
+	return fmt.Sprintf("%s/%s", strings.TrimSpace(namespace), strings.TrimSpace(name))
 }

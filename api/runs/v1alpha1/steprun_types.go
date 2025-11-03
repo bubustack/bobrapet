@@ -51,7 +51,6 @@ import (
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=.spec.stepId
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
 // +kubebuilder:printcolumn:name="Retries",type=integer,JSONPath=.status.retries
-// +kubebuilder:printcolumn:name="Duration",type=string,JSONPath=.status.duration
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;watch
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns/status,verbs=patch;update
@@ -112,6 +111,12 @@ type StepRunSpec struct {
 	// Can be a list to support fanning out to multiple parallel steps.
 	// +optional
 	DownstreamTargets []DownstreamTarget `json:"downstreamTargets,omitempty"`
+
+	// RequestedManifest lists the metadata fields the controller expects the SDK
+	// to materialize alongside the offloaded output. These are derived from CEL expressions
+	// that reference this step's outputs (e.g., len(steps.foo.output.bar)).
+	// +optional
+	RequestedManifest []ManifestRequest `json:"requestedManifest,omitempty"`
 }
 
 // DownstreamTarget defines the destination for an Engram's output in real-time execution mode.
@@ -140,7 +145,62 @@ type TerminateTarget struct {
 	StopMode enums.StopMode `json:"stopMode"`
 }
 
+// ManifestOperation enumerates the metadata operations supported for step manifests.
+type ManifestOperation string
+
+const (
+	// ManifestOperationExists records whether the referenced field exists/non-nil.
+	ManifestOperationExists ManifestOperation = "exists"
+	// ManifestOperationLength records the length of the referenced field when it is an array, map, or string.
+	ManifestOperationLength ManifestOperation = "length"
+	// ManifestOperationSample records a small sample of the referenced field when available.
+	ManifestOperationSample ManifestOperation = "sample"
+	// ManifestOperationHash records a stable hash of the referenced field.
+	ManifestOperationHash ManifestOperation = "hash"
+	// ManifestOperationType records the inferred type of the referenced field.
+	ManifestOperationType ManifestOperation = "type"
+)
+
+// ManifestRequest describes a single output field and the metadata operations required for it.
+type ManifestRequest struct {
+	// Path is the dot/bracket notation path relative to the step output root.
+	// Examples: "result.items", "tools", "items[0].id".
+	// +kubebuilder:validation:MinLength=1
+	Path string `json:"path"`
+	// Operations lists the metadata operations that should be computed for this path.
+	// Defaults to ["exists"] when omitted.
+	// +optional
+	Operations []ManifestOperation `json:"operations,omitempty"`
+}
+
+// StepManifestData captures the metadata emitted by the SDK for a single manifest path.
+type StepManifestData struct {
+	// Exists indicates whether the referenced field was present and non-nil.
+	// +optional
+	Exists *bool `json:"exists,omitempty"`
+	// Length contains the computed length when requested and applicable.
+	// +optional
+	Length *int64 `json:"length,omitempty"`
+	// Hash contains a hash of the referenced field, useful for change detection.
+	// +optional
+	Hash string `json:"hash,omitempty"`
+	// Type captures the inferred type of the referenced field.
+	// +optional
+	Type string `json:"type,omitempty"`
+	// Truncated signals that the SDK could not compute the full metadata due to limits.
+	// +optional
+	Truncated bool `json:"truncated,omitempty"`
+	// Error contains a warning message emitted by the SDK when it cannot honour the manifest request.
+	// +optional
+	Error string `json:"error,omitempty"`
+	// Sample holds an optional representative slice of the data (implementation-defined).
+	// +optional
+	Sample *runtime.RawExtension `json:"sample,omitempty"`
+}
+
 // StepRunStatus tracks the detailed execution state of this individual step
+// +kubebuilder:validation:XValidation:message="status.conditions reason field must be <= 64 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.reason) || size(c.reason) <= 64)"
+// +kubebuilder:validation:XValidation:message="status.conditions message field must be <= 2048 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.message) || size(c.message) <= 2048)"
 type StepRunStatus struct {
 	// observedGeneration is the most recent generation observed for this StepRun. It corresponds to the
 	// StepRun's generation, which is updated on mutation by the API Server.
@@ -167,7 +227,7 @@ type StepRunStatus struct {
 	PodName   string          `json:"podName,omitempty"`   // Which Kubernetes pod executed this step?
 
 	// Retry tracking (aligned with our Story/Engram/Template retry design)
-	Retries        int32        `json:"retries,omitempty"`        // How many times has this step been retried?
+	Retries        int32        `json:"retries"`                  // How many times has this step been retried?
 	NextRetryAt    *metav1.Time `json:"nextRetryAt,omitempty"`    // When will the next retry happen?
 	LastFailureMsg string       `json:"lastFailureMsg,omitempty"` // Most recent failure message for debugging
 
@@ -198,6 +258,22 @@ type StepRunStatus struct {
 	// Step coordination - which steps must complete before this one can start
 	// Uses the same "needs" terminology as our Story API for consistency
 	Needs []string `json:"needs,omitempty"` // StepRun names that must complete first
+
+	// Manifest contains metadata captured for this step's output that enables CEL expressions
+	// to execute without hydrating large blobs from storage.
+	// The map key matches the ManifestRequest path.
+	// +optional
+	Manifest map[string]StepManifestData `json:"manifest,omitempty"`
+
+	// ManifestWarnings contains any warnings produced while computing manifest data (e.g., unsupported operations).
+	// +optional
+	ManifestWarnings []string `json:"manifestWarnings,omitempty"`
+
+	// Signals captures lightweight, controller-friendly metadata emitted by running Engrams.
+	// These values are intended for CEL expressions and branching logic (e.g., last transcript text).
+	// Payloads should remain small (<8 KiB) to avoid bloating status objects.
+	// +optional
+	Signals map[string]runtime.RawExtension `json:"signals,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -215,6 +291,9 @@ type StepExecutionOverrides struct {
 	CPULimit      *string `json:"cpuLimit,omitempty"`      // Override CPU limit (e.g., "500m", "1")
 	MemoryRequest *string `json:"memoryRequest,omitempty"` // Override memory request (e.g., "128Mi", "1Gi")
 	MemoryLimit   *string `json:"memoryLimit,omitempty"`   // Override memory limit (e.g., "256Mi", "2Gi")
+
+	// Debug toggles component-level debug logging.
+	Debug *bool `json:"debug,omitempty"`
 
 	// Job behavior overrides
 	BackoffLimit            *int32  `json:"backoffLimit,omitempty"`            // Override job backoff limit

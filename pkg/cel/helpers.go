@@ -149,11 +149,27 @@ func sortByField(lhs, rhs ref.Val) ref.Val {
 	sorted := make([]any, len(list))
 	copy(sorted, list)
 
+	var compareErr error
 	sort.Slice(sorted, func(i, j int) bool {
-		valI := getFieldValue(sorted[i], field)
-		valJ := getFieldValue(sorted[j], field)
+		if compareErr != nil {
+			return false
+		}
+		valI, err := getFieldValue(sorted[i], field)
+		if err != nil {
+			compareErr = fmt.Errorf("sort_by[%d]: %w", i, err)
+			return false
+		}
+		valJ, err := getFieldValue(sorted[j], field)
+		if err != nil {
+			compareErr = fmt.Errorf("sort_by[%d]: %w", j, err)
+			return false
+		}
 		return compareValues(valI, valJ) < 0
 	})
+
+	if compareErr != nil {
+		return types.NewErr("sort_by invalid item: %v", compareErr)
+	}
 
 	return types.DefaultTypeAdapter.NativeToValue(sorted)
 }
@@ -191,8 +207,12 @@ func groupByField(lhs, rhs ref.Val) ref.Val {
 
 	groups := make(map[string][]any)
 
-	for _, item := range list {
-		key := fmt.Sprintf("%v", getFieldValue(item, field))
+	for idx, item := range list {
+		value, err := getFieldValue(item, field)
+		if err != nil {
+			return types.NewErr("group_by item %d: %v", idx, err)
+		}
+		key := fmt.Sprintf("%v", value)
 		groups[key] = append(groups[key], item)
 	}
 
@@ -238,8 +258,11 @@ func sumByField(lhs, rhs ref.Val) ref.Val {
 	}
 
 	var sum float64
-	for _, item := range list {
-		val := getFieldValue(item, field)
+	for idx, item := range list {
+		val, err := getFieldValue(item, field)
+		if err != nil {
+			return types.NewErr("sum_by item %d: %v", idx, err)
+		}
 		if num, ok := toNumber(val); ok {
 			sum += num
 		}
@@ -261,8 +284,12 @@ func countByField(lhs, rhs ref.Val) ref.Val {
 
 	counts := make(map[string]int64)
 
-	for _, item := range list {
-		key := fmt.Sprintf("%v", getFieldValue(item, field))
+	for idx, item := range list {
+		value, err := getFieldValue(item, field)
+		if err != nil {
+			return types.NewErr("count_by item %d: %v", idx, err)
+		}
+		key := fmt.Sprintf("%v", value)
 		counts[key]++
 	}
 
@@ -359,45 +386,89 @@ func skipN(lhs, rhs ref.Val) ref.Val {
 
 // Helper functions
 
-func getFieldValue(item any, field string) any {
-	if m, ok := item.(map[string]any); ok {
-		return m[field]
+// getFieldValue returns item[field] when the item is a map[string]any and
+// returns an error for other inputs so higher-level helpers can flag invalid
+// rows (`pkg/cel/helpers.go:150-268,364-386`).
+func getFieldValue(item any, field string) (any, error) {
+	m, ok := item.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("expected map[string]any for field %q, got %T", field, item)
 	}
-	return nil
+	return m[field], nil
 }
 
+// compareValues orders two CEL-friendly values, supporting string, int64,
+// float64, and time.Time, and returns 0 when types differ or are unsupported
+// (`pkg/cel/helpers.go:369-408`).
 func compareValues(a, b any) int {
-	switch va := a.(type) {
-	case string:
-		if vb, ok := b.(string); ok {
-			return strings.Compare(va, vb)
-		}
-	case int64:
-		if vb, ok := b.(int64); ok {
-			if va < vb {
-				return -1
-			} else if va > vb {
-				return 1
-			}
-			return 0
-		}
-	case float64:
-		if vb, ok := b.(float64); ok {
-			if va < vb {
-				return -1
-			} else if va > vb {
-				return 1
-			}
-			return 0
-		}
-	case time.Time:
-		if vb, ok := b.(time.Time); ok {
-			return va.Compare(vb)
-		}
+	if result, ok := compareSameType(a, b); ok {
+		return result
+	}
+	if result, ok := compareNumericFallbacks(a, b); ok {
+		return result
 	}
 	return 0
 }
 
+func compareSameType(a, b any) (int, bool) {
+	switch va := a.(type) {
+	case string:
+		if vb, ok := b.(string); ok {
+			return strings.Compare(va, vb), true
+		}
+	case int64:
+		if vb, ok := b.(int64); ok {
+			switch {
+			case va < vb:
+				return -1, true
+			case va > vb:
+				return 1, true
+			default:
+				return 0, true
+			}
+		}
+	case float64:
+		if vb, ok := b.(float64); ok {
+			switch {
+			case va < vb:
+				return -1, true
+			case va > vb:
+				return 1, true
+			default:
+				return 0, true
+			}
+		}
+	case time.Time:
+		if vb, ok := b.(time.Time); ok {
+			return va.Compare(vb), true
+		}
+	}
+
+	return 0, false
+}
+
+func compareNumericFallbacks(a, b any) (int, bool) {
+	aNum, ok := toNumber(a)
+	if !ok {
+		return 0, false
+	}
+	bNum, ok := toNumber(b)
+	if !ok {
+		return 0, false
+	}
+	switch {
+	case aNum < bNum:
+		return -1, true
+	case aNum > bNum:
+		return 1, true
+	default:
+		return 0, true
+	}
+}
+
+// toNumber coerces known Go numeric types (int64, float64, int) into a
+// float64 result and reports whether the conversion succeeded
+// (`pkg/cel/helpers.go:401-412`).
 func toNumber(val any) (float64, bool) {
 	switch v := val.(type) {
 	case int64:
@@ -411,6 +482,9 @@ func toNumber(val any) (float64, bool) {
 	}
 }
 
+// convertTimeFormat swaps a limited set of YYYY/MM/DD/HH/mm/ss tokens with Go's
+// reference layout so formatTime can accept strftime-like patterns
+// (`pkg/cel/helpers.go:465-485`).
 func convertTimeFormat(format string) string {
 	// Convert common time formats to Go's reference time format
 	replacements := map[string]string{

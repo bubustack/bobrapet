@@ -64,17 +64,20 @@ const (
 	ReasonLargeDataDelegated = "LargeDataDelegated"
 
 	// Error reasons
-	ReasonValidationFailed         = "ValidationFailed"
-	ReasonTemplateNotFound         = "TemplateNotFound"
-	ReasonTemplateResolutionFailed = "TemplateResolutionFailed"
-	ReasonStoryNotFound            = "StoryNotFound"
-	ReasonStoryReferenceInvalid    = "StoryReferenceInvalid"
-	ReasonCompilationFailed        = "CompilationFailed"
-	ReasonSchedulingFailed         = "SchedulingFailed"
-	ReasonExecutionFailed          = "ExecutionFailed"
-	ReasonReferenceNotFound        = "ReferenceNotFound"
-	ReasonInvalidConfiguration     = "InvalidConfiguration"
-	ReasonDeploymentReady          = "DeploymentReady"
+	ReasonValidationFailed          = "ValidationFailed"
+	ReasonTemplateNotFound          = "TemplateNotFound"
+	ReasonTemplateResolutionFailed  = "TemplateResolutionFailed"
+	ReasonOutputResolutionFailed    = "OutputResolutionFailed"
+	ReasonStoryNotFound             = "StoryNotFound"
+	ReasonStoryReferenceInvalid     = "StoryReferenceInvalid"
+	ReasonEngramReferenceInvalid    = "EngramReferenceInvalid"
+	ReasonTransportReferenceInvalid = "TransportReferenceInvalid"
+	ReasonCompilationFailed         = "CompilationFailed"
+	ReasonSchedulingFailed          = "SchedulingFailed"
+	ReasonExecutionFailed           = "ExecutionFailed"
+	ReasonReferenceNotFound         = "ReferenceNotFound"
+	ReasonInvalidConfiguration      = "InvalidConfiguration"
+	ReasonDeploymentReady           = "DeploymentReady"
 
 	// Progressing reasons
 	ReasonValidating        = "Validating"
@@ -89,11 +92,21 @@ const (
 	ReasonCleaningUp        = "CleaningUp"
 	ReasonInputTooLarge     = "InputTooLarge"
 	ReasonOutputTooLarge    = "OutputTooLarge"
+	ReasonCanceled          = "Canceled"
 
 	// Transport-specific reasons
-	ReasonTransportReady  = "TransportReady"
-	ReasonTransportFailed = "TransportFailed"
-	ReasonReconciling     = "Reconciling"
+	ReasonTransportReady    = "TransportReady"
+	ReasonTransportFailed   = "TransportFailed"
+	ReasonReconciling       = "Reconciling"
+	ReasonAwaitingTransport = "AwaitingTransport"
+	ReasonAwaitingStoryRun  = "AwaitingStoryRun"
+
+	// Transport validation reason codes
+	ReasonTransportDriverMissing       = "DriverMissing"
+	ReasonTransportCapabilitiesMissing = "CapabilitiesMissing"
+	ReasonTransportCodecInvalid        = "CodecInvalid"
+	ReasonTransportCodecDuplicate      = "CodecDuplicate"
+	ReasonTransportMimeTypeInvalid     = "MimeTypeInvalid"
 )
 
 // ConditionManager provides standard condition management

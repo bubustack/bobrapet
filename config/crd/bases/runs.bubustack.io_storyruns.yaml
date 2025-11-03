@@ -27,9 +27,6 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
-    - jsonPath: .status.startedAt
-      name: Started
-      type: date
     - jsonPath: .status.duration
       name: Duration
       type: string
@@ -172,6 +169,12 @@ spec:
                 items:
                   type: string
                 type: array
+              childrenCleanedAt:
+                description: |-
+                  Timestamp when child resources (StepRuns, Pods) were cleaned up
+                  Used to track the two-phase cleanup process (children first, then parent)
+                format: date-time
+                type: string
               completed:
                 description: List of steps that have completed successfully
                 items:
@@ -277,12 +280,13 @@ spec:
                   - Running: Story is actively executing steps
                   - Succeeded: All steps completed successfully
                   - Failed: A step failed and the story cannot continue
-                  - Canceled: Execution was canceled by user or system
+                  - Finished: Execution was stopped/canceled by user or system (non-failure termination)
                 enum:
                 - Pending
                 - Running
                 - Succeeded
                 - Failed
+                - Finished
                 - Canceled
                 - Compensated
                 - Paused
@@ -310,6 +314,35 @@ spec:
                   description: StepState holds the detailed status of a single step
                     within a StoryRun.
                   properties:
+                    loop:
+                      description: |-
+                        Loop holds fan-out progress for loop primitives so reconciles can resume
+                        safely without duplicating iterations.
+                      properties:
+                        batchSize:
+                          description: BatchSize caps how many iterations may be launched
+                            per batch.
+                          type: integer
+                        completed:
+                          description: Completed counts how many launched StepRuns
+                            have succeeded.
+                          type: integer
+                        created:
+                          description: Created counts how many StepRuns have been
+                            launched.
+                          type: integer
+                        maxConcurrency:
+                          description: MaxConcurrency caps in-flight StepRuns for
+                            the loop.
+                          type: integer
+                        nextIndex:
+                          description: NextIndex points to the next iteration index
+                            to materialize.
+                          type: integer
+                        total:
+                          description: Total is the resolved number of loop iterations.
+                          type: integer
+                      type: object
                     message:
                       description: Message provides a human-readable summary of the
                         step's status.
@@ -321,6 +354,7 @@ spec:
                       - Running
                       - Succeeded
                       - Failed
+                      - Finished
                       - Canceled
                       - Compensated
                       - Paused
@@ -353,7 +387,32 @@ spec:
                 description: Step execution summary for quick overview
                 format: int32
                 type: integer
+              triggerTokens:
+                description: |-
+                  TriggerTokens tracks which parent resources have counted this StoryRun.
+                  Used for idempotent trigger counting by Story/Impulse controllers.
+                  Managed by the StoryRun controller to avoid annotation churn from multiple writers.
+                  Possible tokens:
+                    - "story": counted by parent Story's trigger count
+                    - "impulse": counted by parent Impulse's trigger count
+                    - "impulse-success": counted by parent Impulse's success count
+                    - "impulse-failed": counted by parent Impulse's failure count
+                items:
+                  type: string
+                type: array
             type: object
+            x-kubernetes-validations:
+            - message: status.conditions must include Ready when conditions are set
+              rule: '!has(self.conditions) || self.conditions.exists(c, c.type ==
+                ''Ready'')'
+            - message: status.conditions entries must set lastTransitionTime
+              rule: '!has(self.conditions) || self.conditions.all(c, has(c.lastTransitionTime))'
+            - message: status.conditions reason field must be <= 64 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.reason)
+                || size(c.reason) <= 64)'
+            - message: status.conditions message field must be <= 2048 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.message)
+                || size(c.message) <= 2048)'
         type: object
     served: true
     storage: true

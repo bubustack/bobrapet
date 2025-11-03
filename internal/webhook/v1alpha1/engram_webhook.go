@@ -32,9 +32,10 @@ import (
 	"github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/pkg/conditions"
+	"github.com/bubustack/bobrapet/pkg/validation"
 )
 
-// nolint:unused
 // log is for logging in this package.
 var engramlog = logf.Log.WithName("engram-resource")
 
@@ -44,6 +45,17 @@ type EngramWebhook struct {
 }
 
 // SetupWebhookWithManager registers the webhook for Engram in the manager.
+//
+// Behavior:
+//   - Stores the manager's client for template lookups during validation.
+//   - Creates both defaulter and validator webhooks for Engram resources.
+//
+// Arguments:
+//   - mgr ctrl.Manager: the controller-runtime manager.
+//
+// Returns:
+//   - nil on success.
+//   - Error if webhook registration fails.
 func (wh *EngramWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	wh.Client = mgr.GetClient()
 
@@ -64,21 +76,26 @@ func (wh *EngramWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as it is used only for temporary operations and does not need to be deeply copied.
 type EngramCustomDefaulter struct {
-	// TODO(user): Add more fields as needed for defaulting
+	// No fields needed; Engram defaults are intentionally minimal.
 }
 
 var _ webhook.CustomDefaulter = &EngramCustomDefaulter{}
 
-// Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Engram.
+// Default implements webhook.CustomDefaulter for Engram resources.
+//
+// Behavior:
+//   - Currently a no-op; Engram defaults are intentionally minimal.
+//   - Controller handles defaulting at reconcile time.
+//
+// Arguments:
+//   - ctx context.Context: unused but required by interface.
+//   - obj runtime.Object: expected to be *bubushv1alpha1.Engram.
+//
+// Returns:
+//   - nil on success.
+//   - Error if obj is not an Engram.
 func (d *EngramCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
-	engram, ok := obj.(*bubushv1alpha1.Engram)
-
-	if !ok {
-		return fmt.Errorf("expected an Engram object but got %T", obj)
-	}
-	engramlog.Info("Defaulting for Engram", "name", engram.GetName())
-
-	return nil
+	return DefaultResource[*bubushv1alpha1.Engram](obj, "Engram", engramlog, nil)
 }
 
 // NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
@@ -97,21 +114,39 @@ type EngramCustomValidator struct {
 
 var _ webhook.CustomValidator = &EngramCustomValidator{}
 
-// ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Engram.
+// ValidateCreate implements webhook.CustomValidator for Engram creation.
+//
+// Behavior:
+//   - Type-asserts obj to Engram and validates spec.
+//   - Validates templateRef.name is set and template exists.
+//   - Validates with block is a JSON object and within size limits.
+//
+// Arguments:
+//   - ctx context.Context: for template lookup.
+//   - obj runtime.Object: expected to be *bubushv1alpha1.Engram.
+//
+// Returns:
+//   - nil, nil if validation passes.
+//   - nil, error if type assertion fails or validation errors exist.
 func (v *EngramCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	engram, ok := obj.(*bubushv1alpha1.Engram)
-	if !ok {
-		return nil, fmt.Errorf("expected a Engram object but got %T", obj)
-	}
-	engramlog.Info("Validation for Engram upon creation", "name", engram.GetName())
-
-	if err := v.validateEngram(ctx, engram); err != nil {
-		return nil, err
-	}
-	return nil, nil
+	return ValidateCreateResource[*bubushv1alpha1.Engram](ctx, obj, "Engram", engramlog, v.validateEngram)
 }
 
-// ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Engram.
+// ValidateUpdate implements webhook.CustomValidator for Engram updates.
+//
+// Behavior:
+//   - Type-asserts newObj to Engram and validates spec.
+//   - Validates templateRef.name is set and template exists.
+//   - Validates with block is a JSON object and within size limits.
+//
+// Arguments:
+//   - ctx context.Context: for template lookup.
+//   - oldObj runtime.Object: previous Engram state.
+//   - newObj runtime.Object: proposed Engram state.
+//
+// Returns:
+//   - nil, nil if validation passes.
+//   - nil, error if type assertion fails or validation errors exist.
 func (v *EngramCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	engram, ok := newObj.(*bubushv1alpha1.Engram)
 	if !ok {
@@ -125,34 +160,83 @@ func (v *EngramCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newO
 	return nil, nil
 }
 
-// ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Engram.
+// ValidateDelete implements webhook.CustomValidator for Engram deletion.
+//
+// Behavior:
+//   - Always allows deletion (no-op validation).
+//   - Exists as scaffold placeholder; delete verb not enabled in annotation.
+//
+// Arguments:
+//   - ctx context.Context: unused.
+//   - obj runtime.Object: expected to be *bubushv1alpha1.Engram.
+//
+// Returns:
+//   - nil, nil (deletion always allowed).
 func (v *EngramCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	engram, ok := obj.(*bubushv1alpha1.Engram)
-	if !ok {
-		return nil, fmt.Errorf("expected a Engram object but got %T", obj)
-	}
-	engramlog.Info("Validation for Engram upon deletion", "name", engram.GetName())
-
-	return nil, nil
+	return ValidateDeleteResource[*bubushv1alpha1.Engram](obj, "Engram", engramlog, nil)
 }
 
 // validateEngram performs basic invariants validation for Engram specs.
-// - templateRef.name must be set (enforced by CRD; double-check presence)
-// - if With is present, it must be a JSON object (not array/primitive)
+//
+// Behavior:
+//   - Skips validation if Engram is being deleted (allows finalizer removal).
+//   - Validates templateRef.name is set.
+//   - Validates referenced EngramTemplate exists.
+//   - Validates with block is a JSON object and within size limits.
+//   - Validates with block against template's configSchema if defined.
+//   - Aggregates multiple validation errors for comprehensive feedback.
+//
+// Arguments:
+//   - ctx context.Context: for template lookup.
+//   - engram *bubushv1alpha1.Engram: the Engram to validate.
+//
+// Returns:
+//   - nil if all validations pass.
+//   - Aggregated field.ErrorList containing all validation failures.
 func (v *EngramCustomValidator) validateEngram(ctx context.Context, engram *bubushv1alpha1.Engram) error {
+	if engram.GetDeletionTimestamp() != nil {
+		// Allow finalizer removals even if the referenced template has been deleted.
+		// The reconciler will handle cleanup without needing template validation.
+		return nil
+	}
+
+	agg := validation.NewAggregator()
+
 	if err := requireTemplateRef(engram); err != nil {
-		return err
+		agg.AddFieldError("spec.templateRef.name", conditions.ReasonTemplateNotFound, err.Error())
 	}
-	template, err := fetchEngramTemplate(ctx, v.Client, engram.Spec.TemplateRef.Name)
-	if err != nil {
-		return err
+
+	// Only proceed with template lookup if templateRef is valid
+	var template *v1alpha1.EngramTemplate
+	if engram.Spec.TemplateRef.Name != "" {
+		var err error
+		template, err = fetchEngramTemplate(ctx, v.Client, engram.Spec.TemplateRef.Name)
+		if err != nil {
+			agg.AddFieldError("spec.templateRef.name", conditions.ReasonTemplateNotFound, err.Error())
+		}
 	}
-	if err := validateWithBlock(engram, v.Config, template); err != nil {
-		return err
+
+	// Validate with block if template was found
+	if template != nil {
+		if err := validateWithBlock(engram, v.Config, template); err != nil {
+			agg.AddFieldError("spec.with", conditions.ReasonValidationFailed, err.Error())
+		}
+	}
+
+	if agg.HasErrors() {
+		return agg.ToFieldErrors().ToAggregate()
 	}
 	return nil
 }
 
+// requireTemplateRef ensures the Engram has a non-empty templateRef.name.
+//
+// Arguments:
+//   - engram *bubushv1alpha1.Engram: the Engram to validate.
+//
+// Returns:
+//   - nil if templateRef.name is set.
+//   - Error if templateRef.name is empty.
 func requireTemplateRef(engram *bubushv1alpha1.Engram) error {
 	if engram.Spec.TemplateRef.Name == "" {
 		return fmt.Errorf("spec.templateRef.name is required")
@@ -160,6 +244,20 @@ func requireTemplateRef(engram *bubushv1alpha1.Engram) error {
 	return nil
 }
 
+// fetchEngramTemplate retrieves the cluster-scoped EngramTemplate by name.
+//
+// Behavior:
+//   - Fetches the EngramTemplate from the API server.
+//   - Returns user-friendly error if template does not exist.
+//
+// Arguments:
+//   - ctx context.Context: for API call.
+//   - c client.Client: Kubernetes client.
+//   - name string: EngramTemplate name.
+//
+// Returns:
+//   - *v1alpha1.EngramTemplate if found.
+//   - Error if not found or API call fails.
 func fetchEngramTemplate(ctx context.Context, c client.Client, name string) (*v1alpha1.EngramTemplate, error) {
 	var template v1alpha1.EngramTemplate
 	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ""}, &template); err != nil {
@@ -171,16 +269,32 @@ func fetchEngramTemplate(ctx context.Context, c client.Client, name string) (*v1
 	return &template, nil
 }
 
+// validateWithBlock validates the Engram's spec.with block.
+//
+// Behavior:
+//   - Skips validation if with block is empty.
+//   - Ensures with block is a JSON object (not array or primitive).
+//   - Ensures with block doesn't exceed configured max inline size.
+//   - Validates against template's configSchema if defined.
+//
+// Arguments:
+//   - engram *bubushv1alpha1.Engram: the Engram to validate.
+//   - cfg *config.ControllerConfig: for max inline size; may be nil.
+//   - template *v1alpha1.EngramTemplate: for configSchema validation.
+//
+// Returns:
+//   - nil if with block is valid or absent.
+//   - Error describing the validation failure.
 func validateWithBlock(engram *bubushv1alpha1.Engram, cfg *config.ControllerConfig, template *v1alpha1.EngramTemplate) error {
 	if engram.Spec.With == nil || len(engram.Spec.With.Raw) == 0 {
 		return nil
 	}
-	b := trimLeadingSpace(engram.Spec.With.Raw)
-	if err := ensureJSONObject("spec.with", b); err != nil {
+	b := TrimLeadingSpace(engram.Spec.With.Raw)
+	if err := EnsureJSONObject("spec.with", b); err != nil {
 		return err
 	}
-	maxBytes := pickMaxInline(cfg)
-	if err := enforceMaxBytes("spec.with", engram.Spec.With.Raw, maxBytes); err != nil {
+	maxBytes := PickMaxInlineBytes(cfg)
+	if err := EnforceMaxBytes("spec.with", engram.Spec.With.Raw, maxBytes, "Provide large payloads via object storage and references instead of inlining"); err != nil {
 		return err
 	}
 	if template.Spec.ConfigSchema != nil && len(template.Spec.ConfigSchema.Raw) > 0 {

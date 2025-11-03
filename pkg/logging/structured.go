@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+	transportv1alpha1 "github.com/bubustack/bobrapet/api/transport/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 )
 
@@ -94,6 +95,17 @@ func (cl *ControllerLogger) WithImpulse(impulse *bubushv1alpha1.Impulse) *Contro
 	return &ControllerLogger{logger: logger}
 }
 
+// WithTransport returns a logger with Transport context
+func (cl *ControllerLogger) WithTransport(transport *transportv1alpha1.Transport) *ControllerLogger {
+	logger := cl.logger.WithValues(
+		"transport", transport.Name,
+		"namespace", transport.Namespace,
+		"provider", transport.Spec.Provider,
+		"driver", transport.Spec.Driver,
+	)
+	return &ControllerLogger{logger: logger}
+}
+
 // WithDuration adds duration to the logger context
 func (cl *ControllerLogger) WithDuration(duration time.Duration) *ControllerLogger {
 	logger := cl.logger.WithValues("duration", duration.String())
@@ -115,6 +127,14 @@ func (cl *ControllerLogger) WithValues(keysAndValues ...any) *ControllerLogger {
 	return &ControllerLogger{logger: logger}
 }
 
+// Logr exposes the underlying logr.Logger so shared helpers can log consistently.
+func (cl *ControllerLogger) Logr() logr.Logger {
+	if cl == nil {
+		return logr.Logger{}
+	}
+	return cl.logger
+}
+
 // Info logs an info message
 func (cl *ControllerLogger) Info(msg string, keysAndValues ...any) {
 	cl.logger.Info(msg, keysAndValues...)
@@ -127,6 +147,9 @@ func (cl *ControllerLogger) Error(err error, msg string, keysAndValues ...any) {
 
 // V returns a logger for a specific verbosity level
 func (cl *ControllerLogger) V(level int) logr.Logger {
+	if level > 0 && !VerboseLoggingEnabled() {
+		return mutedLogger()
+	}
 	return cl.logger.V(level)
 }
 

@@ -18,6 +18,8 @@ package metrics
 
 import (
 	"fmt"
+	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -29,7 +31,15 @@ const (
 	resultError   = "error"
 )
 
+// StoryRunWindow labels identify which cleanup window a gauge value tracks.
+const (
+	WindowChildTTL  = "child_ttl"
+	WindowRetention = "retention"
+)
+
 var (
+	metricsEnabled atomic.Bool
+
 	// StoryRun metrics
 	StoryRunsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -64,6 +74,38 @@ var (
 		[]string{"namespace", "story"},
 	)
 
+	StoryRunWindowSeconds = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "bobrapet_storyrun_window_seconds",
+			Help: "Configured child TTL and retention windows applied to StoryRuns",
+		},
+		[]string{"namespace", "story", "window"},
+	)
+
+	StoryRunDependentsDeletedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_storyrun_dependents_deleted_total",
+			Help: "Total number of StoryRun dependents deleted during cleanup, partitioned by resource type.",
+		},
+		[]string{"namespace", "storyrun", "resource"},
+	)
+
+	StoryRunRBACOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_storyrun_rbac_operations_total",
+			Help: "Number of StoryRun RBAC reconciliation operations by resource and controller result",
+		},
+		[]string{"resource", "operation"},
+	)
+
+	StoryDirtyMarksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_story_dirty_marks_total",
+			Help: "Total number of dirty flags set for Stories",
+		},
+		[]string{"namespace", "story", "reason"},
+	)
+
 	// StepRun metrics
 	StepRunsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -88,6 +130,55 @@ var (
 			Help: "Total number of StepRun retries",
 		},
 		[]string{"namespace", "engram", "reason"},
+	)
+
+	StepRunChildrenCreatedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_child_stepruns_created_total",
+			Help: "Total number of child StepRuns created per StoryRun/Engram.",
+		},
+		[]string{"namespace", "storyrun", "engram"},
+	)
+
+	DownstreamTargetMutationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_downstream_target_mutations_total",
+			Help: "Total number of downstream target mutations applied to StepRuns",
+		},
+		[]string{"namespace", "step", "action", "hashes"},
+	)
+	TransportBindingReadFallbacksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_transport_binding_read_fallbacks_total",
+			Help: "Total number of binding env read fallbacks triggered while waiting for " +
+				"API readers to observe TransportBindings",
+		},
+		[]string{"namespace", "reader"},
+	)
+
+	ResolverStageTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_resolver_stage_total",
+			Help: "Total number of resolver chain stages executed, labeled by layer, stage, mode, and outcome",
+		},
+		[]string{"layer", "stage", "mode", "outcome"},
+	)
+
+	ResolverStageDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "bobrapet_resolver_stage_duration_seconds",
+			Help:    "Duration of resolver chain stages",
+			Buckets: []float64{0.001, 0.01, 0.05, 0.1, 0.5, 1, 2},
+		},
+		[]string{"layer", "stage"},
+	)
+
+	ResolverServiceAccountFallbacksTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_resolver_service_account_fallback_total",
+			Help: "Number of times the config resolver defaulted the StepRun ServiceAccount to the per-StoryRun runner",
+		},
+		[]string{"storyrun"},
 	)
 
 	// Controller metrics
@@ -245,17 +336,103 @@ var (
 		},
 		[]string{"storyrun", "step", "reason"},
 	)
+
+	TransportBindingOperationsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_transport_binding_operations_total",
+			Help: "Total number of TransportBinding operations performed by a controller",
+		},
+		[]string{"controller", "result", "mutated", "binding_alias"},
+	)
+
+	TransportBindingOperationDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "bobrapet_transport_binding_operation_duration_seconds",
+			Help:    "Duration of TransportBinding CreateOrUpdate calls",
+			Buckets: []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5},
+		},
+		[]string{"controller", "mutated", "binding_alias"},
+	)
+
+	TransportBindingAnnotationSanitizeFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_transport_binding_annotation_sanitize_failures_total",
+			Help: "Counts sanitized binding annotation failures keyed by namespace, StoryRun, and Step.",
+		},
+		[]string{"namespace", "story_run", "step"},
+	)
+
+	ControllerMapperFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_controller_mapper_failures_total",
+			Help: "Total number of controller watch mapper failures",
+		},
+		[]string{"controller", "mapper"},
+	)
+
+	ControllerIndexFallbacks = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_controller_index_fallback_total",
+			Help: "Total number of times controllers had to fall back to full namespace scans " +
+				"because a field index lookup failed",
+		},
+		[]string{"controller", "index"},
+	)
+
+	TriggerBackfillLoopsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_trigger_backfill_loops_total",
+			Help: "Number of bounded trigger backfill iterations executed",
+		},
+		[]string{"controller", "namespace", "resource", "pending"},
+	)
+
+	TriggerBackfillMarkedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_trigger_backfill_marked_total",
+			Help: "Total number of child resources annotated during trigger backfill",
+		},
+		[]string{"controller", "namespace", "resource"},
+	)
+
+	DAGIterationSteps = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "bobrapet_dag_iteration_steps",
+			Help:    "Ready/skipped step counts per DAG iteration",
+			Buckets: []float64{0, 1, 2, 5, 10, 20, 40},
+		},
+		[]string{"controller", "type"},
+	)
+
+	SubStoryRefreshTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "bobrapet_substory_refresh_total",
+			Help: "Total number of DAG sub-story refreshes triggered by synchronous executeStory completions",
+		},
+		[]string{"controller"},
+	)
 )
 
 func init() {
+	metricsEnabled.Store(true)
 	metrics.Registry.MustRegister(
 		StoryRunsTotal,
 		StoryRunDuration,
 		StoryRunStepsActive,
 		StoryRunStepsCompleted,
+		StoryRunWindowSeconds,
+		StoryRunDependentsDeletedTotal,
+		StoryRunRBACOperationsTotal,
+		StoryDirtyMarksTotal,
 		StepRunsTotal,
 		StepRunDuration,
 		StepRunRetries,
+		StepRunChildrenCreatedTotal,
+		DownstreamTargetMutationsTotal,
+		TransportBindingReadFallbacksTotal,
+		ResolverStageTotal,
+		ResolverStageDuration,
+		ResolverServiceAccountFallbacksTotal,
 		ControllerReconcileTotal,
 		ControllerReconcileDuration,
 		ControllerReconcileErrors,
@@ -275,25 +452,209 @@ func init() {
 		GRPCMessagesReceived,
 		GRPCMessagesSent,
 		GRPCMessagesDropped,
+		TransportBindingOperationsTotal,
+		TransportBindingOperationDuration,
+		TransportBindingAnnotationSanitizeFailuresTotal,
+		ControllerMapperFailures,
+		ControllerIndexFallbacks,
+		TriggerBackfillLoopsTotal,
+		TriggerBackfillMarkedTotal,
+		DAGIterationSteps,
+		SubStoryRefreshTotal,
 	)
+}
+
+// Enable toggles emission of controller metrics at runtime.
+func Enable(enabled bool) {
+	metricsEnabled.Store(enabled)
+}
+
+func shouldRecord() bool {
+	return metricsEnabled.Load()
 }
 
 // Helper functions to record metrics with consistent labels
 
 // RecordStoryRunMetrics records metrics for StoryRun operations
 func RecordStoryRunMetrics(namespace, story, phase string, duration time.Duration) {
+	if !shouldRecord() {
+		return
+	}
 	StoryRunsTotal.WithLabelValues(namespace, story, phase).Inc()
 	if duration > 0 {
 		StoryRunDuration.WithLabelValues(namespace, story, phase).Observe(duration.Seconds())
 	}
 }
 
+// RecordStoryRunWindowSeconds captures the configured TTL/retention windows for StoryRuns.
+func RecordStoryRunWindowSeconds(namespace, story, window string, seconds float64) {
+	if !shouldRecord() {
+		return
+	}
+	if seconds < 0 {
+		seconds = 0
+	}
+	StoryRunWindowSeconds.WithLabelValues(namespace, story, window).Set(seconds)
+}
+
+// RecordStoryDirtyMark increments the metric tracking why a Story was marked dirty.
+func RecordStoryDirtyMark(namespace, story, reason string) {
+	if !shouldRecord() {
+		return
+	}
+	StoryDirtyMarksTotal.WithLabelValues(namespace, story, reason).Inc()
+}
+
+// RecordStoryRunDependentCleanup counts StoryRun dependent deletions keyed by resource type.
+func RecordStoryRunDependentCleanup(namespace, storyRun, resource string, count int) {
+	if !shouldRecord() || count <= 0 {
+		return
+	}
+	if namespace == "" {
+		namespace = UnknownLabelValue
+	}
+	if storyRun == "" {
+		storyRun = UnknownLabelValue
+	}
+	if resource == "" {
+		resource = UnknownResourceValue
+	}
+	StoryRunDependentsDeletedTotal.WithLabelValues(namespace, storyRun, resource).Add(float64(count))
+}
+
+// RecordStoryRunRBACOperation counts RBAC reconciliation changes keyed by operation result.
+func RecordStoryRunRBACOperation(resource, operation string) {
+	if !shouldRecord() {
+		return
+	}
+	if operation == "" {
+		operation = "unchanged"
+	}
+	StoryRunRBACOperationsTotal.WithLabelValues(resource, operation).Inc()
+}
+
 // RecordStepRunMetrics records metrics for StepRun operations
 func RecordStepRunMetrics(namespace, engram, phase string, duration time.Duration) {
+	if !shouldRecord() {
+		return
+	}
 	StepRunsTotal.WithLabelValues(namespace, engram, phase).Inc()
 	if duration > 0 {
 		StepRunDuration.WithLabelValues(namespace, engram, phase).Observe(duration.Seconds())
 	}
+}
+
+// RecordDownstreamTargetMutation counts downstream target updates keyed by action and hash summary.
+func RecordDownstreamTargetMutation(namespace, step, action, hashSummary string) {
+	if !shouldRecord() {
+		return
+	}
+	if action == "" {
+		action = UnknownResourceValue
+	}
+	if hashSummary == "" {
+		hashSummary = EmptyHashSummary
+	}
+	DownstreamTargetMutationsTotal.WithLabelValues(namespace, step, action, hashSummary).Inc()
+}
+
+// RecordChildStepRunCreated increments the counter tracking newly created child StepRuns.
+func RecordChildStepRunCreated(namespace, storyRun, engram string) {
+	if !shouldRecord() {
+		return
+	}
+	if namespace == "" {
+		namespace = UnknownLabelValue
+	}
+	if storyRun == "" {
+		storyRun = UnknownLabelValue
+	}
+	if engram == "" {
+		engram = UnknownLabelValue
+	}
+	StepRunChildrenCreatedTotal.WithLabelValues(namespace, storyRun, engram).Inc()
+}
+
+// RecordTransportBindingReadFallback counts binding env read fallbacks keyed by namespace and reader type.
+func RecordTransportBindingReadFallback(namespace, reader string) {
+	if !shouldRecord() {
+		return
+	}
+	if namespace == "" {
+		namespace = UnknownLabelValue
+	}
+	if reader == "" {
+		reader = "cached_client"
+	}
+	TransportBindingReadFallbacksTotal.WithLabelValues(namespace, reader).Inc()
+}
+
+// RecordResolverStage tracks resolver-chain stage execution telemetry.
+func RecordResolverStage(layer, stage, mode, outcome string, duration time.Duration) {
+	if !shouldRecord() {
+		return
+	}
+	if layer == "" {
+		layer = UnknownResourceValue
+	}
+	if stage == "" {
+		stage = UnknownResourceValue
+	}
+	if mode == "" {
+		mode = UnknownResourceValue
+	}
+	if outcome == "" {
+		outcome = resultSuccess
+	}
+	ResolverStageTotal.WithLabelValues(layer, stage, mode, outcome).Inc()
+	if duration > 0 {
+		ResolverStageDuration.WithLabelValues(layer, stage).Observe(duration.Seconds())
+	}
+}
+
+// RecordResolverServiceAccountFallback counts resolver runs that default the ServiceAccount name.
+func RecordResolverServiceAccountFallback(storyRun string) {
+	if !shouldRecord() {
+		return
+	}
+	if storyRun == "" {
+		storyRun = UnknownLabelValue
+	}
+	ResolverServiceAccountFallbacksTotal.WithLabelValues(storyRun).Inc()
+}
+
+// RecordTriggerBackfill captures bounded trigger backfill activity for controllers such as
+// Engram and Story.
+func RecordTriggerBackfill(controller, namespace, resource string, marked int, pending bool) {
+	if !shouldRecord() {
+		return
+	}
+	pendingLabel := strconv.FormatBool(pending)
+	TriggerBackfillLoopsTotal.WithLabelValues(controller, namespace, resource, pendingLabel).Inc()
+	if marked > 0 {
+		TriggerBackfillMarkedTotal.WithLabelValues(controller, namespace, resource).Add(float64(marked))
+	}
+}
+
+// RecordDAGIteration captures ready/skipped counts for DAG loop iterations.
+func RecordDAGIteration(controller string, readyCount, skippedCount int) {
+	if !shouldRecord() {
+		return
+	}
+	if readyCount >= 0 {
+		DAGIterationSteps.WithLabelValues(controller, "ready").Observe(float64(readyCount))
+	}
+	if skippedCount >= 0 {
+		DAGIterationSteps.WithLabelValues(controller, "skipped").Observe(float64(skippedCount))
+	}
+}
+
+// RecordSubStoryRefresh increments the counter tracking DAG sub-story refresh passes.
+func RecordSubStoryRefresh(controller string) {
+	if !shouldRecord() {
+		return
+	}
+	SubStoryRefreshTotal.WithLabelValues(controller).Inc()
 }
 
 // RecordStepRunDuration records duration metrics for StepRun operations (alias for consistency)
@@ -304,6 +665,9 @@ func RecordStepRunDuration(namespace, storyRunRef, stepName, phase string, durat
 
 // RecordControllerReconcile records controller reconcile metrics
 func RecordControllerReconcile(controller string, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
 	result := resultSuccess
 	if err != nil {
 		result = resultError
@@ -316,6 +680,9 @@ func RecordControllerReconcile(controller string, duration time.Duration, err er
 
 // RecordCELEvaluation records CEL evaluation metrics
 func RecordCELEvaluation(expressionType string, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
 	result := resultSuccess
 	if err != nil {
 		result = resultError
@@ -327,22 +694,87 @@ func RecordCELEvaluation(expressionType string, duration time.Duration, err erro
 
 // RecordCELCacheHit records CEL cache hit
 func RecordCELCacheHit(cacheType string) {
+	if !shouldRecord() {
+		return
+	}
 	CELCacheHits.WithLabelValues(cacheType).Inc()
 }
 
 // RecordResourceCleanup records resource cleanup metrics
 func RecordResourceCleanup(resourceType string, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
 	result := resultSuccess
 	if err != nil {
 		result = resultError
 	}
 
 	ResourceCleanupTotal.WithLabelValues(resourceType, result).Inc()
-	ResourceCleanupDuration.WithLabelValues(resourceType).Observe(duration.Seconds())
+	if duration > 0 {
+		ResourceCleanupDuration.WithLabelValues(resourceType).Observe(duration.Seconds())
+	}
+}
+
+// RecordTransportBindingOperation records metrics for TransportBinding mutations.
+func RecordTransportBindingOperation(controller, bindingAlias string, mutated bool, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
+	if bindingAlias == "" {
+		bindingAlias = UnknownLabelValue
+	}
+	result := resultSuccess
+	if err != nil {
+		result = resultError
+	}
+
+	mutatedLabel := strconv.FormatBool(mutated)
+	TransportBindingOperationsTotal.WithLabelValues(controller, result, mutatedLabel, bindingAlias).Inc()
+	if duration > 0 {
+		TransportBindingOperationDuration.WithLabelValues(controller, mutatedLabel, bindingAlias).Observe(duration.Seconds())
+	}
+}
+
+// RecordTransportBindingAnnotationSanitizeFailure increments the counter when
+// Engram binding annotations fail sanitization.
+func RecordTransportBindingAnnotationSanitizeFailure(namespace, storyRun, step string) {
+	if !shouldRecord() {
+		return
+	}
+	if namespace == "" {
+		namespace = UnknownLabelValue
+	}
+	if storyRun == "" {
+		storyRun = UnknownLabelValue
+	}
+	if step == "" {
+		step = UnknownLabelValue
+	}
+	TransportBindingAnnotationSanitizeFailuresTotal.WithLabelValues(namespace, storyRun, step).Inc()
+}
+
+// RecordControllerMapperFailure records mapper failures for watch handlers.
+func RecordControllerMapperFailure(controller, mapper string) {
+	if !shouldRecord() {
+		return
+	}
+	ControllerMapperFailures.WithLabelValues(controller, mapper).Inc()
+}
+
+// RecordControllerIndexFallback records when a controller cannot use a configured field index.
+func RecordControllerIndexFallback(controller, index string) {
+	if !shouldRecord() {
+		return
+	}
+	ControllerIndexFallbacks.WithLabelValues(controller, index).Inc()
 }
 
 // RecordJobExecution records Job execution metrics
 func RecordJobExecution(namespace, image, result string, duration time.Duration) {
+	if !shouldRecord() {
+		return
+	}
 	JobExecutionTotal.WithLabelValues(namespace, image, result).Inc()
 	if duration > 0 {
 		JobExecutionDuration.WithLabelValues(namespace, image).Observe(duration.Seconds())
@@ -376,7 +808,7 @@ func classifyError(err error) string {
 	case contains(errStr, "validation"):
 		return "validation"
 	default:
-		return "unknown"
+		return UnknownResourceValue
 	}
 }
 
@@ -397,6 +829,9 @@ func indexOf(s, substr string) int {
 
 // RecordQuotaViolation records quota violation metrics
 func RecordQuotaViolation(namespace, resourceType, violationType string) {
+	if !shouldRecord() {
+		return
+	}
 	QuotaViolationTotal.WithLabelValues(namespace, resourceType, violationType).Inc()
 }
 
@@ -412,6 +847,9 @@ func UpdateResourceQuotaLimit(namespace, resourceType string, limit float64) {
 
 // RecordStorageOperation records storage provider operations (placeholder for storage package)
 func RecordStorageOperation(provider, operation string, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
 	// This would be implemented properly in the storage package
 	// For now, just record as a generic operation
 	result := resultSuccess
@@ -426,6 +864,9 @@ func RecordStorageOperation(provider, operation string, duration time.Duration, 
 
 // RecordArtifactOperation records artifact management operations
 func RecordArtifactOperation(operation string, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
 	result := resultSuccess
 	if err != nil {
 		result = resultError
@@ -437,6 +878,9 @@ func RecordArtifactOperation(operation string, duration time.Duration, err error
 
 // RecordCleanupOperation records cleanup operations
 func RecordCleanupOperation(resourceType, namespace string, deletedCount int, duration time.Duration, err error) {
+	if !shouldRecord() {
+		return
+	}
 	result := resultSuccess
 	if err != nil {
 		result = resultError
@@ -455,25 +899,40 @@ func RecordCleanupOperation(resourceType, namespace string, deletedCount int, du
 
 // RecordGRPCStreamRequest records a streaming RPC request with its result code
 func RecordGRPCStreamRequest(method, code string) {
+	if !shouldRecord() {
+		return
+	}
 	GRPCStreamRequests.WithLabelValues(method, code).Inc()
 }
 
 // RecordGRPCStreamDuration records the duration of a streaming RPC
 func RecordGRPCStreamDuration(method string, durationSeconds float64) {
+	if !shouldRecord() {
+		return
+	}
 	GRPCStreamDuration.WithLabelValues(method).Observe(durationSeconds)
 }
 
 // RecordGRPCMessageReceived records a message received on a stream
 func RecordGRPCMessageReceived(storyRun, step string) {
+	if !shouldRecord() {
+		return
+	}
 	GRPCMessagesReceived.WithLabelValues(storyRun, step).Inc()
 }
 
 // RecordGRPCMessageSent records a message sent on a stream
 func RecordGRPCMessageSent(storyRun, step string) {
+	if !shouldRecord() {
+		return
+	}
 	GRPCMessagesSent.WithLabelValues(storyRun, step).Inc()
 }
 
 // RecordGRPCMessageDropped records a dropped message with a reason
 func RecordGRPCMessageDropped(storyRun, step, reason string) {
+	if !shouldRecord() {
+		return
+	}
 	GRPCMessagesDropped.WithLabelValues(storyRun, step, reason).Inc()
 }

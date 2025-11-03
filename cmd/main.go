@@ -17,14 +17,18 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -35,19 +39,21 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	config "github.com/bubustack/bobrapet/internal/config"
-	"github.com/bubustack/bobrapet/internal/controller"
-	setup "github.com/bubustack/bobrapet/internal/setup"
-	"github.com/bubustack/bobrapet/pkg/cel"
-	"github.com/bubustack/bobrapet/pkg/logging"
-
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+	transportv1alpha1 "github.com/bubustack/bobrapet/api/transport/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	config "github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/internal/controller"
 	catalogcontroller "github.com/bubustack/bobrapet/internal/controller/catalog"
 	runscontroller "github.com/bubustack/bobrapet/internal/controller/runs"
+	setup "github.com/bubustack/bobrapet/internal/setup"
 	webhookrunsv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/runs/v1alpha1"
+	webhooktransportv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/transport/v1alpha1"
 	webhookv1alpha1 "github.com/bubustack/bobrapet/internal/webhook/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/cel"
+	"github.com/bubustack/bobrapet/pkg/logging"
+	bootstrapruntime "github.com/bubustack/core/runtime/bootstrap"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -62,6 +68,7 @@ func init() {
 	utilruntime.Must(bubushv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(runsv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(catalogv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(transportv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -75,6 +82,11 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var tlsOpts []func(*tls.Config)
+
+	// Operator configuration flags
+	var operatorConfigNamespace string
+	var operatorConfigName string
+
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -92,8 +104,15 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+
+	// Operator configuration flags (similar to kube-controller-manager --kubeconfig pattern)
+	flag.StringVar(&operatorConfigNamespace, "config-namespace", "bobrapet-system",
+		"The namespace where the operator configuration ConfigMap resides.")
+	flag.StringVar(&operatorConfigName, "config-name", "bobrapet-operator-config",
+		"The name of the operator configuration ConfigMap.")
+
 	opts := zap.Options{
-		Development: true,
+		Development: false,
 	}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -138,23 +157,50 @@ func main() {
 
 	// Index Fields for efficient lookups using manager lifecycle context
 	managerCtx := ctrl.SetupSignalHandler()
-	setup.SetupIndexers(managerCtx, mgr)
 
-	operatorConfigManager, controllerConfig, configResolver, celEvaluator := mustInitOperatorServices(mgr)
+	contractLogger := bootstrapruntime.NewContractLogger(setupLog.WithName("bootstrap"), "manager")
+
+	operatorConfigManager, controllerConfig, configResolver, celEvaluator, err := mustInitOperatorServices(
+		mgr,
+		managerCtx,
+		operatorConfigNamespace,
+		operatorConfigName,
+		contractLogger.WithComponent("operator-services"),
+	)
+	if err != nil {
+		setupLog.Error(err, "failed to initialize operator services")
+		os.Exit(1)
+	}
 
 	deps := config.ControllerDependencies{
 		Client:         mgr.GetClient(),
+		APIReader:      mgr.GetAPIReader(),
 		Scheme:         mgr.GetScheme(),
 		ConfigResolver: configResolver,
 		CELEvaluator:   *celEvaluator,
 	}
 
-	mustSetupControllers(mgr, deps, controllerConfig)
+	if err := mustSetupControllers(
+		managerCtx,
+		mgr,
+		deps,
+		controllerConfig,
+		contractLogger.WithComponent("controllers"),
+	); err != nil {
+		setupLog.Error(err, "failed to register controllers")
+		os.Exit(1)
+	}
 
-	setupWebhooksIfEnabled(mgr, operatorConfigManager)
+	if err := setupWebhooksIfEnabled(mgr, operatorConfigManager, contractLogger.WithComponent("webhooks")); err != nil {
+		setupLog.Error(err, "failed to register webhooks")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
-	mustAddHealthChecks(mgr)
+	if err := mustAddHealthChecks(mgr); err != nil {
+		setupLog.Error(err, "failed to register health checks")
+		os.Exit(1)
+	}
 
 	setupLog.Info("starting manager")
 	defer celEvaluator.Close()
@@ -164,9 +210,23 @@ func main() {
 	}
 }
 
+// configureHTTP2 appends a TLS config modifier to disable HTTP/2 when not explicitly enabled.
+//
+// Behavior:
+//   - When enableHTTP2 is false (the default), appends a TLS config function that
+//     forces HTTP/1.1 only by setting NextProtos to ["http/1.1"].
+//   - When enableHTTP2 is true, leaves tlsOpts unchanged, allowing HTTP/2.
+//
+// Arguments:
+//   - enableHTTP2 bool: flag from --enable-http2 command line argument.
+//   - tlsOpts *[]func(*tls.Config): slice of TLS config modifiers to append to.
+//
+// Side Effects:
+//   - Logs "disabling http/2" when the disableHTTP2 modifier is invoked.
+//
+// Notes:
+//   - HTTP/2 is disabled by default due to known vulnerabilities (CVE-2023-44487).
 func configureHTTP2(enableHTTP2 bool, tlsOpts *[]func(*tls.Config)) {
-	// if the enable-http2 flag is false (the default), http/2 should be disabled
-	// due to its vulnerabilities.
 	disableHTTP2 := func(c *tls.Config) {
 		setupLog.Info("disabling http/2")
 		c.NextProtos = []string{"http/1.1"}
@@ -176,6 +236,22 @@ func configureHTTP2(enableHTTP2 bool, tlsOpts *[]func(*tls.Config)) {
 	}
 }
 
+// buildWebhookServerOptions constructs webhook.Options for the controller-runtime webhook server.
+//
+// Behavior:
+//   - Always applies the provided TLS options to the webhook server.
+//   - When certPath is non-empty, configures the webhook server to watch for
+//     certificate files at the specified path, enabling automatic cert rotation.
+//
+// Arguments:
+//   - certPath string: directory containing the webhook TLS certificate and key.
+//     Empty string uses controller-runtime's default cert-manager integration.
+//   - certName string: filename of the TLS certificate (e.g., "tls.crt").
+//   - certKey string: filename of the TLS key (e.g., "tls.key").
+//   - tlsOpts []func(*tls.Config): TLS config modifiers (e.g., HTTP/2 disable).
+//
+// Returns:
+//   - webhook.Options configured for the operator's webhook server.
 func buildWebhookServerOptions(certPath, certName, certKey string, tlsOpts []func(*tls.Config)) webhook.Options {
 	opts := webhook.Options{TLSOpts: tlsOpts}
 	if len(certPath) > 0 {
@@ -188,6 +264,25 @@ func buildWebhookServerOptions(certPath, certName, certKey string, tlsOpts []fun
 	return opts
 }
 
+// buildMetricsServerOptions constructs metricsserver.Options for the controller-runtime metrics server.
+//
+// Behavior:
+//   - Configures the metrics server bind address and secure serving mode.
+//   - When secure is true, enables authentication and authorization via
+//     filters.WithAuthenticationAndAuthorization.
+//   - When certPath is non-empty, configures the metrics server to watch for
+//     certificate files at the specified path, enabling automatic cert rotation.
+//
+// Arguments:
+//   - metricsAddr string: address to bind the metrics endpoint (e.g., ":8443").
+//   - secure bool: whether to serve metrics over HTTPS with auth.
+//   - certPath string: directory containing the TLS certificate and key.
+//   - certName string: filename of the TLS certificate (e.g., "tls.crt").
+//   - certKey string: filename of the TLS key (e.g., "tls.key").
+//   - tlsOpts []func(*tls.Config): TLS config modifiers (e.g., HTTP/2 disable).
+//
+// Returns:
+//   - metricsserver.Options configured for the operator's metrics endpoint.
 func buildMetricsServerOptions(
 	metricsAddr string,
 	secure bool,
@@ -212,123 +307,368 @@ func buildMetricsServerOptions(
 	return opts
 }
 
+// mustInitOperatorServices wires the OperatorConfig manager/controller,
+// performs the initial ConfigMap load with a 15s timeout, and returns the
+// controller config, shared Resolver, and CEL evaluator used by the rest of
+// the operator (../bobrapet/cmd/main.go:239-299).
 func mustInitOperatorServices(
 	mgr ctrl.Manager,
-) (*config.OperatorConfigManager, *config.ControllerConfig, *config.Resolver, *cel.Evaluator) {
+	startupCtx context.Context,
+	configNamespace string,
+	configName string,
+	contract bootstrapruntime.ContractLogger,
+) (*config.OperatorConfigManager, *config.ControllerConfig, *config.Resolver, *cel.Evaluator, error) {
+	contract.Start("init")
 	operatorConfigManager := config.NewOperatorConfigManager(
 		mgr.GetClient(),
-		"bobrapet-system",
-		"bobrapet-operator-config",
+		configNamespace,
+		configName,
 	)
-	setupLog.Info("Operator configuration manager initialized")
-	if err := mgr.Add(operatorConfigManager); err != nil {
-		setupLog.Error(err, "unable to add operator config manager to manager")
-		os.Exit(1)
+	operatorConfigManager.SetAPIReader(mgr.GetAPIReader())
+
+	setupLog.Info("Operator configuration manager initialized",
+		"configNamespace", configNamespace,
+		"configName", configName)
+
+	// Setup the config manager as a reconciler (event-driven)
+	if err := operatorConfigManager.SetupWithManager(mgr); err != nil {
+		contract.Failure("register", fmt.Errorf("setup operator config manager controller: %w", err))
+		return nil, nil, nil, nil, fmt.Errorf("setup operator config manager controller: %w", err)
 	}
+	setupLog.Info("Operator config manager controller registered")
+
+	loadCtx, cancel := context.WithTimeout(startupCtx, 15*time.Second)
+	defer cancel()
+	loadStart := time.Now()
+	configSource := "defaults"
+	if err := operatorConfigManager.LoadInitial(loadCtx); err != nil {
+		if apierrors.IsNotFound(err) {
+			setupLog.Info("Operator config map not found; continuing with defaults",
+				"configNamespace", configNamespace,
+				"configName", configName,
+				"loadDuration", time.Since(loadStart))
+		} else {
+			setupLog.Error(err, "failed to load operator configuration during startup",
+				"configNamespace", configNamespace,
+				"configName", configName)
+			contract.Failure("load-config", err)
+			return nil, nil, nil, nil, fmt.Errorf("load operator configuration: %w", err)
+		}
+	} else {
+		configSource = "configmap"
+		setupLog.Info("Operator configuration loaded from ConfigMap",
+			"configNamespace", configNamespace,
+			"configName", configName,
+			"loadDuration", time.Since(loadStart))
+	}
+
 	controllerConfig := operatorConfigManager.GetControllerConfig()
-	setupLog.Info("Controller configuration loaded")
+	setupLog.Info("Controller configuration loaded", "source", configSource)
+	config.ApplyRuntimeToggles(controllerConfig)
+	setupLog.Info("Runtime toggles applied",
+		"source", configSource,
+		"telemetryEnabled", controllerConfig.TelemetryEnabled,
+		"tracePropagationEnabled", controllerConfig.TracePropagationEnabled,
+		"verboseLogging", controllerConfig.EnableVerboseLogging,
+		"stepOutputLogging", controllerConfig.EnableStepOutputLogging,
+		"metricsEnabled", controllerConfig.EnableMetrics,
+	)
 	configResolver := config.NewResolver(mgr.GetClient(), operatorConfigManager)
 	setupLog.Info("Configuration resolver initialized")
 	celLogger := logging.NewCELLogger(ctrl.Log)
-	celEvaluator, err := cel.New(celLogger)
+	celCfg := cel.Config{
+		EvaluationTimeout:   controllerConfig.CELEvaluationTimeout,
+		MaxExpressionLength: controllerConfig.CELMaxExpressionLength,
+		EnableMacros:        &controllerConfig.CELEnableMacros,
+	}
+	celEvaluator, err := cel.New(celLogger, celCfg)
 	if err != nil {
 		setupLog.Error(err, "unable to create CEL evaluator")
-		os.Exit(1)
+		contract.Failure("init", err)
+		return nil, nil, nil, nil, fmt.Errorf("create CEL evaluator: %w", err)
 	}
-	return operatorConfigManager, controllerConfig, configResolver, celEvaluator
+	if err := probeCELLoopVars(celEvaluator); err != nil {
+		setupLog.Error(err, "CEL loop variable probe failed; loop item expressions may not evaluate")
+	} else {
+		setupLog.Info("CEL loop variable probe succeeded")
+	}
+	contract.Success("init",
+		"configSource", configSource,
+		"configNamespace", configNamespace,
+		"configName", configName,
+	)
+	return operatorConfigManager, controllerConfig, configResolver, celEvaluator, nil
 }
 
+func probeCELLoopVars(eval *cel.Evaluator) error {
+	if eval == nil {
+		return fmt.Errorf("cel evaluator is nil")
+	}
+	with := map[string]any{"probe": "{{ item.url }}"}
+	vars := map[string]any{
+		"item": map[string]any{"url": "ok"},
+	}
+	_, err := eval.ResolveWithInputs(context.Background(), with, vars)
+	return err
+}
+
+// mustSetupControllers registers every reconciling controller with the
+// manager using the controller-specific options from ControllerConfig and
+// returns an error if any SetupWithManager call fails.
 func mustSetupControllers(
+	ctx context.Context,
 	mgr ctrl.Manager,
 	deps config.ControllerDependencies,
 	controllerConfig *config.ControllerConfig,
-) {
-	if err := (&controller.StoryReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildStoryControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Story")
-		os.Exit(1)
+	contract bootstrapruntime.ContractLogger,
+) error {
+	register := func(name string, setupFn func() error) error {
+		component := contract.WithComponent(name)
+		component.Start("register")
+		if err := setupFn(); err != nil {
+			component.Failure("register", err)
+			return err
+		}
+		component.Success("register")
+		return nil
 	}
-	if err := (&controller.EngramReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildEngramControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Engram")
-		os.Exit(1)
+
+	type item struct {
+		name    string
+		indexes []setup.IndexRegistration
+		setup   func() error
 	}
-	if err := (&controller.ImpulseReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildImpulseControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Impulse")
-		os.Exit(1)
+
+	controllers := []item{
+		{
+			name: "Story",
+			indexes: []setup.IndexRegistration{
+				setup.IndexStoryStepEngramRefs,
+				setup.IndexStoryStepStoryRefs,
+				setup.IndexStoryRunStoryRefKey,
+				setup.IndexImpulseStoryRef,
+				setup.IndexEngramTemplateRef,
+			},
+			setup: func() error {
+				return (&controller.StoryReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildStoryControllerOptions())
+			},
+		},
+		{
+			name: "Engram",
+			indexes: []setup.IndexRegistration{
+				setup.IndexEngramTemplateRef,
+				setup.IndexStoryStepEngramRefs,
+				setup.IndexStepRunEngramRef,
+			},
+			setup: func() error {
+				return (&controller.EngramReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildEngramControllerOptions())
+			},
+		},
+		{
+			name: "Impulse",
+			indexes: []setup.IndexRegistration{
+				setup.IndexStoryRunImpulseRef,
+				setup.IndexImpulseTemplateRef,
+				setup.IndexImpulseStoryRef,
+			},
+			setup: func() error {
+				return (&controller.ImpulseReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildImpulseControllerOptions())
+			},
+		},
+		{
+			name: "StoryRun",
+			setup: func() error {
+				return (&runscontroller.StoryRunReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildStoryRunControllerOptions())
+			},
+		},
+		{
+			name: "StepRun",
+			indexes: []setup.IndexRegistration{
+				setup.IndexStepRunEngramRef,
+				setup.IndexEngramTemplateRef,
+			},
+			setup: func() error {
+				return (&runscontroller.StepRunReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildStepRunControllerOptions())
+			},
+		},
+		{
+			name: "EngramTemplate",
+			indexes: []setup.IndexRegistration{
+				setup.IndexEngramTemplateRef,
+			},
+			setup: func() error {
+				return (&catalogcontroller.EngramTemplateReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildTemplateControllerOptions())
+			},
+		},
+		{
+			name: "ImpulseTemplate",
+			indexes: []setup.IndexRegistration{
+				setup.IndexEngramTemplateRef,
+			},
+			setup: func() error {
+				return (&catalogcontroller.ImpulseTemplateReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildTemplateControllerOptions())
+			},
+		},
+		{
+			name: "Transport",
+			indexes: []setup.IndexRegistration{
+				setup.IndexStoryTransportRefs,
+			},
+			setup: func() error {
+				return (&controller.TransportReconciler{
+					ControllerDependencies: deps,
+				}).SetupWithManager(mgr, controllerConfig.BuildTransportControllerOptions())
+			},
+		},
 	}
-	if err := (&runscontroller.StoryRunReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildStoryRunControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "StoryRun")
-		os.Exit(1)
+
+	for _, ctr := range controllers {
+		controllerEntry := ctr
+		if err := register(controllerEntry.name, func() error {
+			if len(controllerEntry.indexes) > 0 {
+				if err := setup.EnsureIndexes(ctx, mgr, controllerEntry.indexes); err != nil {
+					return err
+				}
+			}
+			return controllerEntry.setup()
+		}); err != nil {
+			return err
+		}
 	}
-	if err := (&runscontroller.StepRunReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildStepRunControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "StepRun")
-		os.Exit(1)
-	}
-	if err := (&catalogcontroller.EngramTemplateReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "EngramTemplate")
-		os.Exit(1)
-	}
-	if err := (&catalogcontroller.ImpulseTemplateReconciler{
-		ControllerDependencies: deps,
-	}).SetupWithManager(mgr, controllerConfig.BuildTemplateControllerOptions()); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "ImpulseTemplate")
-		os.Exit(1)
-	}
+	return nil
 }
 
-func setupWebhooksIfEnabled(mgr ctrl.Manager, operatorConfigManager *config.OperatorConfigManager) {
-	if os.Getenv("ENABLE_WEBHOOKS") == "false" {
-		return
+// setupWebhooksIfEnabled registers every admission webhook unless ENABLE_WEBHOOKS
+// is explicitly set to "false".
+func setupWebhooksIfEnabled(
+	mgr ctrl.Manager,
+	operatorConfigManager *config.OperatorConfigManager,
+	contract bootstrapruntime.ContractLogger,
+) error {
+	enableWebhooksEnv := os.Getenv("ENABLE_WEBHOOKS")
+	if enableWebhooksEnv == "false" {
+		setupLog.Info("skipping webhook setup", "enableWebhooks", enableWebhooksEnv, "reason", "env-disabled")
+		return nil
 	}
-	setupLog.Info("setting up webhooks")
-	if err := (&webhookv1alpha1.StoryWebhook{
-		Config: operatorConfigManager.GetControllerConfig(),
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "Story")
-		os.Exit(1)
+	setupLog.Info("setting up webhooks", "enableWebhooks", enableWebhooksEnv)
+	contract.Start("register")
+	defer contract.Success("register")
+
+	register := func(name string, setupFn func() error) error {
+		component := contract.WithComponent(name)
+		component.Start("register")
+		if err := setupFn(); err != nil {
+			component.Failure("register", err)
+			return err
+		}
+		component.Success("register")
+		return nil
 	}
-	if err := (&webhookv1alpha1.EngramWebhook{
-		Config: operatorConfigManager.GetControllerConfig(),
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "Engram")
-		os.Exit(1)
+
+	webhooks := []struct {
+		name  string
+		setup func() error
+	}{
+		{
+			name: "Story",
+			setup: func() error {
+				return (&webhookv1alpha1.StoryWebhook{
+					Config:        operatorConfigManager.GetControllerConfig(),
+					ConfigManager: operatorConfigManager,
+				}).SetupWebhookWithManager(mgr)
+			},
+		},
+		{
+			name: "Engram",
+			setup: func() error {
+				return (&webhookv1alpha1.EngramWebhook{
+					Config: operatorConfigManager.GetControllerConfig(),
+				}).SetupWebhookWithManager(mgr)
+			},
+		},
+		{
+			name: "Impulse",
+			setup: func() error {
+				return (&webhookv1alpha1.ImpulseWebhook{
+					Config: operatorConfigManager.GetControllerConfig(),
+				}).SetupWebhookWithManager(mgr)
+			},
+		},
+		{
+			name: "StoryRun",
+			setup: func() error {
+				return (&webhookrunsv1alpha1.StoryRunWebhook{
+					Config:        operatorConfigManager.GetControllerConfig(),
+					ConfigManager: operatorConfigManager,
+				}).SetupWebhookWithManager(mgr)
+			},
+		},
+		{
+			name: "StepRun",
+			setup: func() error {
+				return (&webhookrunsv1alpha1.StepRunWebhook{
+					Config:        operatorConfigManager.GetControllerConfig(),
+					ConfigManager: operatorConfigManager,
+				}).SetupWebhookWithManager(mgr)
+			},
+		},
+		{
+			name: "Transport",
+			setup: func() error {
+				return (&webhooktransportv1alpha1.TransportWebhook{}).SetupWebhookWithManager(mgr)
+			},
+		},
+		{
+			name: "TransportBinding",
+			setup: func() error {
+				return (&webhooktransportv1alpha1.TransportBindingWebhook{}).SetupWebhookWithManager(mgr)
+			},
+		},
 	}
-	if err := (&webhookv1alpha1.ImpulseWebhook{
-		Config: operatorConfigManager.GetControllerConfig(),
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "Impulse")
-		os.Exit(1)
+
+	for _, wh := range webhooks {
+		if err := register(wh.name, wh.setup); err != nil {
+			return err
+		}
 	}
-	if err := (&webhookrunsv1alpha1.StoryRunWebhook{
-		Config: operatorConfigManager.GetControllerConfig(),
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "StoryRun")
-		os.Exit(1)
-	}
-	if err := (&webhookrunsv1alpha1.StepRunWebhook{}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "StepRun")
-		os.Exit(1)
-	}
+	return nil
 }
 
-func mustAddHealthChecks(mgr ctrl.Manager) {
-	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up health check")
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to set up ready check")
-		os.Exit(1)
-	}
+// mustAddHealthChecks registers the liveness and readiness probes with the manager.
+func mustAddHealthChecks(mgr ctrl.Manager) error {
+	runner := bootstrapruntime.Runner{Log: setupLog.WithName("healthchecks")}
+	return runner.Register(
+		bootstrapruntime.Entry{
+			Kind:           "health",
+			Name:           "healthz",
+			ErrMessage:     "unable to set up health check",
+			SuccessMessage: "health check registered",
+			Register: func() error {
+				return mgr.AddHealthzCheck("healthz", healthz.Ping)
+			},
+		},
+		bootstrapruntime.Entry{
+			Kind:           "health",
+			Name:           "readyz",
+			ErrMessage:     "unable to set up ready check",
+			SuccessMessage: "ready check registered",
+			Register: func() error {
+				return mgr.AddReadyzCheck("readyz", healthz.Ping)
+			},
+		},
+	)
 }

@@ -45,7 +45,6 @@ import (
 // +kubebuilder:resource:scope=Namespaced,shortName=srun,categories={bubu,ai,runs}
 // +kubebuilder:printcolumn:name="Story",type=string,JSONPath=.spec.storyRef.name
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
-// +kubebuilder:printcolumn:name="Started",type=date,JSONPath=.status.startedAt
 // +kubebuilder:printcolumn:name="Duration",type=string,JSONPath=.status.duration
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 type StoryRun struct {
@@ -80,6 +79,10 @@ type StoryRunSpec struct {
 }
 
 // StoryRunStatus tracks the current state and results of this story execution
+// +kubebuilder:validation:XValidation:rule="!has(self.conditions) || self.conditions.exists(c, c.type == 'Ready')",message="status.conditions must include Ready when conditions are set"
+// +kubebuilder:validation:XValidation:rule="!has(self.conditions) || self.conditions.all(c, has(c.lastTransitionTime))",message="status.conditions entries must set lastTransitionTime"
+// +kubebuilder:validation:XValidation:message="status.conditions reason field must be <= 64 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.reason) || size(c.reason) <= 64)"
+// +kubebuilder:validation:XValidation:message="status.conditions message field must be <= 2048 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.message) || size(c.message) <= 2048)"
 type StoryRunStatus struct {
 	// observedGeneration is the most recent generation observed for this StoryRun. It corresponds to the
 	// StoryRun's generation, which is updated on mutation by the API Server.
@@ -91,7 +94,7 @@ type StoryRunStatus struct {
 	// - Running: Story is actively executing steps
 	// - Succeeded: All steps completed successfully
 	// - Failed: A step failed and the story cannot continue
-	// - Canceled: Execution was canceled by user or system
+	// - Finished: Execution was stopped/canceled by user or system (non-failure termination)
 	Phase enums.Phase `json:"phase,omitempty"`
 
 	// Human-readable message about the story's status
@@ -112,6 +115,11 @@ type StoryRunStatus struct {
 	// Execution timing
 	StartedAt  *metav1.Time `json:"startedAt,omitempty"`
 	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
+
+	// Timestamp when child resources (StepRuns, Pods) were cleaned up
+	// Used to track the two-phase cleanup process (children first, then parent)
+	// +optional
+	ChildrenCleanedAt *metav1.Time `json:"childrenCleanedAt,omitempty"`
 
 	// How long did this execution take? (calculated field)
 	Duration string `json:"duration,omitempty"`
@@ -148,6 +156,48 @@ type StoryRunStatus struct {
 	StepsComplete int32 `json:"stepsComplete,omitempty"` // Number of steps that completed successfully
 	StepsFailed   int32 `json:"stepsFailed,omitempty"`   // Number of steps that failed
 	StepsSkipped  int32 `json:"stepsSkipped,omitempty"`  // Number of steps that were skipped
+
+	// TriggerTokens tracks which parent resources have counted this StoryRun.
+	// Used for idempotent trigger counting by Story/Impulse controllers.
+	// Managed by the StoryRun controller to avoid annotation churn from multiple writers.
+	// Possible tokens:
+	//   - "story": counted by parent Story's trigger count
+	//   - "impulse": counted by parent Impulse's trigger count
+	//   - "impulse-success": counted by parent Impulse's success count
+	//   - "impulse-failed": counted by parent Impulse's failure count
+	// +optional
+	TriggerTokens []string `json:"triggerTokens,omitempty"`
+}
+
+// HasTriggerToken checks if the StoryRun has been marked with a specific trigger token.
+func (s *StoryRunStatus) HasTriggerToken(token string) bool {
+	for _, t := range s.TriggerTokens {
+		if t == token {
+			return true
+		}
+	}
+	return false
+}
+
+// AddTriggerToken adds a trigger token to the StoryRun if not already present.
+// Returns true if the token was newly added, false if already present.
+func (s *StoryRunStatus) AddTriggerToken(token string) bool {
+	if s.HasTriggerToken(token) {
+		return false
+	}
+	s.TriggerTokens = append(s.TriggerTokens, token)
+	return true
+}
+
+// AddTriggerTokens adds multiple trigger tokens and returns the tokens that were newly added.
+func (s *StoryRunStatus) AddTriggerTokens(tokens ...string) []string {
+	var added []string
+	for _, token := range tokens {
+		if s.AddTriggerToken(token) {
+			added = append(added, token)
+		}
+	}
+	return added
 }
 
 // StepState holds the detailed status of a single step within a StoryRun.
@@ -160,6 +210,26 @@ type StepState struct {
 	// For 'executeStory' steps, this tracks the name of the created sub-StoryRun.
 	// +optional
 	SubStoryRunName string `json:"subStoryRunName,omitempty"`
+	// Loop holds fan-out progress for loop primitives so reconciles can resume
+	// safely without duplicating iterations.
+	// +optional
+	Loop *LoopState `json:"loop,omitempty"`
+}
+
+// LoopState tracks loop fan-out progress across reconciliations.
+type LoopState struct {
+	// Total is the resolved number of loop iterations.
+	Total int `json:"total,omitempty"`
+	// Created counts how many StepRuns have been launched.
+	Created int `json:"created,omitempty"`
+	// Completed counts how many launched StepRuns have succeeded.
+	Completed int `json:"completed,omitempty"`
+	// NextIndex points to the next iteration index to materialize.
+	NextIndex int `json:"nextIndex,omitempty"`
+	// BatchSize caps how many iterations may be launched per batch.
+	BatchSize int `json:"batchSize,omitempty"`
+	// MaxConcurrency caps in-flight StepRuns for the loop.
+	MaxConcurrency int `json:"maxConcurrency,omitempty"`
 }
 
 // +kubebuilder:object:root=true

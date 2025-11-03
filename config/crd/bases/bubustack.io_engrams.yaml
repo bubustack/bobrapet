@@ -26,9 +26,15 @@ spec:
     - jsonPath: .spec.mode
       name: Mode
       type: string
-    - jsonPath: .status.conditions[?(@.type=='Ready')].status
-      name: Ready
+    - jsonPath: .status.validationStatus
+      name: Status
       type: string
+    - jsonPath: .status.usageCount
+      name: Usage
+      type: integer
+    - jsonPath: .status.triggers
+      name: Triggers
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -54,16 +60,15 @@ spec:
           metadata:
             type: object
           spec:
-            description: EngramSpec defines the configuration and behavior of a specific
-              engram instance
+            description: EngramSpec describes the desired behaviour for an Engram.
             properties:
               executionPolicy:
                 description: |-
-                  ExecutionPolicy defines the execution configuration for this Engram.
-                  These settings override any defaults from the EngramTemplate.
+                  ExecutionPolicy captures the fully-resolved execution policy after hierarchical
+                  merge. Template defaults feed into this value.
                 properties:
                   job:
-                    description: Job configuration
+                    description: Job enumerates the job controller settings.
                     properties:
                       backoffLimit:
                         description: Backoff limit for jobs
@@ -72,13 +77,62 @@ spec:
                       restartPolicy:
                         description: Restart policy
                         type: string
+                      storyRunRetentionSeconds:
+                        description: |-
+                          Retention period for the StoryRun record itself after it finishes.
+                          After this period expires, the StoryRun is deleted to prevent etcd overload.
+                          Set to 0 to keep StoryRuns forever (requires manual cleanup).
+                          Set to -1 to delete StoryRun immediately after child cleanup (not recommended).
+                          Recommended: 86400 (24 hours) to 604800 (7 days) for production systems.
+                          Default: 86400 (24 hours)
+                        format: int32
+                        type: integer
                       ttlSecondsAfterFinished:
-                        description: TTL for job cleanup
+                        description: |-
+                          TTL for cleaning up child resources (StepRuns, Pods) after StoryRun finishes.
+                          After this period expires, child resources are deleted to free up cluster resources.
+                          The parent StoryRun record is preserved for observability.
+                          Default: 3600 (1 hour)
+                        format: int32
+                        type: integer
+                    type: object
+                  loop:
+                    description: Loop specifies default loop execution characteristics
+                      applied at the story policy level.
+                    properties:
+                      defaultBatchSize:
+                        description: DefaultBatchSize controls how many iterations
+                          are launched per reconcile.
+                        format: int32
+                        type: integer
+                      maxBatchSize:
+                        description: MaxBatchSize bounds the controller-driven batch
+                          size.
+                        format: int32
+                        type: integer
+                      maxConcurrency:
+                        description: MaxConcurrency limits in-flight loop iterations.
+                        format: int32
+                        type: integer
+                      maxConcurrencyLimit:
+                        description: MaxConcurrencyLimit caps MaxConcurrency even
+                          when higher values are requested.
+                        format: int32
+                        type: integer
+                    type: object
+                  realtime:
+                    description: Realtime enumerates streaming-specific execution
+                      settings (e.g., TTL for lingering pods).
+                    properties:
+                      ttlSecondsAfterFinished:
+                        description: |-
+                          TTLSecondsAfterFinished controls how long realtime resources (Deployments, Services) remain after finish.
+                          Set to 0 to delete immediately, negative to keep indefinitely, or positive seconds to keep temporarily.
                         format: int32
                         type: integer
                     type: object
                   resources:
-                    description: Resource configuration (actual values, not defaults)
+                    description: Resources enumerates the concrete pod resource assignments.
                     properties:
                       cpuLimit:
                         description: CPU limit
@@ -94,7 +148,7 @@ spec:
                         type: string
                     type: object
                   retry:
-                    description: Retry configuration
+                    description: Retry enumerates the retry configuration.
                     properties:
                       backoff:
                         description: |-
@@ -122,7 +176,7 @@ spec:
                         type: integer
                     type: object
                   security:
-                    description: Security configuration
+                    description: Security enumerates the concrete pod security settings.
                     properties:
                       allowPrivilegeEscalation:
                         description: Whether to allow privilege escalation
@@ -139,11 +193,114 @@ spec:
                         type: integer
                     type: object
                   serviceAccountName:
-                    description: ServiceAccount to use for workloads created from
-                      this policy.
+                    description: ServiceAccountName identifies the ServiceAccount
+                      used by derived workloads.
                     type: string
+                  storage:
+                    description: Storage enumerates the resolved storage policy applied
+                      to the workload.
+                    properties:
+                      file:
+                        description: File specifies configuration for a filesystem-backed
+                          object store.
+                        properties:
+                          emptyDir:
+                            description: |-
+                              EmptyDir defines an ephemeral volume to provision for file storage. When both
+                              EmptyDir and VolumeClaimName are omitted, an EmptyDir{} volume is used by default.
+                            properties:
+                              medium:
+                                description: |-
+                                  medium represents what type of storage medium should back this directory.
+                                  The default is "" which means to use the node's default medium.
+                                  Must be an empty string (default) or Memory.
+                                  More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                type: string
+                              sizeLimit:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                  The size limit is also applicable for memory medium.
+                                  The maximum usage on memory medium EmptyDir would be the minimum value between
+                                  the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                  The default is nil which means that the limit is undefined.
+                                  More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            type: object
+                          path:
+                            description: |-
+                              Path is the directory inside the container where the storage backend should write files.
+                              Defaults to "/var/run/bubu/storage" when omitted.
+                            type: string
+                          volumeClaimName:
+                            description: |-
+                              VolumeClaimName references an existing PersistentVolumeClaim mounted to the workload.
+                              Mutually exclusive with EmptyDir.
+                            type: string
+                        type: object
+                      s3:
+                        description: S3 specifies the configuration for an S3-compatible
+                          object store.
+                        properties:
+                          authentication:
+                            description: Authentication configures how the workload
+                              authenticates with S3.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef references a Kubernetes Secret that contains the credentials.
+                                  The secret must contain keys 'accessKeyID' and 'secretAccessKey'.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              serviceAccountAnnotations:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  ServiceAccountAnnotations allows specifying annotations to be added to the
+                                  auto-generated ServiceAccount. This is the recommended approach for
+                                  IAM-based authentication on cloud providers (e.g., IRSA on EKS).
+                                  The key-value pairs will be added to the ServiceAccount's metadata.annotations.
+                                type: object
+                            type: object
+                          bucket:
+                            description: Bucket is the name of the S3 bucket.
+                            type: string
+                          endpoint:
+                            description: Endpoint is the S3 endpoint URL. Useful for
+                              S3-compatible stores like MinIO.
+                            type: string
+                          region:
+                            description: Region is the AWS region of the bucket.
+                            type: string
+                          usePathStyle:
+                            description: UsePathStyle forces path-style addressing
+                              for S3-compatible providers that require it.
+                            type: boolean
+                        required:
+                        - authentication
+                        - bucket
+                        type: object
+                      timeoutSeconds:
+                        description: 'NOTE: GCS, AzureBlob, etc., can be added here
+                          in the future.'
+                        type: integer
+                    type: object
                   timeout:
-                    description: Timeout configuration
+                    description: Timeout is the execution deadline expressed as a
+                      Go duration string.
                     type: string
                 type: object
               mode:
@@ -157,38 +314,72 @@ spec:
                   - deployment
                   - statefulset
                 description: |-
-                  Mode specifies how the Engram should be run.
-                  Supported values are "job", "deployment", "statefulset".
-                  If not specified, it defaults to the template's supported mode or "job".
+                  Mode optionally overrides the workload controller selected by the template.
+                  Supported values are job, deployment, and statefulset.
                 type: string
               overrides:
-                description: Overrides allows for fine-tuning of execution behavior.
+                description: Overrides allows callers to apply instance-specific execution
+                  adjustments.
                 properties:
                   automountServiceAccountToken:
-                    description: |-
-                      AutomountServiceAccountToken controls whether a service account token should be automatically mounted.
-                      Defaults to false.
+                    default: true
+                    description: AutomountServiceAccountToken toggles automountServiceAccountToken
+                      on the pod spec.
+                    type: boolean
+                  debug:
+                    description: Debug enables verbose, component-level logging when
+                      true.
                     type: boolean
                   imagePullPolicy:
-                    description: Image pull policy override
+                    description: ImagePullPolicy overrides the container pull policy.
                     type: string
+                  loop:
+                    description: Loop tunes fan-out semantics for loop primitives.
+                    properties:
+                      defaultBatchSize:
+                        description: DefaultBatchSize controls how many iterations
+                          are launched per reconcile.
+                        format: int32
+                        type: integer
+                      maxBatchSize:
+                        description: MaxBatchSize bounds the controller-driven batch
+                          size.
+                        format: int32
+                        type: integer
+                      maxConcurrency:
+                        description: MaxConcurrency limits in-flight loop iterations.
+                        format: int32
+                        type: integer
+                      maxConcurrencyLimit:
+                        description: MaxConcurrencyLimit caps MaxConcurrency even
+                          when higher values are requested.
+                        format: int32
+                        type: integer
+                    type: object
+                  maxInlineSize:
+                    description: MaxInlineSize overrides the inline payload threshold
+                      in bytes. Set to 0 to always offload.
+                    type: integer
                   probes:
                     description: |-
-                      Probe overrides allow disabling template-defined probes at instance level
-                      Note: You can only disable probes, not redefine them
+                      Probes allows disabling template-defined probes; probe definitions themselves
+                      remain owned by the template.
                     properties:
                       disableLiveness:
-                        description: DisableLiveness disables the liveness probe
+                        description: DisableLiveness disables the liveness probe when
+                          true.
                         type: boolean
                       disableReadiness:
                         description: DisableReadiness disables the readiness probe
+                          when true.
                         type: boolean
                       disableStartup:
-                        description: DisableStartup disables the startup probe
+                        description: DisableStartup disables the startup probe when
+                          true.
                         type: boolean
                     type: object
                   retry:
-                    description: Retry policy override
+                    description: Retry overrides the resolved retry policy.
                     properties:
                       backoff:
                         description: |-
@@ -216,7 +407,7 @@ spec:
                         type: integer
                     type: object
                   security:
-                    description: Security context override
+                    description: Security overrides pod-level security settings.
                     properties:
                       allowPrivilegeEscalation:
                         description: Whether to allow privilege escalation
@@ -238,22 +429,127 @@ spec:
                         type: integer
                     type: object
                   serviceAccountName:
-                    description: ServiceAccount to use for the workload.
+                    description: ServiceAccountName overrides the ServiceAccount in
+                      use.
                     type: string
+                  storage:
+                    description: Storage overrides the resolved storage policy (e.g.,
+                      enable S3 or file providers).
+                    properties:
+                      file:
+                        description: File specifies configuration for a filesystem-backed
+                          object store.
+                        properties:
+                          emptyDir:
+                            description: |-
+                              EmptyDir defines an ephemeral volume to provision for file storage. When both
+                              EmptyDir and VolumeClaimName are omitted, an EmptyDir{} volume is used by default.
+                            properties:
+                              medium:
+                                description: |-
+                                  medium represents what type of storage medium should back this directory.
+                                  The default is "" which means to use the node's default medium.
+                                  Must be an empty string (default) or Memory.
+                                  More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                type: string
+                              sizeLimit:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                description: |-
+                                  sizeLimit is the total amount of local storage required for this EmptyDir volume.
+                                  The size limit is also applicable for memory medium.
+                                  The maximum usage on memory medium EmptyDir would be the minimum value between
+                                  the SizeLimit specified here and the sum of memory limits of all containers in a pod.
+                                  The default is nil which means that the limit is undefined.
+                                  More info: https://kubernetes.io/docs/concepts/storage/volumes#emptydir
+                                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                x-kubernetes-int-or-string: true
+                            type: object
+                          path:
+                            description: |-
+                              Path is the directory inside the container where the storage backend should write files.
+                              Defaults to "/var/run/bubu/storage" when omitted.
+                            type: string
+                          volumeClaimName:
+                            description: |-
+                              VolumeClaimName references an existing PersistentVolumeClaim mounted to the workload.
+                              Mutually exclusive with EmptyDir.
+                            type: string
+                        type: object
+                      s3:
+                        description: S3 specifies the configuration for an S3-compatible
+                          object store.
+                        properties:
+                          authentication:
+                            description: Authentication configures how the workload
+                              authenticates with S3.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef references a Kubernetes Secret that contains the credentials.
+                                  The secret must contain keys 'accessKeyID' and 'secretAccessKey'.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              serviceAccountAnnotations:
+                                additionalProperties:
+                                  type: string
+                                description: |-
+                                  ServiceAccountAnnotations allows specifying annotations to be added to the
+                                  auto-generated ServiceAccount. This is the recommended approach for
+                                  IAM-based authentication on cloud providers (e.g., IRSA on EKS).
+                                  The key-value pairs will be added to the ServiceAccount's metadata.annotations.
+                                type: object
+                            type: object
+                          bucket:
+                            description: Bucket is the name of the S3 bucket.
+                            type: string
+                          endpoint:
+                            description: Endpoint is the S3 endpoint URL. Useful for
+                              S3-compatible stores like MinIO.
+                            type: string
+                          region:
+                            description: Region is the AWS region of the bucket.
+                            type: string
+                          usePathStyle:
+                            description: UsePathStyle forces path-style addressing
+                              for S3-compatible providers that require it.
+                            type: boolean
+                        required:
+                        - authentication
+                        - bucket
+                        type: object
+                      timeoutSeconds:
+                        description: 'NOTE: GCS, AzureBlob, etc., can be added here
+                          in the future.'
+                        type: integer
+                    type: object
                   timeout:
-                    description: Timeout for execution
+                    description: Timeout overrides the resolved execution timeout
+                      (Go duration string).
                     type: string
                 type: object
               secrets:
                 additionalProperties:
                   type: string
-                description: Secrets maps template secret definitions to actual Kubernetes
-                  secrets.
+                description: |-
+                  Secrets maps named secret inputs defined by the template to concrete Secret
+                  resources in the tenant namespace.
                 type: object
               templateRef:
                 description: |-
-                  Which template to use for this engram instance
-                  This connects the specific configuration below to a reusable component
+                  TemplateRef selects the EngramTemplate that provides defaults, validation,
+                  and base artifacts for this instance.
                 properties:
                   name:
                     description: Name of the referenced EngramTemplate.
@@ -266,21 +562,49 @@ spec:
                 required:
                 - name
                 type: object
+              transport:
+                description: Transport carries transport-level overrides such as TLS
+                  configuration.
+                properties:
+                  tls:
+                    description: TLS configures TLS secrets for hybrid transports.
+                    properties:
+                      secretRef:
+                        description: SecretRef references a Secret containing tls.key/tls.crt
+                          data.
+                        properties:
+                          name:
+                            default: ""
+                            description: |-
+                              Name of the referent.
+                              This field is effectively required, but due to backwards compatibility is
+                              allowed to be empty. Instances of this type with an empty value here are
+                              almost certainly wrong.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      useDefaultTLS:
+                        description: |-
+                          UseDefaultTLS requests the operator's default TLS secret when true.
+                          Defaults to true when SecretRef is unset.
+                        type: boolean
+                    type: object
+                type: object
               with:
                 description: |-
-                  How to configure this specific engram instance
-                  This data gets validated against the EngramTemplate's configSchema
+                  With carries template-specific configuration. The template schema determines
+                  the structure and validation rules applied to this payload.
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
             required:
             - templateRef
             type: object
           status:
-            description: EngramStatus defines the observed state of Engram
+            description: EngramStatus reports observed workload state.
             properties:
               conditions:
-                description: This will indicate if the Engram's syntax is valid and
-                  its template is resolved.
+                description: Conditions conveys per-condition status such as Ready.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -337,15 +661,17 @@ spec:
                   type: object
                 type: array
               failedExecutions:
+                description: FailedExecutions counts runs that ended in a failure
+                  state.
                 format: int32
                 type: integer
               lastExecutionTime:
-                description: Additional useful information for debugging and monitoring
+                description: LastExecutionTime captures the completion timestamp for
+                  the most recent run.
                 format: date-time
                 type: string
               observedGeneration:
-                description: ObservedGeneration is the most recent generation observed
-                  for this Engram.
+                description: ObservedGeneration reflects the last reconciled generation.
                 format: int64
                 type: integer
               phase:
@@ -355,15 +681,17 @@ spec:
                   to provide a unified view of execution state.
 
                   The phase progression typically follows:
-                  Pending → Running → {Succeeded|Failed|Canceled|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
+                  Pending → Running → {Succeeded|Failed|Finished|Compensated|Paused|Blocked|Scheduling|Timeout|Aborted}
 
                   Some resources may also support Paused for manual intervention scenarios.
+
                   nolint:lll
                 enum:
                 - Pending
                 - Running
                 - Succeeded
                 - Failed
+                - Finished
                 - Canceled
                 - Compensated
                 - Paused
@@ -377,14 +705,40 @@ spec:
                 type: integer
               replicas:
                 description: |-
-                  Current workload status - what's actually running.
-                  These fields are ONLY populated for Engrams running as a Deployment or StatefulSet.
-                  For job-based engrams, these will be empty.
+                  Replicas and ReadyReplicas surface pod readiness information for controllers
+                  that expose it (Deployments/StatefulSets). Jobs leave these fields at zero.
                 format: int32
                 type: integer
               totalExecutions:
+                description: TotalExecutions counts the number of completed runs for
+                  job workloads.
                 format: int32
                 type: integer
+              triggers:
+                description: |-
+                  Triggers reports how many StepRuns currently reference this Engram.
+                  Useful for understanding runtime fan-out and utilisation.
+                format: int64
+                type: integer
+              usageCount:
+                description: UsageCount reports how many Stories reference this Engram.
+                format: int32
+                type: integer
+              validationErrors:
+                description: ValidationErrors contains messages describing validation
+                  failures.
+                items:
+                  type: string
+                type: array
+              validationStatus:
+                description: ValidationStatus reflects whether the engram spec passed
+                  validation.
+                enum:
+                - valid
+                - invalid
+                - unknown
+                - pending
+                type: string
             type: object
         type: object
     served: true

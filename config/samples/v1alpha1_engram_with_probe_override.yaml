@@ -54,10 +54,17 @@ metadata:
   namespace: default
 spec:
   templateRef:
-    name: github-webhook  # Assume this template has probes defined
+    name: impulsetemplate-sample
   storyRef:
-    name: ci-pipeline
+    name: summarize-website-story
+    namespace: default
   # Probes from template will be applied
+  with:
+    eventTypes:
+      - push
+    secretKey: WEBHOOK_SECRET
+  secrets:
+    github: github-webhook-secret
 
 ---
 # Example: Impulse that disables readiness probe
@@ -68,11 +75,33 @@ metadata:
   namespace: default
 spec:
   templateRef:
-    name: github-webhook
+    name: impulsetemplate-sample
   storyRef:
-    name: ci-pipeline
+    name: summarize-website-story
+    namespace: default
   execution:
     probes:
       # Disable readiness probe during development/testing
       disableReadiness: true
+  with:
+    eventTypes:
+      - push
+    secretKey: WEBHOOK_SECRET
+  secrets:
+    github: github-webhook-secret
 
+---
+# Example: Engram with debug logging enabled
+apiVersion: bubustack.io/v1alpha1
+kind: Engram
+metadata:
+  name: summarizer-debug
+  namespace: default
+spec:
+  templateRef:
+    name: openai-chat
+  overrides:
+    debug: true
+  with:
+    defaultModel: gpt-4o-mini
+    summaryLength: short

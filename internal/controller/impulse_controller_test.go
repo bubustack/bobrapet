@@ -60,6 +60,7 @@ var _ = Describe("Impulse Controller", func() {
 					TemplateSpec: catalogv1alpha1.TemplateSpec{
 						Version:        "1.0.0",
 						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeDeployment},
+						Image:          "ghcr.io/bubustack/impulse-default:latest",
 					},
 				},
 			}
@@ -112,10 +113,13 @@ var _ = Describe("Impulse Controller", func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &bubushv1alpha1.Impulse{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Cleanup the specific resource instance Impulse")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			if errors.IsNotFound(err) {
+				By("Impulse already deleted by reconcile")
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				By("Cleanup the specific resource instance Impulse")
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
 
 			// Delete the ImpulseTemplate
 			impulseTemplate := &catalogv1alpha1.ImpulseTemplate{}

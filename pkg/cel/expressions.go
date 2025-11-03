@@ -29,6 +29,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/kubeutil"
+	runsidentity "github.com/bubustack/bobrapet/pkg/runs/identity"
+	runsinputs "github.com/bubustack/bobrapet/pkg/runs/inputs"
 )
 
 // ExpressionResolver handles GitHub Actions-style expression resolution
@@ -146,13 +149,13 @@ func (r *ExpressionResolver) resolveStepsExpression(ctx context.Context, express
 
 	// Find the StepRun with this stepID in the same StoryRun
 	var stepRuns runsv1alpha1.StepRunList
-	err := r.client.List(ctx, &stepRuns,
-		client.InNamespace(r.namespace),
-		client.MatchingLabels{
-			"bobrapet.bubustack.io/story-run": r.storyRun,
-		})
-
-	if err != nil {
+	if err := kubeutil.ListByLabels(
+		ctx,
+		r.client,
+		r.namespace,
+		runsidentity.SelectorLabels(r.storyRun),
+		&stepRuns,
+	); err != nil {
 		return nil, fmt.Errorf("failed to list StepRuns: %w", err)
 	}
 
@@ -207,9 +210,8 @@ func (r *ExpressionResolver) resolveInputsExpression(ctx context.Context, expres
 		return nil, fmt.Errorf("StoryRun has no inputs")
 	}
 
-	// Parse inputs JSON
-	var inputs map[string]any
-	if err := json.Unmarshal(storyRun.Spec.Inputs.Raw, &inputs); err != nil {
+	inputs, err := runsinputs.DecodeStoryRunInputs(&storyRun)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse StoryRun inputs: %w", err)
 	}
 
@@ -300,13 +302,13 @@ func (r *ExpressionResolver) CheckDependencies(ctx context.Context, dependencies
 	}
 
 	var stepRuns runsv1alpha1.StepRunList
-	err := r.client.List(ctx, &stepRuns,
-		client.InNamespace(r.namespace),
-		client.MatchingLabels{
-			"bobrapet.bubustack.io/story-run": r.storyRun,
-		})
-
-	if err != nil {
+	if err := kubeutil.ListByLabels(
+		ctx,
+		r.client,
+		r.namespace,
+		runsidentity.SelectorLabels(r.storyRun),
+		&stepRuns,
+	); err != nil {
 		return false, nil, fmt.Errorf("failed to list StepRuns: %w", err)
 	}
 

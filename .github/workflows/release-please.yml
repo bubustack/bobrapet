@@ -34,7 +34,7 @@ jobs:
       # Build and push Docker images when release is created
       - name: Checkout code
         if: ${{ steps.release.outputs.release_created }}
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
         if: ${{ steps.release.outputs.release_created }}

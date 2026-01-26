@@ -1,22 +1,9 @@
 apiVersion: bubustack.io/v1alpha1
 kind: Impulse
 metadata:
-  namespace: default
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
   name: impulse-sample
 spec:
-  templateRef:
-    name: impulsetemplate-sample
-  storyRef:
-    name: summarize-website-story
-    namespace: default
-  execution:
-    debug: true
-  with:
-    eventTypes:
-      - push
-      - pull_request
-    repositoryAllowList:
-      - bubustack/*
-    secretKey: WEBHOOK_SECRET
-  secrets:
-    github: github-webhook-secret
+  # TODO(user): Add fields here

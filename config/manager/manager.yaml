@@ -30,7 +30,7 @@ spec:
         control-plane: controller-manager
         app.kubernetes.io/name: bobrapet
     spec:
-      # Uncomment the following code to configure the nodeAffinity expression
+      # TODO(user): Uncomment the following code to configure the nodeAffinity expression
       # according to the platforms which are supported by your solution.
       # It is considered best practice to support multiple architectures. You can
       # build your manager image using the makefile target docker-buildx.
@@ -61,13 +61,9 @@ spec:
       - command:
         - /manager
         args:
-        # - --leader-elect
-        - --health-probe-bind-address=:8081
-        - --config-namespace=bobrapet-system
-        - --config-name=bobrapet-operator-config
-          # metrics-bind-address is configured via kustomize patch to :8443 (HTTPS)
+          - --leader-elect
+          - --health-probe-bind-address=:8081
         image: controller:latest
-        imagePullPolicy: IfNotPresent
         name: manager
         ports: []
         securityContext:
@@ -88,6 +84,8 @@ spec:
             port: 8081
           initialDelaySeconds: 5
           periodSeconds: 10
+        # TODO(user): Configure the resources accordingly based on the project requirements.
+        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         resources:
           limits:
             cpu: 500m
@@ -96,6 +94,6 @@ spec:
             cpu: 10m
             memory: 64Mi
         volumeMounts: []
+      volumes: []
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10
-      volumes: []

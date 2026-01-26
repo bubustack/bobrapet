@@ -1,32 +1,9 @@
----
 apiVersion: bubustack.io/v1alpha1
 kind: Engram
 metadata:
-  name: http-request-engram
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
+  name: engram-sample
 spec:
-  mode: job
-  templateRef: 
-    name: http-request
-  with:
-    defaultMethod: GET
-    timeout: 30s
-    response:
-      includeHeaders: true
-      includeStatus: true
----
-apiVersion: bubustack.io/v1alpha1
-kind: Engram
-metadata:
-  name: openai-summarizer-engram
-spec:
-  mode: job
-  secrets:
-    openai: openai-credentials
-  templateRef: 
-    name: openai-chat
-  with:
-    defaultModel: gpt-4o-mini
-    defaultTemperature: 0.2
-    defaultSystemPrompt: |
-      You are an expert at summarizing technical content. Given the body
-      of a webpage, provide a concise, one-paragraph summary.
+  # TODO(user): Add fields here

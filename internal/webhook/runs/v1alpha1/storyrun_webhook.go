@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,60 +19,30 @@ package v1alpha1
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
-	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
-	"github.com/bubustack/bobrapet/internal/config"
-	webhookshared "github.com/bubustack/bobrapet/internal/webhook/v1alpha1"
-	"github.com/xeipuuv/gojsonschema"
-	"k8s.io/apimachinery/pkg/api/errors"
 )
 
+// nolint:unused
 // log is for logging in this package.
 var storyrunlog = logf.Log.WithName("storyrun-resource")
 
-type StoryRunWebhook struct {
-	Client        client.Client
-	Config        *config.ControllerConfig
-	ConfigManager *config.OperatorConfigManager
-}
-
-// SetupWebhookWithManager registers the StoryRun validating webhook with the manager.
-//
-// Behavior:
-//   - Stores the manager's client for Story lookups during validation.
-//   - Creates a validating webhook for StoryRun resources.
-//   - Injects Config and ConfigManager into the validator.
-//
-// Arguments:
-//   - mgr ctrl.Manager: the controller-runtime manager.
-//
-// Returns:
-//   - nil on success.
-//   - Error if webhook registration fails.
-func (wh *StoryRunWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	wh.Client = mgr.GetClient()
-
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&runsv1alpha1.StoryRun{}).
-		WithValidator(&StoryRunCustomValidator{
-			Client:        mgr.GetClient(),
-			Config:        wh.Config,
-			ConfigManager: wh.ConfigManager,
-		}).
+// SetupStoryRunWebhookWithManager registers the webhook for StoryRun in the manager.
+func SetupStoryRunWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr).For(&runsv1alpha1.StoryRun{}).
+		WithValidator(&StoryRunCustomValidator{}).
 		Complete()
 }
 
+// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
+
+// TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
 // NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
 // Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
 // +kubebuilder:webhook:path=/validate-runs-bubustack-io-v1alpha1-storyrun,mutating=false,failurePolicy=fail,sideEffects=None,groups=runs.bubustack.io,resources=storyruns,verbs=create;update,versions=v1alpha1,name=vstoryrun-v1alpha1.kb.io,admissionReviewVersions=v1
@@ -83,267 +53,46 @@ func (wh *StoryRunWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type StoryRunCustomValidator struct {
-	Client        client.Client
-	Config        *config.ControllerConfig
-	ConfigManager *config.OperatorConfigManager
+	// TODO(user): Add more fields as needed for validation
 }
 
 var _ webhook.CustomValidator = &StoryRunCustomValidator{}
 
-// controllerConfig returns the effective controller configuration.
-//
-// Behavior:
-//   - Delegates to webhookshared.ResolveControllerConfig for unified config resolution.
-//
-// Returns:
-//   - Non-nil *config.ControllerConfig from the highest priority source.
-func (v *StoryRunCustomValidator) controllerConfig() *config.ControllerConfig {
-	return webhookshared.ResolveControllerConfig(storyrunlog, v.ConfigManager, v.Config)
+// ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
+func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
+	storyrun, ok := obj.(*runsv1alpha1.StoryRun)
+	if !ok {
+		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
+	}
+	storyrunlog.Info("Validation for StoryRun upon creation", "name", storyrun.GetName())
+
+	// TODO(user): fill in your validation logic upon object creation.
+
+	return nil, nil
 }
 
-// ValidateCreate implements webhook.CustomValidator for StoryRun creation.
-//
-// Behavior:
-//   - Type-asserts obj to StoryRun and validates spec.
-//   - Validates storyRef.name is set and Story exists.
-//   - Validates inputs shape, size, and schema against Story.
-//
-// Arguments:
-//   - ctx context.Context: for Story lookup.
-//   - obj runtime.Object: expected to be *runsv1alpha1.StoryRun.
-//
-// Returns:
-//   - nil, nil if validation passes.
-//   - nil, error if type assertion fails or validation errors exist.
-func (v *StoryRunCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return webhookshared.ValidateCreateResource[*runsv1alpha1.StoryRun](ctx, obj, "StoryRun", storyrunlog, v.validateStoryRun)
-}
-
-// ValidateUpdate implements webhook.CustomValidator for StoryRun updates.
-//
-// Behavior:
-//   - Skips validation if resource is being deleted (DeletionTimestamp set).
-//   - Rejects updates that decrease observedGeneration.
-//   - Skips validation if spec is unchanged (metadata-only update).
-//
-// Arguments:
-//   - ctx context.Context: for Story lookup.
-//   - oldObj runtime.Object: previous StoryRun state.
-//   - newObj runtime.Object: proposed StoryRun state.
-//
-// Returns:
-//   - nil, nil if validation passes or is skipped.
-//   - nil, error if type assertion fails or validation errors exist.
-func (v *StoryRunCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+// ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
+func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	storyrun, ok := newObj.(*runsv1alpha1.StoryRun)
 	if !ok {
 		return nil, fmt.Errorf("expected a StoryRun object for the newObj but got %T", newObj)
 	}
 	storyrunlog.Info("Validation for StoryRun upon update", "name", storyrun.GetName())
 
-	// Allow metadata-only updates during deletion (e.g., finalizer removal)
-	if storyrun.DeletionTimestamp != nil {
-		return nil, nil
-	}
+	// TODO(user): fill in your validation logic upon object update.
 
-	// Skip validation if the spec hasn't changed (typical for metadata-only updates)
-	if oldSr, ok := oldObj.(*runsv1alpha1.StoryRun); ok {
-		if err := ensureStoryRunObservedGenerationMonotonic(oldSr, storyrun); err != nil {
-			return nil, err
-		}
-		if reflect.DeepEqual(oldSr.Spec, storyrun.Spec) {
-			return nil, nil
-		}
-	}
-
-	if err := v.validateStoryRun(ctx, storyrun); err != nil {
-		return nil, err
-	}
 	return nil, nil
 }
 
-// ValidateDelete implements webhook.CustomValidator for StoryRun deletion.
-//
-// Behavior:
-//   - Always allows deletion (no-op validation).
-//   - Exists as scaffold placeholder; delete verb not enabled in annotation.
-//
-// Arguments:
-//   - ctx context.Context: unused.
-//   - obj runtime.Object: expected to be *runsv1alpha1.StoryRun.
-//
-// Returns:
-//   - nil, nil (deletion always allowed).
+// ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
 func (v *StoryRunCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	return webhookshared.ValidateDeleteResource[*runsv1alpha1.StoryRun](obj, "StoryRun", storyrunlog, nil)
-}
+	storyrun, ok := obj.(*runsv1alpha1.StoryRun)
+	if !ok {
+		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
+	}
+	storyrunlog.Info("Validation for StoryRun upon deletion", "name", storyrun.GetName())
 
-// validateStoryRun performs basic invariants validation for StoryRun specs.
-//
-// Behavior:
-//   - Validates storyRef.name is set.
-//   - Validates referenced Story exists.
-//   - Validates inputs shape and size against config limits.
-//   - Validates inputs against Story's inputsSchema if defined.
-//
-// Arguments:
-//   - ctx context.Context: for Story lookup.
-//   - sr *runsv1alpha1.StoryRun: the StoryRun to validate.
-//
-// Returns:
-//   - nil if all validations pass.
-//   - Error describing the first validation failure.
-func (v *StoryRunCustomValidator) validateStoryRun(ctx context.Context, sr *runsv1alpha1.StoryRun) error {
-	if err := requireStoryRef(sr); err != nil {
-		return err
-	}
-	story, _, err := fetchStory(ctx, v.Client, sr)
-	if err != nil {
-		return err
-	}
-	cfg := v.controllerConfig()
-	if err := validateInputsShapeAndSize(cfg, sr); err != nil {
-		return err
-	}
-	return validateInputsSchema(story, sr)
-}
+	// TODO(user): fill in your validation logic upon object deletion.
 
-// requireStoryRef ensures the StoryRun has a non-empty storyRef.name.
-//
-// Arguments:
-//   - sr *runsv1alpha1.StoryRun: the StoryRun to validate.
-//
-// Returns:
-//   - nil if storyRef.name is set.
-//   - Error if storyRef.name is empty.
-func requireStoryRef(sr *runsv1alpha1.StoryRun) error {
-	if sr.Spec.StoryRef.Name == "" {
-		return fmt.Errorf("spec.storyRef.name is required")
-	}
-	return nil
-}
-
-// fetchStory retrieves the Story referenced by the StoryRun.
-//
-// Behavior:
-//   - Fetches the Story from the API server.
-//   - Uses storyRef to determine namespace (defaults to StoryRun's namespace).
-//   - Returns user-friendly error if Story does not exist.
-//
-// Arguments:
-//   - ctx context.Context: for API call.
-//   - c client.Client: Kubernetes client.
-//   - sr *runsv1alpha1.StoryRun: contains the storyRef.
-//
-// Returns:
-//   - *bubuv1alpha1.Story if found.
-//   - types.NamespacedName used for the lookup.
-//   - Error if not found or API call fails.
-func fetchStory(ctx context.Context, c client.Client, sr *runsv1alpha1.StoryRun) (*bubuv1alpha1.Story, types.NamespacedName, error) {
-	story := &bubuv1alpha1.Story{}
-	storyKey := sr.Spec.StoryRef.ToNamespacedName(sr)
-	if err := c.Get(ctx, storyKey, story); err != nil {
-		if errors.IsNotFound(err) {
-			return nil, storyKey, fmt.Errorf("referenced story '%s' not found", storyKey.String())
-		}
-		return nil, storyKey, fmt.Errorf("failed to get referenced story '%s': %w", storyKey.String(), err)
-	}
-	return story, storyKey, nil
-}
-
-// validateInputsShapeAndSize ensures spec.inputs is a JSON object within size limits.
-//
-// Behavior:
-//   - Skips validation if inputs is empty.
-//   - Ensures inputs is a JSON object (not array or primitive).
-//   - Ensures inputs doesn't exceed cfg.StoryRun.MaxInlineInputsSize.
-//
-// Arguments:
-//   - cfg *config.ControllerConfig: for size limits.
-//   - sr *runsv1alpha1.StoryRun: the StoryRun to validate.
-//
-// Returns:
-//   - nil if inputs is valid or absent.
-//   - Error describing the validation failure.
-func validateInputsShapeAndSize(cfg *config.ControllerConfig, sr *runsv1alpha1.StoryRun) error {
-	if sr.Spec.Inputs == nil || len(sr.Spec.Inputs.Raw) == 0 {
-		return nil
-	}
-	b := webhookshared.TrimLeadingSpace(sr.Spec.Inputs.Raw)
-	if err := webhookshared.EnsureJSONObject("spec.inputs", b); err != nil {
-		return err
-	}
-	// Use StoryRun-specific knob; fall back to defaults if unset
-	maxBytes := cfg.StoryRun.MaxInlineInputsSize
-	if maxBytes <= 0 {
-		maxBytes = config.DefaultControllerConfig().StoryRun.MaxInlineInputsSize
-	}
-	return webhookshared.EnforceMaxBytes(
-		"spec.inputs",
-		sr.Spec.Inputs.Raw,
-		maxBytes,
-		"Provide large inputs via an offloading mechanism instead of inlining",
-	)
-}
-
-// validateInputsSchema validates spec.inputs against the Story's inputsSchema.
-//
-// Behavior:
-//   - Skips validation if Story has no inputsSchema.
-//   - Uses gojsonschema to validate inputs against the schema.
-//   - Returns all validation errors in a single message.
-//
-// Arguments:
-//   - story *bubuv1alpha1.Story: provides the inputsSchema.
-//   - sr *runsv1alpha1.StoryRun: provides the inputs to validate.
-//
-// Returns:
-//   - nil if inputs is valid or schema is absent.
-//   - Error describing the validation failures.
-func validateInputsSchema(story *bubuv1alpha1.Story, sr *runsv1alpha1.StoryRun) error {
-	if story.Spec.InputsSchema == nil || len(story.Spec.InputsSchema.Raw) == 0 {
-		return nil
-	}
-	schemaLoader := gojsonschema.NewStringLoader(string(story.Spec.InputsSchema.Raw))
-	var documentLoader gojsonschema.JSONLoader
-	if sr.Spec.Inputs != nil && len(sr.Spec.Inputs.Raw) > 0 {
-		documentLoader = gojsonschema.NewStringLoader(string(sr.Spec.Inputs.Raw))
-	} else {
-		documentLoader = gojsonschema.NewStringLoader("{}")
-	}
-	result, err := gojsonschema.Validate(schemaLoader, documentLoader)
-	if err != nil {
-		return fmt.Errorf("error validating spec.inputs against Story schema: %w", err)
-	}
-	if !result.Valid() {
-		var errs []string
-		for _, desc := range result.Errors() {
-			errs = append(errs, desc.String())
-		}
-		return fmt.Errorf("spec.inputs is invalid against Story schema: %v", errs)
-	}
-	return nil
-}
-
-// ensureStoryRunObservedGenerationMonotonic rejects stale status updates.
-//
-// Behavior:
-//   - Compares old and new observedGeneration values.
-//   - Rejects updates where observedGeneration decreases.
-//   - Allows updates when either value is zero (unset).
-//
-// Arguments:
-//   - oldSR *runsv1alpha1.StoryRun: previous StoryRun state.
-//   - newSR *runsv1alpha1.StoryRun: proposed StoryRun state.
-//
-// Returns:
-//   - nil if generation is monotonically increasing.
-//   - Error if observedGeneration decreased.
-func ensureStoryRunObservedGenerationMonotonic(oldSR, newSR *runsv1alpha1.StoryRun) error {
-	oldGen := oldSR.Status.ObservedGeneration
-	newGen := newSR.Status.ObservedGeneration
-	if oldGen > 0 && newGen > 0 && newGen < oldGen {
-		return fmt.Errorf("status.observedGeneration must be monotonically increasing (old=%d new=%d)", oldGen, newGen)
-	}
-	return nil
+	return nil, nil
 }

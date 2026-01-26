@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,15 +28,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
-	"github.com/bubustack/bobrapet/api/v1alpha1"
-	"github.com/bubustack/bobrapet/internal/config"
-	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
 var _ = Describe("StoryRun Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
-		const storyName = "test-story"
 
 		ctx := context.Background()
 
@@ -48,27 +44,6 @@ var _ = Describe("StoryRun Controller", func() {
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind StoryRun")
-			// Create a valid Story
-			story := &v1alpha1.Story{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      storyName,
-					Namespace: "default",
-				},
-				Spec: v1alpha1.StorySpec{
-					Steps: []v1alpha1.Step{
-						{
-							Name: "step1",
-							Ref: &refs.EngramReference{
-								ObjectReference: refs.ObjectReference{
-									Name: "some-engram",
-								},
-							},
-						},
-					},
-				},
-			}
-			Expect(k8sClient.Create(ctx, story)).To(Succeed())
-
 			err := k8sClient.Get(ctx, typeNamespacedName, storyrun)
 			if err != nil && errors.IsNotFound(err) {
 				resource := &runsv1alpha1.StoryRun{
@@ -76,13 +51,7 @@ var _ = Describe("StoryRun Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: runsv1alpha1.StoryRunSpec{
-						StoryRef: refs.StoryReference{
-							ObjectReference: refs.ObjectReference{
-								Name: storyName,
-							},
-						},
-					},
+					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -96,23 +65,12 @@ var _ = Describe("StoryRun Controller", func() {
 
 			By("Cleanup the specific resource instance StoryRun")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-
-			// Delete the Story
-			story := &v1alpha1.Story{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: storyName, Namespace: "default"}, story)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Delete(ctx, story)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			configManager := config.NewOperatorConfigManager(k8sClient, "default", "bobrapet-operator-config")
 			controllerReconciler := &StoryRunReconciler{
-				ControllerDependencies: config.ControllerDependencies{
-					Client:         k8sClient,
-					Scheme:         k8sClient.Scheme(),
-					ConfigResolver: config.NewResolver(k8sClient, configManager),
-				},
-				rbacManager: NewRBACManager(k8sClient, k8sClient.Scheme()),
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

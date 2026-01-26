@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -66,7 +66,7 @@ var _ = BeforeSuite(func() {
 	ctx, cancel = context.WithCancel(context.TODO())
 
 	var err error
-	err = bubushv1alpha1.AddToScheme(scheme.Scheme)
+	err = bubustackiov1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme
@@ -109,13 +109,13 @@ var _ = BeforeSuite(func() {
 	})
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&StoryWebhook{}).SetupWebhookWithManager(mgr)
+	err = SetupStoryWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&EngramWebhook{}).SetupWebhookWithManager(mgr)
+	err = SetupEngramWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
-	err = (&ImpulseWebhook{}).SetupWebhookWithManager(mgr)
+	err = SetupImpulseWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:webhook

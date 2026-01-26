@@ -1,12 +1,9 @@
----
 apiVersion: runs.bubustack.io/v1alpha1
 kind: StoryRun
 metadata:
-  namespace: default
-  name: summarize-trigger
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
+  name: storyrun-sample
 spec:
-  inputs:
-    url: https://kubernetes.io/docs/concepts/overview/
-  storyRef:
-    name: summarize-website-story
-    namespace: default
+  # TODO(user): Add fields here

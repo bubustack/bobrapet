@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,104 +18,69 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-
-	"github.com/bubustack/bobrapet/pkg/enums"
-	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
-// Impulse defines an always-on trigger that listens for external events and
-// launches Stories in response.
-//
-// +kubebuilder:object:root=true
-// +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=imp,categories={bubu,ai}
-// +kubebuilder:printcolumn:name="Template",type=string,JSONPath=.spec.templateRef.name
-// +kubebuilder:printcolumn:name="Story",type=string,JSONPath=.spec.storyRef.name
-// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
-// +kubebuilder:printcolumn:name="Triggers",type=integer,JSONPath=.status.triggersReceived
-// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
-// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;patch
-type Impulse struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
+// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
+// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-	Spec   ImpulseSpec   `json:"spec,omitempty"`
-	Status ImpulseStatus `json:"status,omitempty"`
-}
-
-// ImpulseSpec describes a trigger instance and the Story it activates.
+// ImpulseSpec defines the desired state of Impulse
 type ImpulseSpec struct {
-	// TemplateRef selects the ImpulseTemplate that implements the trigger mechanics.
-	// +kubebuilder:validation:Required
-	TemplateRef refs.ImpulseTemplateReference `json:"templateRef"`
+	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+	// Important: Run "make" to regenerate code after modifying this file
+	// The following markers will use OpenAPI v3 schema to validate the value
+	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
-	// StoryRef identifies the Story executed when the trigger fires.
-	// +kubebuilder:validation:Required
-	StoryRef refs.StoryReference `json:"storyRef"`
-
-	// With carries template-specific configuration and is validated by the template.
-	// +kubebuilder:pruning:PreserveUnknownFields
-	With *runtime.RawExtension `json:"with,omitempty"`
-
-	// Secrets maps template-defined secret inputs to concrete namespace Secrets.
-	Secrets map[string]string `json:"secrets,omitempty"`
-
-	// Mapping describes how an incoming event is converted into Story inputs.
-	// +kubebuilder:pruning:PreserveUnknownFields
-	Mapping *runtime.RawExtension `json:"mapping,omitempty"`
-
-	// Workload controls the backing workload for the impulse (deployment or statefulset).
-	Workload *WorkloadSpec `json:"workload,omitempty"`
-
-	// Service controls instance-level exposure of the impulse via a Service.
-	// Ports and health come from the template; this sets type/labels/annotations.
-	// If omitted, defaults to ClusterIP with template-defined ports.
-	Service *ServiceExposure `json:"service,omitempty"`
-
-	// Execution provides instance-level execution overrides.
-	Execution *ExecutionOverrides `json:"execution,omitempty"`
+	// foo is an example field of Impulse. Edit impulse_types.go to remove/update
+	// +optional
+	Foo *string `json:"foo,omitempty"`
 }
 
-// All shared types moved to shared_types.go
-
-// ImpulseStatus reports observed trigger state and counters.
+// ImpulseStatus defines the observed state of Impulse.
 type ImpulseStatus struct {
-	// observedGeneration is the most recent generation observed for this Impulse. It corresponds to the
-	// Impulse's generation, which is updated on mutation by the API Server.
-	// +optional
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+	// Important: Run "make" to regenerate code after modifying this file
 
-	// Conditions is the standard Kubernetes condition set (Ready, etc.).
+	// For Kubernetes API conventions, see:
+	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+
+	// conditions represent the current state of the Impulse resource.
+	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
+	//
+	// Standard condition types include:
+	// - "Available": the resource is fully functional
+	// - "Progressing": the resource is being created or updated
+	// - "Degraded": the resource failed to reach or maintain its desired state
+	//
+	// The status of each condition is one of True, False, or Unknown.
+	// +listType=map
+	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// Replicas and ReadyReplicas surface readiness information reported by the backing workload.
-	// +optional
-	Replicas int32 `json:"replicas,omitempty"`
-	// +optional
-	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
-	// +optional
-	Phase enums.Phase `json:"phase,omitempty"`
-
-	// TriggersReceived counts all events seen by the impulse.
-	// +optional
-	TriggersReceived int64 `json:"triggersReceived"`
-	// StoriesLaunched counts StoryRuns successfully started from events.
-	// +optional
-	StoriesLaunched int64 `json:"storiesLaunched"`
-	// FailedTriggers counts events that failed validation or launch.
-	// +optional
-	FailedTriggers int64 `json:"failedTriggers"`
-	// LastTrigger records the timestamp of the most recent event.
-	// +optional
-	LastTrigger *metav1.Time `json:"lastTrigger,omitempty"`
-	// LastSuccess records the timestamp of the most recent successful Story launch.
-	// +optional
-	LastSuccess *metav1.Time `json:"lastSuccess,omitempty"`
 }
 
 // +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+
+// Impulse is the Schema for the impulses API
+type Impulse struct {
+	metav1.TypeMeta `json:",inline"`
+
+	// metadata is a standard object metadata
+	// +optional
+	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+
+	// spec defines the desired state of Impulse
+	// +required
+	Spec ImpulseSpec `json:"spec"`
+
+	// status defines the observed state of Impulse
+	// +optional
+	Status ImpulseStatus `json:"status,omitempty,omitzero"`
+}
+
+// +kubebuilder:object:root=true
+
+// ImpulseList contains a list of Impulse
 type ImpulseList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

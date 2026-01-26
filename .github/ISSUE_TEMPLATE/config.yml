@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Security reports
-    url: https://github.com/bubustack/.github/security/advisories/new
-    about: Please use our private reporting channel for vulnerabilities.
-  - name: Architecture & roadmap discussions
-    url: https://github.com/orgs/bubustack/discussions
-    about: For proposals that span multiple repositories, start a discussion before opening issues.

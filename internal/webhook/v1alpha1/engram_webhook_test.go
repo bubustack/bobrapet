@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,21 +20,21 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	// TODO (user): Add any additional imports if needed
 )
 
 var _ = Describe("Engram Webhook", func() {
 	var (
-		obj       *bubushv1alpha1.Engram
-		oldObj    *bubushv1alpha1.Engram
+		obj       *bubustackiov1alpha1.Engram
+		oldObj    *bubustackiov1alpha1.Engram
 		validator EngramCustomValidator
 		defaulter EngramCustomDefaulter
 	)
 
 	BeforeEach(func() {
-		obj = &bubushv1alpha1.Engram{}
-		oldObj = &bubushv1alpha1.Engram{}
+		obj = &bubustackiov1alpha1.Engram{}
+		oldObj = &bubustackiov1alpha1.Engram{}
 		validator = EngramCustomValidator{}
 		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
 		defaulter = EngramCustomDefaulter{}

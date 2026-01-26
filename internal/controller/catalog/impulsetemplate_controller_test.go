@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,8 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
-	"github.com/bubustack/bobrapet/internal/config"
-	"github.com/bubustack/bobrapet/pkg/enums"
 )
 
 var _ = Describe("ImpulseTemplate Controller", func() {
@@ -53,12 +51,7 @@ var _ = Describe("ImpulseTemplate Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: catalogv1alpha1.ImpulseTemplateSpec{
-						TemplateSpec: catalogv1alpha1.TemplateSpec{
-							Version:        "1.0.0",
-							SupportedModes: []enums.WorkloadMode{enums.WorkloadModeDeployment},
-						},
-					},
+					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -76,10 +69,8 @@ var _ = Describe("ImpulseTemplate Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &ImpulseTemplateReconciler{
-				ControllerDependencies: config.ControllerDependencies{
-					Client: k8sClient,
-					Scheme: k8sClient.Scheme(),
-				},
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

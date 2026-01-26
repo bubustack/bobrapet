@@ -25,7 +25,3 @@ go.work
 *.swp
 *.swo
 *~
-
-.DS_Store
-.gocache/
-dist/

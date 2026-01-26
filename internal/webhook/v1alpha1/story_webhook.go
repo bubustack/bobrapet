@@ -18,12 +18,9 @@ package v1alpha1
 
 import (
 	"context"
-	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
@@ -35,7 +32,7 @@ var storylog = logf.Log.WithName("story-resource")
 
 // SetupStoryWebhookWithManager registers the webhook for Story in the manager.
 func SetupStoryWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).For(&bubustackiov1alpha1.Story{}).
+	return ctrl.NewWebhookManagedBy(mgr, &bubustackiov1alpha1.Story{}).
 		WithValidator(&StoryCustomValidator{}).
 		WithDefaulter(&StoryCustomDefaulter{}).
 		Complete()
@@ -54,16 +51,9 @@ type StoryCustomDefaulter struct {
 	// TODO(user): Add more fields as needed for defaulting
 }
 
-var _ webhook.CustomDefaulter = &StoryCustomDefaulter{}
-
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Story.
-func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
-	story, ok := obj.(*bubustackiov1alpha1.Story)
-
-	if !ok {
-		return fmt.Errorf("expected an Story object but got %T", obj)
-	}
-	storylog.Info("Defaulting for Story", "name", story.GetName())
+func (d *StoryCustomDefaulter) Default(_ context.Context, obj *bubustackiov1alpha1.Story) error {
+	storylog.Info("Defaulting for Story", "name", obj.GetName())
 
 	// TODO(user): fill in your defaulting logic.
 
@@ -71,8 +61,7 @@ func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) er
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
-// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
-// Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
+// NOTE: If you want to customise the 'path', use the flags '--defaulting-path' or '--validation-path'.
 // +kubebuilder:webhook:path=/validate-bubustack-io-v1alpha1-story,mutating=false,failurePolicy=fail,sideEffects=None,groups=bubustack.io,resources=stories,verbs=create;update,versions=v1alpha1,name=vstory-v1alpha1.kb.io,admissionReviewVersions=v1
 
 // StoryCustomValidator struct is responsible for validating the Story resource
@@ -84,15 +73,9 @@ type StoryCustomValidator struct {
 	// TODO(user): Add more fields as needed for validation
 }
 
-var _ webhook.CustomValidator = &StoryCustomValidator{}
-
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Story.
-func (v *StoryCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	story, ok := obj.(*bubustackiov1alpha1.Story)
-	if !ok {
-		return nil, fmt.Errorf("expected a Story object but got %T", obj)
-	}
-	storylog.Info("Validation for Story upon creation", "name", story.GetName())
+func (v *StoryCustomValidator) ValidateCreate(_ context.Context, obj *bubustackiov1alpha1.Story) (admission.Warnings, error) {
+	storylog.Info("Validation for Story upon creation", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object creation.
 
@@ -100,12 +83,8 @@ func (v *StoryCustomValidator) ValidateCreate(_ context.Context, obj runtime.Obj
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Story.
-func (v *StoryCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	story, ok := newObj.(*bubustackiov1alpha1.Story)
-	if !ok {
-		return nil, fmt.Errorf("expected a Story object for the newObj but got %T", newObj)
-	}
-	storylog.Info("Validation for Story upon update", "name", story.GetName())
+func (v *StoryCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *bubustackiov1alpha1.Story) (admission.Warnings, error) {
+	storylog.Info("Validation for Story upon update", "name", newObj.GetName())
 
 	// TODO(user): fill in your validation logic upon object update.
 
@@ -113,12 +92,8 @@ func (v *StoryCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj 
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Story.
-func (v *StoryCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	story, ok := obj.(*bubustackiov1alpha1.Story)
-	if !ok {
-		return nil, fmt.Errorf("expected a Story object but got %T", obj)
-	}
-	storylog.Info("Validation for Story upon deletion", "name", story.GetName())
+func (v *StoryCustomValidator) ValidateDelete(_ context.Context, obj *bubustackiov1alpha1.Story) (admission.Warnings, error) {
+	storylog.Info("Validation for Story upon deletion", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object deletion.
 

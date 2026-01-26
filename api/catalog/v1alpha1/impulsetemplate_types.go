@@ -68,7 +68,7 @@ type ImpulseTemplate struct {
 
 	// metadata is a standard object metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of ImpulseTemplate
 	// +required
@@ -76,7 +76,7 @@ type ImpulseTemplate struct {
 
 	// status defines the observed state of ImpulseTemplate
 	// +optional
-	Status ImpulseTemplateStatus `json:"status,omitempty,omitzero"`
+	Status ImpulseTemplateStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -84,7 +84,7 @@ type ImpulseTemplate struct {
 // ImpulseTemplateList contains a list of ImpulseTemplate
 type ImpulseTemplateList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []ImpulseTemplate `json:"items"`
 }
 

@@ -18,12 +18,9 @@ package v1alpha1
 
 import (
 	"context"
-	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
@@ -35,7 +32,7 @@ var storyrunlog = logf.Log.WithName("storyrun-resource")
 
 // SetupStoryRunWebhookWithManager registers the webhook for StoryRun in the manager.
 func SetupStoryRunWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).For(&runsv1alpha1.StoryRun{}).
+	return ctrl.NewWebhookManagedBy(mgr, &runsv1alpha1.StoryRun{}).
 		WithValidator(&StoryRunCustomValidator{}).
 		Complete()
 }
@@ -43,8 +40,7 @@ func SetupStoryRunWebhookWithManager(mgr ctrl.Manager) error {
 // TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
-// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
-// Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
+// NOTE: If you want to customise the 'path', use the flags '--defaulting-path' or '--validation-path'.
 // +kubebuilder:webhook:path=/validate-runs-bubustack-io-v1alpha1-storyrun,mutating=false,failurePolicy=fail,sideEffects=None,groups=runs.bubustack.io,resources=storyruns,verbs=create;update,versions=v1alpha1,name=vstoryrun-v1alpha1.kb.io,admissionReviewVersions=v1
 
 // StoryRunCustomValidator struct is responsible for validating the StoryRun resource
@@ -56,15 +52,9 @@ type StoryRunCustomValidator struct {
 	// TODO(user): Add more fields as needed for validation
 }
 
-var _ webhook.CustomValidator = &StoryRunCustomValidator{}
-
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
-func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	storyrun, ok := obj.(*runsv1alpha1.StoryRun)
-	if !ok {
-		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
-	}
-	storyrunlog.Info("Validation for StoryRun upon creation", "name", storyrun.GetName())
+func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj *runsv1alpha1.StoryRun) (admission.Warnings, error) {
+	storyrunlog.Info("Validation for StoryRun upon creation", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object creation.
 
@@ -72,12 +62,8 @@ func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj runtime.
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
-func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	storyrun, ok := newObj.(*runsv1alpha1.StoryRun)
-	if !ok {
-		return nil, fmt.Errorf("expected a StoryRun object for the newObj but got %T", newObj)
-	}
-	storyrunlog.Info("Validation for StoryRun upon update", "name", storyrun.GetName())
+func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *runsv1alpha1.StoryRun) (admission.Warnings, error) {
+	storyrunlog.Info("Validation for StoryRun upon update", "name", newObj.GetName())
 
 	// TODO(user): fill in your validation logic upon object update.
 
@@ -85,12 +71,8 @@ func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newO
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
-func (v *StoryRunCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	storyrun, ok := obj.(*runsv1alpha1.StoryRun)
-	if !ok {
-		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
-	}
-	storyrunlog.Info("Validation for StoryRun upon deletion", "name", storyrun.GetName())
+func (v *StoryRunCustomValidator) ValidateDelete(_ context.Context, obj *runsv1alpha1.StoryRun) (admission.Warnings, error) {
+	storyrunlog.Info("Validation for StoryRun upon deletion", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object deletion.
 

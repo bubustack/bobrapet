@@ -18,12 +18,9 @@ package v1alpha1
 
 import (
 	"context"
-	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
@@ -35,7 +32,7 @@ var engramlog = logf.Log.WithName("engram-resource")
 
 // SetupEngramWebhookWithManager registers the webhook for Engram in the manager.
 func SetupEngramWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).For(&bubustackiov1alpha1.Engram{}).
+	return ctrl.NewWebhookManagedBy(mgr, &bubustackiov1alpha1.Engram{}).
 		WithValidator(&EngramCustomValidator{}).
 		WithDefaulter(&EngramCustomDefaulter{}).
 		Complete()
@@ -54,16 +51,9 @@ type EngramCustomDefaulter struct {
 	// TODO(user): Add more fields as needed for defaulting
 }
 
-var _ webhook.CustomDefaulter = &EngramCustomDefaulter{}
-
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Engram.
-func (d *EngramCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
-	engram, ok := obj.(*bubustackiov1alpha1.Engram)
-
-	if !ok {
-		return fmt.Errorf("expected an Engram object but got %T", obj)
-	}
-	engramlog.Info("Defaulting for Engram", "name", engram.GetName())
+func (d *EngramCustomDefaulter) Default(_ context.Context, obj *bubustackiov1alpha1.Engram) error {
+	engramlog.Info("Defaulting for Engram", "name", obj.GetName())
 
 	// TODO(user): fill in your defaulting logic.
 
@@ -71,8 +61,7 @@ func (d *EngramCustomDefaulter) Default(_ context.Context, obj runtime.Object) e
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
-// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
-// Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
+// NOTE: If you want to customise the 'path', use the flags '--defaulting-path' or '--validation-path'.
 // +kubebuilder:webhook:path=/validate-bubustack-io-v1alpha1-engram,mutating=false,failurePolicy=fail,sideEffects=None,groups=bubustack.io,resources=engrams,verbs=create;update,versions=v1alpha1,name=vengram-v1alpha1.kb.io,admissionReviewVersions=v1
 
 // EngramCustomValidator struct is responsible for validating the Engram resource
@@ -84,15 +73,9 @@ type EngramCustomValidator struct {
 	// TODO(user): Add more fields as needed for validation
 }
 
-var _ webhook.CustomValidator = &EngramCustomValidator{}
-
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Engram.
-func (v *EngramCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	engram, ok := obj.(*bubustackiov1alpha1.Engram)
-	if !ok {
-		return nil, fmt.Errorf("expected a Engram object but got %T", obj)
-	}
-	engramlog.Info("Validation for Engram upon creation", "name", engram.GetName())
+func (v *EngramCustomValidator) ValidateCreate(_ context.Context, obj *bubustackiov1alpha1.Engram) (admission.Warnings, error) {
+	engramlog.Info("Validation for Engram upon creation", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object creation.
 
@@ -100,12 +83,8 @@ func (v *EngramCustomValidator) ValidateCreate(_ context.Context, obj runtime.Ob
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Engram.
-func (v *EngramCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	engram, ok := newObj.(*bubustackiov1alpha1.Engram)
-	if !ok {
-		return nil, fmt.Errorf("expected a Engram object for the newObj but got %T", newObj)
-	}
-	engramlog.Info("Validation for Engram upon update", "name", engram.GetName())
+func (v *EngramCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *bubustackiov1alpha1.Engram) (admission.Warnings, error) {
+	engramlog.Info("Validation for Engram upon update", "name", newObj.GetName())
 
 	// TODO(user): fill in your validation logic upon object update.
 
@@ -113,12 +92,8 @@ func (v *EngramCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Engram.
-func (v *EngramCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	engram, ok := obj.(*bubustackiov1alpha1.Engram)
-	if !ok {
-		return nil, fmt.Errorf("expected a Engram object but got %T", obj)
-	}
-	engramlog.Info("Validation for Engram upon deletion", "name", engram.GetName())
+func (v *EngramCustomValidator) ValidateDelete(_ context.Context, obj *bubustackiov1alpha1.Engram) (admission.Warnings, error) {
+	engramlog.Info("Validation for Engram upon deletion", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object deletion.
 

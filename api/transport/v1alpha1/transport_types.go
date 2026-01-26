@@ -67,7 +67,7 @@ type Transport struct {
 
 	// metadata is a standard object metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of Transport
 	// +required
@@ -75,7 +75,7 @@ type Transport struct {
 
 	// status defines the observed state of Transport
 	// +optional
-	Status TransportStatus `json:"status,omitempty,omitzero"`
+	Status TransportStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -83,7 +83,7 @@ type Transport struct {
 // TransportList contains a list of Transport
 type TransportList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []Transport `json:"items"`
 }
 

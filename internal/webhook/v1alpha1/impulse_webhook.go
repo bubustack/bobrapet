@@ -18,12 +18,9 @@ package v1alpha1
 
 import (
 	"context"
-	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
@@ -35,7 +32,7 @@ var impulselog = logf.Log.WithName("impulse-resource")
 
 // SetupImpulseWebhookWithManager registers the webhook for Impulse in the manager.
 func SetupImpulseWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).For(&bubustackiov1alpha1.Impulse{}).
+	return ctrl.NewWebhookManagedBy(mgr, &bubustackiov1alpha1.Impulse{}).
 		WithValidator(&ImpulseCustomValidator{}).
 		WithDefaulter(&ImpulseCustomDefaulter{}).
 		Complete()
@@ -54,16 +51,9 @@ type ImpulseCustomDefaulter struct {
 	// TODO(user): Add more fields as needed for defaulting
 }
 
-var _ webhook.CustomDefaulter = &ImpulseCustomDefaulter{}
-
 // Default implements webhook.CustomDefaulter so a webhook will be registered for the Kind Impulse.
-func (d *ImpulseCustomDefaulter) Default(_ context.Context, obj runtime.Object) error {
-	impulse, ok := obj.(*bubustackiov1alpha1.Impulse)
-
-	if !ok {
-		return fmt.Errorf("expected an Impulse object but got %T", obj)
-	}
-	impulselog.Info("Defaulting for Impulse", "name", impulse.GetName())
+func (d *ImpulseCustomDefaulter) Default(_ context.Context, obj *bubustackiov1alpha1.Impulse) error {
+	impulselog.Info("Defaulting for Impulse", "name", obj.GetName())
 
 	// TODO(user): fill in your defaulting logic.
 
@@ -71,8 +61,7 @@ func (d *ImpulseCustomDefaulter) Default(_ context.Context, obj runtime.Object) 
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
-// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
-// Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
+// NOTE: If you want to customise the 'path', use the flags '--defaulting-path' or '--validation-path'.
 // +kubebuilder:webhook:path=/validate-bubustack-io-v1alpha1-impulse,mutating=false,failurePolicy=fail,sideEffects=None,groups=bubustack.io,resources=impulses,verbs=create;update,versions=v1alpha1,name=vimpulse-v1alpha1.kb.io,admissionReviewVersions=v1
 
 // ImpulseCustomValidator struct is responsible for validating the Impulse resource
@@ -84,15 +73,9 @@ type ImpulseCustomValidator struct {
 	// TODO(user): Add more fields as needed for validation
 }
 
-var _ webhook.CustomValidator = &ImpulseCustomValidator{}
-
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
-func (v *ImpulseCustomValidator) ValidateCreate(_ context.Context, obj runtime.Object) (admission.Warnings, error) {
-	impulse, ok := obj.(*bubustackiov1alpha1.Impulse)
-	if !ok {
-		return nil, fmt.Errorf("expected a Impulse object but got %T", obj)
-	}
-	impulselog.Info("Validation for Impulse upon creation", "name", impulse.GetName())
+func (v *ImpulseCustomValidator) ValidateCreate(_ context.Context, obj *bubustackiov1alpha1.Impulse) (admission.Warnings, error) {
+	impulselog.Info("Validation for Impulse upon creation", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object creation.
 
@@ -100,12 +83,8 @@ func (v *ImpulseCustomValidator) ValidateCreate(_ context.Context, obj runtime.O
 }
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
-func (v *ImpulseCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	impulse, ok := newObj.(*bubustackiov1alpha1.Impulse)
-	if !ok {
-		return nil, fmt.Errorf("expected a Impulse object for the newObj but got %T", newObj)
-	}
-	impulselog.Info("Validation for Impulse upon update", "name", impulse.GetName())
+func (v *ImpulseCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *bubustackiov1alpha1.Impulse) (admission.Warnings, error) {
+	impulselog.Info("Validation for Impulse upon update", "name", newObj.GetName())
 
 	// TODO(user): fill in your validation logic upon object update.
 
@@ -113,12 +92,8 @@ func (v *ImpulseCustomValidator) ValidateUpdate(_ context.Context, oldObj, newOb
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type Impulse.
-func (v *ImpulseCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	impulse, ok := obj.(*bubustackiov1alpha1.Impulse)
-	if !ok {
-		return nil, fmt.Errorf("expected a Impulse object but got %T", obj)
-	}
-	impulselog.Info("Validation for Impulse upon deletion", "name", impulse.GetName())
+func (v *ImpulseCustomValidator) ValidateDelete(_ context.Context, obj *bubustackiov1alpha1.Impulse) (admission.Warnings, error) {
+	impulselog.Info("Validation for Impulse upon deletion", "name", obj.GetName())
 
 	// TODO(user): fill in your validation logic upon object deletion.
 

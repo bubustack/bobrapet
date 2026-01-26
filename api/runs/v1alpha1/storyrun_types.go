@@ -67,7 +67,7 @@ type StoryRun struct {
 
 	// metadata is a standard object metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of StoryRun
 	// +required
@@ -75,7 +75,7 @@ type StoryRun struct {
 
 	// status defines the observed state of StoryRun
 	// +optional
-	Status StoryRunStatus `json:"status,omitempty,omitzero"`
+	Status StoryRunStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -83,7 +83,7 @@ type StoryRun struct {
 // StoryRunList contains a list of StoryRun
 type StoryRunList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []StoryRun `json:"items"`
 }
 

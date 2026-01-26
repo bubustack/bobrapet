@@ -68,7 +68,7 @@ type EngramTemplate struct {
 
 	// metadata is a standard object metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of EngramTemplate
 	// +required
@@ -76,7 +76,7 @@ type EngramTemplate struct {
 
 	// status defines the observed state of EngramTemplate
 	// +optional
-	Status EngramTemplateStatus `json:"status,omitempty,omitzero"`
+	Status EngramTemplateStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -84,7 +84,7 @@ type EngramTemplate struct {
 // EngramTemplateList contains a list of EngramTemplate
 type EngramTemplateList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []EngramTemplate `json:"items"`
 }
 

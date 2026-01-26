@@ -67,7 +67,7 @@ type StepRun struct {
 
 	// metadata is a standard object metadata
 	// +optional
-	metav1.ObjectMeta `json:"metadata,omitempty,omitzero"`
+	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of StepRun
 	// +required
@@ -75,7 +75,7 @@ type StepRun struct {
 
 	// status defines the observed state of StepRun
 	// +optional
-	Status StepRunStatus `json:"status,omitempty,omitzero"`
+	Status StepRunStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true
@@ -83,7 +83,7 @@ type StepRun struct {
 // StepRunList contains a list of StepRun
 type StepRunList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitempty"`
+	metav1.ListMeta `json:"metadata,omitzero"`
 	Items           []StepRun `json:"items"`
 }
 

@@ -8,16 +8,21 @@ metadata:
 spec:
   group: transport.bubustack.io
   names:
+    categories:
+    - bubu
+    - ai
     kind: Transport
     listKind: TransportList
     plural: transports
+    shortNames:
+    - transport
     singular: transport
-  scope: Namespaced
+  scope: Cluster
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Transport is the Schema for the transports API
+        description: Transport defines a reusable transport configuration.
         properties:
           apiVersion:
             description: |-
@@ -37,27 +42,171 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Transport
+            description: TransportSpec defines a provider-neutral transport description.
             properties:
-              foo:
-                description: foo is an example field of Transport. Edit transport_types.go
-                  to remove/update
+              configSchema:
+                description: configSchema optionally captures a JSONSchema for provider-specific
+                  settings.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              connectorImage:
+                description: connectorImage optionally declares the recommended connector
+                  image implementing this driver.
                 type: string
+              defaultSettings:
+                description: defaultSettings contains default provider-specific settings
+                  serialized as JSON.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              driver:
+                description: driver is the connector driver identifier that should
+                  be used for bindings.
+                minLength: 1
+                type: string
+              provider:
+                description: provider is the human-readable provider name (e.g., livekit,
+                  twilio, custom).
+                minLength: 1
+                type: string
+              supportedAudio:
+                description: supportedAudio lists the audio codecs supported by this
+                  transport.
+                items:
+                  description: AudioCodec describes a negotiated audio codec.
+                  properties:
+                    channels:
+                      description: channels indicates the number of channels carried
+                        by this codec.
+                      format: int32
+                      type: integer
+                    name:
+                      description: name of the codec (e.g., pcm16, opus, g711-mu)
+                      enum:
+                      - pcm16
+                      - pcm24
+                      - opus
+                      - g711-mu
+                      - g711-a
+                      - g722
+                      - aac
+                      - mp3
+                      - flac
+                      - raw
+                      type: string
+                    sampleRateHz:
+                      description: sampleRateHz indicates the sampling rate for this
+                        codec.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              supportedBinary:
+                description: supportedBinary lists MIME types supported for generic
+                  binary payloads.
+                items:
+                  type: string
+                type: array
+              supportedVideo:
+                description: supportedVideo lists the video codecs supported by this
+                  transport.
+                items:
+                  description: VideoCodec describes a negotiated video codec or raw
+                    pixel format.
+                  properties:
+                    name:
+                      description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                      enum:
+                      - h264
+                      - vp8
+                      - vp9
+                      - av1
+                      - raw-yuv420
+                      - raw-rgb
+                      - raw-bgr
+                      type: string
+                    profile:
+                      description: profile or format hint (e.g., baseline, high, rgb)
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - driver
+            - provider
             type: object
           status:
-            description: status defines the observed state of Transport
+            description: TransportStatus reports validation/usage state for a transport
+              template.
             properties:
+              availableAudio:
+                description: negotiatedAudio lists the codecs the connector actually
+                  exposes/negotiates.
+                items:
+                  description: AudioCodec describes a negotiated audio codec.
+                  properties:
+                    channels:
+                      description: channels indicates the number of channels carried
+                        by this codec.
+                      format: int32
+                      type: integer
+                    name:
+                      description: name of the codec (e.g., pcm16, opus, g711-mu)
+                      enum:
+                      - pcm16
+                      - pcm24
+                      - opus
+                      - g711-mu
+                      - g711-a
+                      - g722
+                      - aac
+                      - mp3
+                      - flac
+                      - raw
+                      type: string
+                    sampleRateHz:
+                      description: sampleRateHz indicates the sampling rate for this
+                        codec.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              availableBinary:
+                description: negotiatedBinary lists MIME types the connector supports
+                  for binary payloads.
+                items:
+                  type: string
+                type: array
+              availableVideo:
+                description: negotiatedVideo lists the video codecs the connector
+                  supports.
+                items:
+                  description: VideoCodec describes a negotiated video codec or raw
+                    pixel format.
+                  properties:
+                    name:
+                      description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                      enum:
+                      - h264
+                      - vp8
+                      - vp9
+                      - av1
+                      - raw-yuv420
+                      - raw-rgb
+                      - raw-bgr
+                      type: string
+                    profile:
+                      description: profile or format hint (e.g., baseline, high, rgb)
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               conditions:
-                description: |-
-                  conditions represent the current state of the Transport resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -113,9 +262,35 @@ spec:
                   - type
                   type: object
                 type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
+              lastHeartbeatTime:
+                description: lastHeartbeat records when a binding last reported capabilities.
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              pendingBindings:
+                description: pendingBindings tracks how many bindings still await
+                  negotiation.
+                format: int32
+                type: integer
+              usageCount:
+                format: int32
+                type: integer
+              validationErrors:
+                items:
+                  type: string
+                type: array
+              validationStatus:
+                description: |-
+                  ValidationStatus defines template validation states.
+                  Templates undergo validation to ensure they're properly configured and secure.
+                enum:
+                - valid
+                - invalid
+                - unknown
+                - pending
+                type: string
             type: object
         required:
         - spec

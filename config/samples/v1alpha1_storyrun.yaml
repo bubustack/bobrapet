@@ -1,0 +1,10 @@
+apiVersion: runs.bubustack.io/v1alpha1
+kind: StoryRun
+metadata:
+  name: summarize-trigger
+  namespace: default
+spec:
+  storyRef:
+    name: summarize-website-story
+  inputs:
+    url: https://kubernetes.io/docs/concepts/overview/

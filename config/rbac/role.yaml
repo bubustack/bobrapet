@@ -5,14 +5,85 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - bubustack.io
   resources:
   - engrams
   - impulses
   - stories
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -42,20 +113,9 @@ rules:
   - engramtemplates
   - impulsetemplates
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
-- apiGroups:
-  - catalog.bubustack.io
-  resources:
-  - engramtemplates/finalizers
-  - impulsetemplates/finalizers
-  verbs:
-  - update
 - apiGroups:
   - catalog.bubustack.io
   resources:
@@ -65,6 +125,19 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
 - apiGroups:
   - runs.bubustack.io
   resources:
@@ -98,7 +171,36 @@ rules:
   - transport.bubustack.io
   resources:
   - transportbindings
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transport.bubustack.io
+  resources:
+  - transportbindings/status
+  - transports/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - transport.bubustack.io
+  resources:
   - transports
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - transportutil.bubustack.io
+  resources:
+  - transportbindings
   verbs:
   - create
   - delete
@@ -108,17 +210,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - transport.bubustack.io
-  resources:
-  - transportbindings/finalizers
-  - transports/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - transport.bubustack.io
+  - transportutil.bubustack.io
   resources:
   - transportbindings/status
-  - transports/status
   verbs:
   - get
   - patch

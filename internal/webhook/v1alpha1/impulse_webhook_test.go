@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,21 +20,21 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	// TODO (user): Add any additional imports if needed
 )
 
 var _ = Describe("Impulse Webhook", func() {
 	var (
-		obj       *bubustackiov1alpha1.Impulse
-		oldObj    *bubustackiov1alpha1.Impulse
+		obj       *bubushv1alpha1.Impulse
+		oldObj    *bubushv1alpha1.Impulse
 		validator ImpulseCustomValidator
 		defaulter ImpulseCustomDefaulter
 	)
 
 	BeforeEach(func() {
-		obj = &bubustackiov1alpha1.Impulse{}
-		oldObj = &bubustackiov1alpha1.Impulse{}
+		obj = &bubushv1alpha1.Impulse{}
+		oldObj = &bubushv1alpha1.Impulse{}
 		validator = ImpulseCustomValidator{}
 		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
 		defaulter = ImpulseCustomDefaulter{}

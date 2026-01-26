@@ -1,12 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
 ## Append samples of your project ##
 resources:
 - v1alpha1_story.yaml
 - v1alpha1_engram.yaml
 - v1alpha1_impulse.yaml
 - runs_v1alpha1_storyrun.yaml
-- runs_v1alpha1_steprun.yaml
 - catalog_v1alpha1_engramtemplate.yaml
+- catalog_v1alpha1_engramtemplate_with_probes.yaml
 - catalog_v1alpha1_impulsetemplate.yaml
-- transport_v1alpha1_transport.yaml
-- transport_v1alpha1_transportbinding.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

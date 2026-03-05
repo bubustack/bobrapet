@@ -8,16 +8,21 @@ metadata:
 spec:
   group: transport.bubustack.io
   names:
+    categories:
+    - bubu
+    - ai
     kind: Transport
     listKind: TransportList
     plural: transports
+    shortNames:
+    - transport
     singular: transport
-  scope: Namespaced
+  scope: Cluster
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Transport is the Schema for the transports API
+        description: Transport defines a reusable transport configuration.
         properties:
           apiVersion:
             description: |-
@@ -39,25 +44,580 @@ spec:
           spec:
             description: spec defines the desired state of Transport
             properties:
-              foo:
-                description: foo is an example field of Transport. Edit transport_types.go
-                  to remove/update
+              configSchema:
+                description: configSchema optionally captures a JSONSchema for provider-specific
+                  settings.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              connectorImage:
+                description: connectorImage optionally declares the recommended connector
+                  image implementing this driver.
                 type: string
+              defaultSettings:
+                description: defaultSettings contains default provider-specific settings
+                  serialized as JSON.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              driver:
+                description: driver is the connector driver identifier that should
+                  be used for bindings.
+                minLength: 1
+                type: string
+              provider:
+                description: provider is the human-readable provider name (e.g., livekit,
+                  twilio, custom).
+                minLength: 1
+                type: string
+              streaming:
+                description: streaming configures default streaming policies such
+                  as backpressure, flow control, and delivery.
+                properties:
+                  backpressure:
+                    description: Backpressure configures buffer limits and overflow
+                      behavior.
+                    properties:
+                      buffer:
+                        description: Buffer configures queue limits and drop policy.
+                        properties:
+                          dropPolicy:
+                            description: DropPolicy selects which messages to drop
+                              when the buffer is full.
+                            enum:
+                            - drop_newest
+                            - drop_oldest
+                            type: string
+                          maxAgeSeconds:
+                            description: MaxAgeSeconds caps the time a message can
+                              remain buffered.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          maxBytes:
+                            description: MaxBytes caps the total bytes buffered.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          maxMessages:
+                            description: MaxMessages caps the number of buffered messages.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                        type: object
+                    type: object
+                  delivery:
+                    description: Delivery configures ordering, delivery semantics,
+                      and replay.
+                    properties:
+                      ordering:
+                        description: Ordering controls ordering guarantees.
+                        enum:
+                        - none
+                        - per_stream
+                        - per_partition
+                        type: string
+                      replay:
+                        description: Replay configures replay/retention.
+                        properties:
+                          checkpointInterval:
+                            description: CheckpointInterval sets how frequently checkpoints
+                              are persisted (duration string, e.g., "1s").
+                            type: string
+                          mode:
+                            description: Mode selects replay storage mode.
+                            enum:
+                            - none
+                            - memory
+                            - durable
+                            type: string
+                          retentionSeconds:
+                            description: RetentionSeconds sets how long replay data
+                              is retained.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                        type: object
+                      semantics:
+                        description: Semantics controls delivery semantics.
+                        enum:
+                        - best_effort
+                        - at_least_once
+                        type: string
+                    type: object
+                  fanIn:
+                    description: FanIn configures how multiple upstream steps are
+                      joined at fan-in points.
+                    properties:
+                      maxEntries:
+                        description: MaxEntries caps the number of concurrent fan-in
+                          joins retained in memory.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      mode:
+                        description: Mode controls whether all, any, or a quorum of
+                          upstreams are required.
+                        enum:
+                        - all
+                        - any
+                        - quorum
+                        type: string
+                      quorum:
+                        description: Quorum sets the minimum number of upstreams required
+                          when Mode=quorum.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      timeoutSeconds:
+                        description: TimeoutSeconds caps how long fan-in will wait
+                          before giving up.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
+                  flowControl:
+                    description: FlowControl configures credit/window-based flow control.
+                    properties:
+                      ackEvery:
+                        description: AckEvery controls how frequently acks/credits
+                          are emitted.
+                        properties:
+                          bytes:
+                            description: Bytes is the ack interval in bytes.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          maxDelay:
+                            description: MaxDelay caps the time between ack/credit
+                              emissions (duration string, e.g., "250ms").
+                            type: string
+                          messages:
+                            description: Messages is the ack interval in messages.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                        type: object
+                      initialCredits:
+                        description: InitialCredits sets the initial credit window
+                          for credits/window mode.
+                        properties:
+                          bytes:
+                            description: Bytes is the credit window in bytes.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          messages:
+                            description: Messages is the credit window in messages.
+                            format: int32
+                            minimum: 0
+                            type: integer
+                        type: object
+                      mode:
+                        description: Mode selects the flow-control strategy.
+                        enum:
+                        - none
+                        - credits
+                        - window
+                        type: string
+                      pauseThreshold:
+                        description: PauseThreshold sets the buffer utilization (0-1)
+                          that pauses upstream.
+                        properties:
+                          bufferPct:
+                            description: BufferPct defines the buffer utilization
+                              threshold as a percent (0-100).
+                            format: int32
+                            maximum: 100
+                            minimum: 0
+                            type: integer
+                        type: object
+                      resumeThreshold:
+                        description: ResumeThreshold sets the buffer utilization (0-1)
+                          that resumes upstream.
+                        properties:
+                          bufferPct:
+                            description: BufferPct defines the buffer utilization
+                              threshold as a percent (0-100).
+                            format: int32
+                            maximum: 100
+                            minimum: 0
+                            type: integer
+                        type: object
+                    type: object
+                  lanes:
+                    description: Lanes declares named streaming lanes (audio/video/binary/payload)
+                      and per-lane caps.
+                    items:
+                      description: TransportLane declares a named lane and optional
+                        per-lane caps.
+                      properties:
+                        description:
+                          description: Description provides optional human-readable
+                            context.
+                          type: string
+                        direction:
+                          description: Direction declares whether the lane is publish/subscribe/bidirectional.
+                          enum:
+                          - publish
+                          - subscribe
+                          - bidirectional
+                          type: string
+                        kind:
+                          description: Kind declares the lane media/payload type.
+                          enum:
+                          - audio
+                          - video
+                          - binary
+                          - payload
+                          - control
+                          type: string
+                        maxBytes:
+                          description: MaxBytes caps buffered bytes for this lane
+                            (applies per downstream).
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        maxMessages:
+                          description: MaxMessages caps buffered messages for this
+                            lane (applies per downstream).
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        name:
+                          description: Name identifies the lane (e.g., "audio", "telemetry").
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    type: array
+                  lifecycle:
+                    description: Lifecycle configures drain/cutover and in-flight
+                      guardrails.
+                    properties:
+                      drainTimeoutSeconds:
+                        description: DrainTimeoutSeconds caps how long to drain in-flight
+                          messages before cutover.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      maxInFlight:
+                        description: MaxInFlight caps the number of in-flight messages
+                          allowed during upgrades.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      strategy:
+                        description: Strategy controls upgrade behavior for streaming
+                          workloads.
+                        enum:
+                        - rolling
+                        - drain_cutover
+                        - blue_green
+                        type: string
+                    type: object
+                  observability:
+                    description: Observability configures metrics, tracing, and watermark
+                      tracking.
+                    properties:
+                      metrics:
+                        description: Metrics controls per-lane and hub-level metrics
+                          emission.
+                        properties:
+                          enabled:
+                            description: Enabled toggles metrics emission (default
+                              true).
+                            type: boolean
+                        type: object
+                      tracing:
+                        description: Tracing controls distributed tracing hooks.
+                        properties:
+                          enabled:
+                            description: Enabled toggles tracing emission (default
+                              true).
+                            type: boolean
+                          samplePolicy:
+                            description: SamplePolicy selects the sampling policy
+                              (e.g., "rate", "rules").
+                            type: string
+                          sampleRate:
+                            description: SampleRate controls sampling percentage (0..100).
+                            format: int32
+                            maximum: 100
+                            minimum: 0
+                            type: integer
+                        type: object
+                      watermark:
+                        description: Watermark controls event-time watermark/lag tracking.
+                        properties:
+                          enabled:
+                            description: Enabled toggles watermark and lag tracking.
+                            type: boolean
+                          timestampSource:
+                            description: TimestampSource selects the source for event-time
+                              timestamps (e.g., "metadata.event_time_ms").
+                            type: string
+                        type: object
+                    type: object
+                  partitioning:
+                    description: Partitioning configures partition assignment for
+                      streaming envelopes.
+                    properties:
+                      key:
+                        description: Key selects the value used for hash partitioning
+                          (e.g., "metadata.user_id" or "payload.session").
+                        type: string
+                      mode:
+                        description: Mode selects how to assign partition IDs.
+                        enum:
+                        - none
+                        - preserve
+                        - hash
+                        type: string
+                      partitions:
+                        description: Partitions sets the total number of partitions
+                          used for hash mode.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      sticky:
+                        description: Sticky keeps an existing partition assignment
+                          if present.
+                        type: boolean
+                    type: object
+                  recording:
+                    description: Recording configures optional stream recording/sampling
+                      behavior.
+                    properties:
+                      mode:
+                        description: Mode controls whether metadata-only or full payloads
+                          are recorded.
+                        enum:
+                        - "off"
+                        - metadata
+                        - payload
+                        type: string
+                      redactFields:
+                        description: RedactFields lists JSON field paths to redact
+                          (e.g., "payload.api_key").
+                        items:
+                          type: string
+                        type: array
+                      retentionSeconds:
+                        description: RetentionSeconds sets how long recordings should
+                          be retained.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      sampleRate:
+                        description: SampleRate controls recording sampling percentage
+                          (0..100).
+                        format: int32
+                        maximum: 100
+                        minimum: 0
+                        type: integer
+                    type: object
+                  routing:
+                    description: Routing configures topology selection and fan-out
+                      policy.
+                    properties:
+                      fanOut:
+                        description: FanOut controls dispatch when multiple downstream
+                          steps consume a stream.
+                        enum:
+                        - sequential
+                        - parallel
+                        type: string
+                      maxDownstreams:
+                        description: MaxDownstreams caps the number of downstream
+                          targets per step (guardrail).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      mode:
+                        description: Mode selects the routing topology (auto chooses
+                          based on DAG analysis).
+                        enum:
+                        - auto
+                        - hub
+                        - p2p
+                        type: string
+                      rules:
+                        description: Rules define conditional routing filters evaluated
+                          per packet.
+                        items:
+                          description: TransportRoutingRule defines conditional routing
+                            behavior for downstream steps.
+                          properties:
+                            action:
+                              description: Action controls whether matching targets
+                                are allowed or denied.
+                              enum:
+                              - allow
+                              - deny
+                              type: string
+                            name:
+                              description: Name is an optional identifier for observability/debugging.
+                              type: string
+                            target:
+                              description: Target selects which downstream steps this
+                                rule applies to.
+                              properties:
+                                steps:
+                                  description: Steps lists downstream step names that
+                                    the rule applies to. Empty means all downstream
+                                    steps.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            when:
+                              description: When is a Go template expression evaluated
+                                against the streaming runtime scope.
+                              type: string
+                          type: object
+                        type: array
+                    type: object
+                type: object
+              supportedAudio:
+                description: supportedAudio lists the audio codecs supported by this
+                  transport.
+                items:
+                  description: AudioCodec describes a negotiated audio codec.
+                  properties:
+                    channels:
+                      description: channels indicates the number of channels carried
+                        by this codec.
+                      format: int32
+                      type: integer
+                    name:
+                      description: name of the codec (e.g., pcm16, opus, g711-mu)
+                      enum:
+                      - pcm16
+                      - pcm24
+                      - opus
+                      - g711-mu
+                      - g711-a
+                      - g722
+                      - aac
+                      - mp3
+                      - flac
+                      - raw
+                      type: string
+                    sampleRateHz:
+                      description: sampleRateHz indicates the sampling rate for this
+                        codec.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              supportedBinary:
+                description: supportedBinary lists MIME types supported for generic
+                  binary payloads.
+                items:
+                  type: string
+                type: array
+              supportedVideo:
+                description: supportedVideo lists the video codecs supported by this
+                  transport.
+                items:
+                  description: VideoCodec describes a negotiated video codec or raw
+                    pixel format.
+                  properties:
+                    name:
+                      description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                      enum:
+                      - h264
+                      - vp8
+                      - vp9
+                      - av1
+                      - raw-yuv420
+                      - raw-rgb
+                      - raw-bgr
+                      type: string
+                    profile:
+                      description: profile or format hint (e.g., baseline, high, rgb)
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
+            required:
+            - driver
+            - provider
             type: object
           status:
             description: status defines the observed state of Transport
             properties:
+              availableAudio:
+                description: negotiatedAudio lists the codecs the connector actually
+                  exposes/negotiates.
+                items:
+                  description: AudioCodec describes a negotiated audio codec.
+                  properties:
+                    channels:
+                      description: channels indicates the number of channels carried
+                        by this codec.
+                      format: int32
+                      type: integer
+                    name:
+                      description: name of the codec (e.g., pcm16, opus, g711-mu)
+                      enum:
+                      - pcm16
+                      - pcm24
+                      - opus
+                      - g711-mu
+                      - g711-a
+                      - g722
+                      - aac
+                      - mp3
+                      - flac
+                      - raw
+                      type: string
+                    sampleRateHz:
+                      description: sampleRateHz indicates the sampling rate for this
+                        codec.
+                      format: int32
+                      type: integer
+                  required:
+                  - name
+                  type: object
+                type: array
+              availableBinary:
+                description: negotiatedBinary lists MIME types the connector supports
+                  for binary payloads.
+                items:
+                  type: string
+                type: array
+              availableVideo:
+                description: negotiatedVideo lists the video codecs the connector
+                  supports.
+                items:
+                  description: VideoCodec describes a negotiated video codec or raw
+                    pixel format.
+                  properties:
+                    name:
+                      description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                      enum:
+                      - h264
+                      - vp8
+                      - vp9
+                      - av1
+                      - raw-yuv420
+                      - raw-rgb
+                      - raw-bgr
+                      type: string
+                    profile:
+                      description: profile or format hint (e.g., baseline, high, rgb)
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               conditions:
-                description: |-
-                  conditions represent the current state of the Transport resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -113,9 +673,35 @@ spec:
                   - type
                   type: object
                 type: array
-                x-kubernetes-list-map-keys:
-                - type
-                x-kubernetes-list-type: map
+              lastHeartbeatTime:
+                description: lastHeartbeat records when a binding last reported capabilities.
+                format: date-time
+                type: string
+              observedGeneration:
+                format: int64
+                type: integer
+              pendingBindings:
+                description: pendingBindings tracks how many bindings still await
+                  negotiation.
+                format: int32
+                type: integer
+              usageCount:
+                format: int32
+                type: integer
+              validationErrors:
+                items:
+                  type: string
+                type: array
+              validationStatus:
+                description: |-
+                  ValidationStatus defines template validation states.
+                  Templates undergo validation to ensure they're properly configured and secure.
+                enum:
+                - valid
+                - invalid
+                - unknown
+                - pending
+                type: string
             type: object
         required:
         - spec

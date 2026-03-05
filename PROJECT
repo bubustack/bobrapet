@@ -104,4 +104,12 @@ resources:
   kind: TransportBinding
   path: github.com/bubustack/bobrapet/api/transport/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  domain: bubustack.io
+  group: policy
+  kind: ReferenceGrant
+  path: github.com/bubustack/bobrapet/api/policy/v1alpha1
+  version: v1alpha1
 version: "3"

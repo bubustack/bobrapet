@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,29 +18,62 @@ package v1alpha1
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"strings"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/internal/config"
+	webhookshared "github.com/bubustack/bobrapet/internal/webhook/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/refs"
+	runsidentity "github.com/bubustack/bobrapet/pkg/runs/identity"
+	"k8s.io/apimachinery/pkg/api/errors"
 )
 
-// nolint:unused
 // log is for logging in this package.
 var storyrunlog = logf.Log.WithName("storyrun-resource")
 
-// SetupStoryRunWebhookWithManager registers the webhook for StoryRun in the manager.
-func SetupStoryRunWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr, &runsv1alpha1.StoryRun{}).
-		WithValidator(&StoryRunCustomValidator{}).
+type StoryRunWebhook struct {
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
+}
+
+// SetupWebhookWithManager registers the StoryRun validating webhook with the manager.
+//
+// Behavior:
+//   - Creates a validating webhook for StoryRun resources.
+//   - Uses mgr.GetAPIReader() so admission checks read authoritative API state.
+//   - Injects Config and ConfigManager into the validator.
+//
+// Arguments:
+//   - mgr ctrl.Manager: the controller-runtime manager.
+//
+// Returns:
+//   - nil on success.
+//   - Error if webhook registration fails.
+func (wh *StoryRunWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr).
+		For(&runsv1alpha1.StoryRun{}).
+		WithValidator(&StoryRunCustomValidator{
+			Client:        mgr.GetAPIReader(),
+			Config:        wh.Config,
+			ConfigManager: wh.ConfigManager,
+		}).
 		Complete()
 }
 
-// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-
-// TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
-// NOTE: If you want to customise the 'path', use the flags '--defaulting-path' or '--validation-path'.
+// NOTE: The 'path' attribute must follow a specific pattern and should not be modified directly here.
+// Modifying the path for an invalid path can cause API server errors; failing to locate the webhook.
 // +kubebuilder:webhook:path=/validate-runs-bubustack-io-v1alpha1-storyrun,mutating=false,failurePolicy=fail,sideEffects=None,groups=runs.bubustack.io,resources=storyruns,verbs=create;update,versions=v1alpha1,name=vstoryrun-v1alpha1.kb.io,admissionReviewVersions=v1
 
 // StoryRunCustomValidator struct is responsible for validating the StoryRun resource
@@ -49,32 +82,427 @@ func SetupStoryRunWebhookWithManager(mgr ctrl.Manager) error {
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
 type StoryRunCustomValidator struct {
-	// TODO(user): Add more fields as needed for validation
+	Client        client.Reader
+	Config        *config.ControllerConfig
+	ConfigManager *config.OperatorConfigManager
 }
 
-// ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
-func (v *StoryRunCustomValidator) ValidateCreate(_ context.Context, obj *runsv1alpha1.StoryRun) (admission.Warnings, error) {
-	storyrunlog.Info("Validation for StoryRun upon creation", "name", obj.GetName())
+var _ webhook.CustomValidator = &StoryRunCustomValidator{}
 
-	// TODO(user): fill in your validation logic upon object creation.
-
-	return nil, nil
+// controllerConfig returns the effective controller configuration.
+//
+// Behavior:
+//   - Delegates to webhookshared.ResolveControllerConfig for unified config resolution.
+//
+// Returns:
+//   - Non-nil *config.ControllerConfig from the highest priority source.
+func (v *StoryRunCustomValidator) controllerConfig() *config.ControllerConfig {
+	return webhookshared.ResolveControllerConfig(storyrunlog, v.ConfigManager, v.Config)
 }
 
-// ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
-func (v *StoryRunCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj *runsv1alpha1.StoryRun) (admission.Warnings, error) {
-	storyrunlog.Info("Validation for StoryRun upon update", "name", newObj.GetName())
-
-	// TODO(user): fill in your validation logic upon object update.
-
-	return nil, nil
+// ValidateCreate implements webhook.CustomValidator for StoryRun creation.
+//
+// Behavior:
+//   - Type-asserts obj to StoryRun and validates spec.
+//   - Validates storyRef.name is set and Story exists.
+//   - Validates inputs shape, size, and schema against Story.
+//
+// Arguments:
+//   - ctx context.Context: for Story lookup.
+//   - obj runtime.Object: expected to be *runsv1alpha1.StoryRun.
+//
+// Returns:
+//   - nil, nil if validation passes.
+//   - nil, error if type assertion fails or validation errors exist.
+func (v *StoryRunCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	sr, ok := obj.(*runsv1alpha1.StoryRun)
+	if !ok {
+		return nil, fmt.Errorf("expected a StoryRun object but got %T", obj)
+	}
+	storyrunlog.Info("Validation for StoryRun upon creation", "name", sr.GetName())
+	story, err := v.validateStoryRun(ctx, sr)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateTriggerTokenName(sr); err != nil {
+		return nil, err
+	}
+	if err := validateTriggerInputHashOnCreate(sr); err != nil {
+		return nil, err
+	}
+	return warnOffloadedInputs(story, sr), nil
 }
 
-// ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type StoryRun.
-func (v *StoryRunCustomValidator) ValidateDelete(_ context.Context, obj *runsv1alpha1.StoryRun) (admission.Warnings, error) {
-	storyrunlog.Info("Validation for StoryRun upon deletion", "name", obj.GetName())
+// ValidateUpdate implements webhook.CustomValidator for StoryRun updates.
+//
+// Behavior:
+//   - Skips validation if resource is being deleted (DeletionTimestamp set).
+//   - Rejects updates that decrease observedGeneration.
+//   - Skips validation if spec is unchanged (metadata-only update).
+//
+// Arguments:
+//   - ctx context.Context: for Story lookup.
+//   - oldObj runtime.Object: previous StoryRun state.
+//   - newObj runtime.Object: proposed StoryRun state.
+//
+// Returns:
+//   - nil, nil if validation passes or is skipped.
+//   - nil, error if type assertion fails or validation errors exist.
+func (v *StoryRunCustomValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	return webhookshared.ValidateUpdateResource[*runsv1alpha1.StoryRun](ctx, oldObj, newObj, "StoryRun", storyrunlog, func(ctx context.Context, oldSr, newSr *runsv1alpha1.StoryRun) error {
+		if err := ensureStoryRunObservedGenerationMonotonic(oldSr, newSr); err != nil {
+			return err
+		}
+		if err := validateTriggerTokenName(newSr); err != nil {
+			return err
+		}
+		if err := validateTriggerTokenOnUpdate(oldSr, newSr); err != nil {
+			return err
+		}
+		if err := validateTriggerInputHashOnUpdate(oldSr, newSr); err != nil {
+			return err
+		}
+		if reflect.DeepEqual(oldSr.Spec, newSr.Spec) {
+			return nil
+		}
+		return fmt.Errorf("spec is immutable for StoryRun; create a new StoryRun for updated inputs or references")
+	})
+}
 
-	// TODO(user): fill in your validation logic upon object deletion.
+// ValidateDelete implements webhook.CustomValidator for StoryRun deletion.
+//
+// Behavior:
+//   - Always allows deletion (no-op validation).
+//   - Exists as scaffold placeholder; delete verb not enabled in annotation.
+//
+// Arguments:
+//   - ctx context.Context: unused.
+//   - obj runtime.Object: expected to be *runsv1alpha1.StoryRun.
+//
+// Returns:
+//   - nil, nil (deletion always allowed).
+func (v *StoryRunCustomValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	return webhookshared.ValidateDeleteResource[*runsv1alpha1.StoryRun](obj, "StoryRun", storyrunlog, nil)
+}
 
-	return nil, nil
+// validateStoryRun performs basic invariants validation for StoryRun specs.
+//
+// Behavior:
+//   - Validates storyRef.name is set.
+//   - Validates referenced Story exists.
+//   - Validates inputs shape and size against config limits.
+//   - Validates inputs against Story's inputsSchema if defined.
+//
+// Arguments:
+//   - ctx context.Context: for Story lookup.
+//   - sr *runsv1alpha1.StoryRun: the StoryRun to validate.
+//
+// Returns:
+//   - nil if all validations pass.
+//   - Error describing the first validation failure.
+func (v *StoryRunCustomValidator) validateStoryRun(ctx context.Context, sr *runsv1alpha1.StoryRun) (*bubuv1alpha1.Story, error) {
+	if err := requireStoryRef(sr); err != nil {
+		return nil, err
+	}
+	cfg := v.controllerConfig()
+	story, _, err := fetchStory(ctx, v.Client, cfg, sr)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateInputsShapeAndSize(cfg, sr); err != nil {
+		return nil, err
+	}
+	if err := validateInputsSchema(story, sr); err != nil {
+		return nil, err
+	}
+	return story, nil
+}
+
+// requireStoryRef ensures the StoryRun has a non-empty storyRef.name.
+//
+// Arguments:
+//   - sr *runsv1alpha1.StoryRun: the StoryRun to validate.
+//
+// Returns:
+//   - nil if storyRef.name is set.
+//   - Error if storyRef.name is empty.
+func requireStoryRef(sr *runsv1alpha1.StoryRun) error {
+	if sr.Spec.StoryRef.Name == "" {
+		return fmt.Errorf("spec.storyRef.name is required")
+	}
+	return nil
+}
+
+func validateTriggerTokenName(sr *runsv1alpha1.StoryRun) error {
+	if sr == nil {
+		return nil
+	}
+	ann := sr.GetAnnotations()
+	if len(ann) == 0 {
+		return nil
+	}
+	token := strings.TrimSpace(ann[runsidentity.StoryRunTriggerTokenAnnotation])
+	if token == "" {
+		return nil
+	}
+	if strings.TrimSpace(sr.Name) == "" {
+		return fmt.Errorf("metadata.name is required when %s is set", runsidentity.StoryRunTriggerTokenAnnotation)
+	}
+	if strings.TrimSpace(sr.GenerateName) != "" {
+		return fmt.Errorf("metadata.generateName must be empty when %s is set", runsidentity.StoryRunTriggerTokenAnnotation)
+	}
+	storyNamespace := refs.ResolveNamespace(sr, &sr.Spec.StoryRef.ObjectReference)
+	expected := runsidentity.DeriveStoryRunName(storyNamespace, sr.Spec.StoryRef.Name, token)
+	if sr.Name != expected {
+		if allowLegacyTriggerTokenName(sr, token) {
+			return nil
+		}
+		return fmt.Errorf("metadata.name must be %q when %s is set (got %q)", expected, runsidentity.StoryRunTriggerTokenAnnotation, sr.Name)
+	}
+	return nil
+}
+
+func allowLegacyTriggerTokenName(sr *runsv1alpha1.StoryRun, token string) bool {
+	if sr == nil {
+		return false
+	}
+	refNS := ""
+	if sr.Spec.StoryRef.Namespace != nil {
+		refNS = strings.TrimSpace(*sr.Spec.StoryRef.Namespace)
+	}
+	if refNS != "" {
+		return false
+	}
+	legacy := runsidentity.DeriveStoryRunName("", sr.Spec.StoryRef.Name, token)
+	return sr.Name == legacy
+}
+
+func validateTriggerTokenOnUpdate(oldSr, newSr *runsv1alpha1.StoryRun) error {
+	if newSr == nil {
+		return nil
+	}
+	newToken := strings.TrimSpace(newSr.GetAnnotations()[runsidentity.StoryRunTriggerTokenAnnotation])
+	oldToken := ""
+	if oldSr != nil {
+		oldToken = strings.TrimSpace(oldSr.GetAnnotations()[runsidentity.StoryRunTriggerTokenAnnotation])
+	}
+	if oldToken == "" && newToken == "" {
+		return nil
+	}
+	if newToken != oldToken {
+		return fmt.Errorf("annotation %s is immutable once set", runsidentity.StoryRunTriggerTokenAnnotation)
+	}
+	return nil
+}
+
+func validateTriggerInputHashOnCreate(sr *runsv1alpha1.StoryRun) error {
+	if sr == nil {
+		return nil
+	}
+	ann := sr.GetAnnotations()
+	if len(ann) == 0 {
+		return nil
+	}
+	token := strings.TrimSpace(ann[runsidentity.StoryRunTriggerTokenAnnotation])
+	if token == "" {
+		return nil
+	}
+	hash := strings.TrimSpace(ann[runsidentity.StoryRunTriggerInputHashAnnotation])
+	if hash == "" {
+		return fmt.Errorf("annotation %s is required when %s is set", runsidentity.StoryRunTriggerInputHashAnnotation, runsidentity.StoryRunTriggerTokenAnnotation)
+	}
+	expected, err := runsidentity.ComputeTriggerInputHashFromRawExtension(sr.Spec.Inputs)
+	if err != nil {
+		return err
+	}
+	if hash != expected {
+		return fmt.Errorf("annotation %s must match the StoryRun inputs hash", runsidentity.StoryRunTriggerInputHashAnnotation)
+	}
+	return nil
+}
+
+func validateTriggerInputHashOnUpdate(oldSr, newSr *runsv1alpha1.StoryRun) error {
+	if newSr == nil {
+		return nil
+	}
+	ann := newSr.GetAnnotations()
+	if len(ann) == 0 {
+		return nil
+	}
+	token := strings.TrimSpace(ann[runsidentity.StoryRunTriggerTokenAnnotation])
+	if token == "" {
+		return nil
+	}
+	newHash := strings.TrimSpace(ann[runsidentity.StoryRunTriggerInputHashAnnotation])
+	if newHash == "" {
+		return fmt.Errorf("annotation %s is required when %s is set", runsidentity.StoryRunTriggerInputHashAnnotation, runsidentity.StoryRunTriggerTokenAnnotation)
+	}
+	expected, err := runsidentity.ComputeTriggerInputHashFromRawExtension(newSr.Spec.Inputs)
+	if err != nil {
+		return err
+	}
+	if newHash != expected {
+		return fmt.Errorf("annotation %s must match the StoryRun inputs hash", runsidentity.StoryRunTriggerInputHashAnnotation)
+	}
+	return nil
+}
+
+// fetchStory retrieves the Story referenced by the StoryRun.
+//
+// Behavior:
+//   - Fetches the Story from the API server.
+//   - Uses storyRef to determine namespace (defaults to StoryRun's namespace).
+//   - Returns user-friendly error if Story does not exist.
+//
+// Arguments:
+//   - ctx context.Context: for API call.
+//   - c client.Client: Kubernetes client.
+//   - sr *runsv1alpha1.StoryRun: contains the storyRef.
+//
+// Returns:
+//   - *bubuv1alpha1.Story if found.
+//   - types.NamespacedName used for the lookup.
+//   - Error if not found or API call fails.
+func fetchStory(ctx context.Context, c client.Reader, cfg *config.ControllerConfig, sr *runsv1alpha1.StoryRun) (*bubuv1alpha1.Story, types.NamespacedName, error) {
+	story := &bubuv1alpha1.Story{}
+	storyKey := sr.Spec.StoryRef.ToNamespacedName(sr)
+	if err := webhookshared.ValidateCrossNamespaceReference(
+		ctx,
+		c,
+		cfg,
+		sr,
+		"runs.bubustack.io",
+		"StoryRun",
+		"bubustack.io",
+		"Story",
+		storyKey.Namespace,
+		storyKey.Name,
+		"StoryRef",
+	); err != nil {
+		return nil, types.NamespacedName{}, err
+	}
+	if err := c.Get(ctx, storyKey, story); err != nil {
+		if errors.IsNotFound(err) {
+			return nil, storyKey, fmt.Errorf("referenced story '%s' not found", storyKey.String())
+		}
+		return nil, storyKey, fmt.Errorf("failed to get referenced story '%s': %w", storyKey.String(), err)
+	}
+	if strings.TrimSpace(sr.Spec.StoryRef.Version) != "" && strings.TrimSpace(story.Spec.Version) != strings.TrimSpace(sr.Spec.StoryRef.Version) {
+		return nil, storyKey, fmt.Errorf("referenced story '%s' has version '%s', expected '%s'", storyKey.String(), story.Spec.Version, sr.Spec.StoryRef.Version)
+	}
+	return story, storyKey, nil
+}
+
+// validateInputsShapeAndSize ensures spec.inputs is a JSON object within size limits.
+//
+// Behavior:
+//   - Skips validation if inputs is empty.
+//   - Ensures inputs is a JSON object (not array or primitive).
+//   - Ensures inputs doesn't exceed cfg.StoryRun.MaxInlineInputsSize.
+//
+// Arguments:
+//   - cfg *config.ControllerConfig: for size limits.
+//   - sr *runsv1alpha1.StoryRun: the StoryRun to validate.
+//
+// Returns:
+//   - nil if inputs is valid or absent.
+//   - Error describing the validation failure.
+func validateInputsShapeAndSize(cfg *config.ControllerConfig, sr *runsv1alpha1.StoryRun) error {
+	if sr.Spec.Inputs == nil || len(sr.Spec.Inputs.Raw) == 0 {
+		return nil
+	}
+	b := webhookshared.TrimLeadingSpace(sr.Spec.Inputs.Raw)
+	if err := webhookshared.EnsureJSONObject("spec.inputs", b); err != nil {
+		return err
+	}
+	// Use StoryRun-specific knob; fall back to defaults if unset
+	maxBytes := cfg.StoryRun.MaxInlineInputsSize
+	if maxBytes <= 0 {
+		maxBytes = config.DefaultControllerConfig().StoryRun.MaxInlineInputsSize
+	}
+	if err := webhookshared.EnforceMaxBytes(
+		"spec.inputs",
+		sr.Spec.Inputs.Raw,
+		maxBytes,
+		"Provide large inputs via an offloading mechanism instead of inlining",
+	); err != nil {
+		return err
+	}
+	return webhookshared.ValidateReferenceMaps(sr.Spec.Inputs.Raw, "spec.inputs")
+}
+
+// validateInputsSchema validates spec.inputs against the Story's inputsSchema.
+//
+// Behavior:
+//   - Skips validation if Story has no inputsSchema.
+//   - Uses gojsonschema to validate inputs against the schema.
+//   - Returns all validation errors in a single message.
+//
+// Arguments:
+//   - story *bubuv1alpha1.Story: provides the inputsSchema.
+//   - sr *runsv1alpha1.StoryRun: provides the inputs to validate.
+//
+// Returns:
+//   - nil if inputs is valid or schema is absent.
+//   - Error describing the validation failures.
+func validateInputsSchema(story *bubuv1alpha1.Story, sr *runsv1alpha1.StoryRun) error {
+	if story.Spec.InputsSchema == nil || len(story.Spec.InputsSchema.Raw) == 0 {
+		return nil
+	}
+	doc := []byte("{}")
+	if sr.Spec.Inputs != nil && len(sr.Spec.Inputs.Raw) > 0 {
+		doc = sr.Spec.Inputs.Raw
+	}
+	if webhookshared.ContainsStorageRef(doc) {
+		scrubbed, err := webhookshared.ScrubStorageRefMetadata(doc)
+		if err != nil {
+			return fmt.Errorf("failed to sanitize storage ref metadata in spec.inputs: %w", err)
+		}
+		doc = scrubbed
+	}
+	if err := webhookshared.ValidateJSONAgainstSchema(doc, story.Spec.InputsSchema.Raw, "Story"); err != nil {
+		return fmt.Errorf("spec.inputs is invalid against Story schema: %w", err)
+	}
+	return nil
+}
+
+// ensureStoryRunObservedGenerationMonotonic rejects stale status updates.
+//
+// Behavior:
+//   - Compares old and new observedGeneration values.
+//   - Rejects updates where observedGeneration decreases.
+//   - Allows updates when old value is zero (unset).
+//
+// Arguments:
+//   - oldSR *runsv1alpha1.StoryRun: previous StoryRun state.
+//   - newSR *runsv1alpha1.StoryRun: proposed StoryRun state.
+//
+// Returns:
+//   - nil if generation is monotonically increasing.
+//   - Error if observedGeneration decreased.
+func ensureStoryRunObservedGenerationMonotonic(oldSR, newSR *runsv1alpha1.StoryRun) error {
+	oldGen := oldSR.Status.ObservedGeneration
+	newGen := newSR.Status.ObservedGeneration
+	if oldGen > 0 && newGen < oldGen {
+		return fmt.Errorf("status.observedGeneration must be monotonically increasing (old=%d new=%d)", oldGen, newGen)
+	}
+	return nil
+}
+
+func warnOffloadedInputs(story *bubuv1alpha1.Story, sr *runsv1alpha1.StoryRun) admission.Warnings {
+	if story == nil || sr == nil {
+		return nil
+	}
+	if story.Spec.InputsSchema == nil || len(story.Spec.InputsSchema.Raw) == 0 {
+		return nil
+	}
+	if sr.Spec.Inputs == nil || len(sr.Spec.Inputs.Raw) == 0 {
+		return nil
+	}
+	if !webhookshared.ContainsStorageRef(sr.Spec.Inputs.Raw) {
+		return nil
+	}
+	return admission.Warnings{
+		"spec.inputs contains storage references; schema validation only checks reference shape, not offloaded content",
+	}
 }

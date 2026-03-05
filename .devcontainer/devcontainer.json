@@ -1,15 +1,17 @@
 {
   "name": "Kubebuilder DevContainer",
-  "image": "golang:1.25",
+  "image": "docker.io/golang:1.25-bookworm",
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "moby": false,
       "dockerDefaultAddressPool": "base=172.30.0.0/16,size=24"
     },
     "ghcr.io/devcontainers/features/git:1": {}
   },
 
-  "runArgs": ["--privileged", "--init"],
+  "forwardPorts": [8080, 8443],
+
+  "runArgs": ["--privileged", "--init", "--network=host"],
 
   "customizations": {
     "vscode": {

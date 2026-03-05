@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,70 +18,93 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// EngramTemplateSpec defines the desired state of EngramTemplate
-type EngramTemplateSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of EngramTemplate. Edit engramtemplate_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
-}
-
-// EngramTemplateStatus defines the observed state of EngramTemplate.
-type EngramTemplateStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the EngramTemplate resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
+// EngramTemplate defines a reusable "worker" component for stories
+//
+// Think of EngramTemplates as specialized tools in a toolbox:
+// - "http-client": Makes HTTP requests with retry and timeout support
+// - "openai-chat": Integrates with OpenAI's GPT models
+// - "postgres-query": Executes SQL queries against PostgreSQL
+// - "slack-notify": Sends messages to Slack channels
+// - "image-resize": Processes and resizes images
+//
+// Templates are cluster-scoped because they're meant to be shared across teams and namespaces.
+// They define WHAT can be done, while Engrams define HOW to configure and run them.
+//
+// The relationship is:
+// EngramTemplate (defines capabilities) → Engram (configured instance) → Used in Story steps
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster
-
-// EngramTemplate is the Schema for the engramtemplates API
+// +kubebuilder:resource:scope=Cluster,shortName=etpl,categories={bubu,ai,catalog}
+// +kubebuilder:printcolumn:name="Description",type=string,JSONPath=.spec.description
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=.spec.version
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=.status.usageCount
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=.status.validationStatus
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 type EngramTemplate struct {
 	metav1.TypeMeta `json:",inline"`
-
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of EngramTemplate
 	// +required
-	Spec EngramTemplateSpec `json:"spec"`
+	Spec EngramTemplateSpec `json:"spec,omitempty"`
 
 	// status defines the observed state of EngramTemplate
 	// +optional
 	Status EngramTemplateStatus `json:"status,omitzero"`
 }
 
-// +kubebuilder:object:root=true
+// EngramTemplateSpec defines the capabilities and contract of a worker component
+type EngramTemplateSpec struct {
+	// Common template fields (version, description, image, etc.)
+	TemplateSpec `json:",inline"`
 
-// EngramTemplateList contains a list of EngramTemplate
+	// What data does this engram expect as input?
+	// This defines the contract for the data flowing INTO this component
+	// Examples:
+	// - HTTP client: {"url": "string", "method": "string", "headers": "object"}
+	// - OpenAI: {"prompt": "string", "model": "string", "temperature": "number"}
+	// - Database: {"query": "string", "parameters": "object"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	InputSchema *runtime.RawExtension `json:"inputSchema,omitempty"`
+
+	// What data does this engram produce as output?
+	// This defines the contract for the data flowing OUT of this component
+	// Examples:
+	// - HTTP client: {"status": "integer", "body": "string", "headers": "object"}
+	// - OpenAI: {"response": "string", "usage": "object", "model": "string"}
+	// - Database: {"rows": "array", "rowCount": "integer", "duration": "number"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	OutputSchema *runtime.RawExtension `json:"outputSchema,omitempty"`
+}
+
+// EngramTemplateStatus defines the observed state of EngramTemplate
+type EngramTemplateStatus struct {
+	TemplateStatus `json:",inline"`
+}
+
+// GetTemplateStatus returns a pointer to the embedded TemplateStatus.
+// This enables shared status update helpers to operate on both template types.
+func (t *EngramTemplate) GetTemplateStatus() *TemplateStatus {
+	return &t.Status.TemplateStatus
+}
+
+// GetImage returns the template's container image.
+func (t *EngramTemplate) GetImage() string {
+	return t.Spec.Image
+}
+
+// GetVersion returns the template's version.
+func (t *EngramTemplate) GetVersion() string {
+	return t.Spec.Version
+}
+
+// +kubebuilder:object:root=true
 type EngramTemplateList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

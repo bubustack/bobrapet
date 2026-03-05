@@ -1,9 +1,0 @@
-apiVersion: bubustack.io/v1alpha1
-kind: Story
-metadata:
-  labels:
-    app.kubernetes.io/name: bobrapet
-    app.kubernetes.io/managed-by: kustomize
-  name: story-sample
-spec:
-  # TODO(user): Add fields here

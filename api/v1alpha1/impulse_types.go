@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,69 +18,131 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// ImpulseSpec defines the desired state of Impulse
-type ImpulseSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of Impulse. Edit impulse_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
-}
-
-// ImpulseStatus defines the observed state of Impulse.
-type ImpulseStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the Impulse resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
+// Impulse defines an always-on trigger that listens for external events and
+// launches Stories in response.
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
-// Impulse is the Schema for the impulses API
+// +kubebuilder:resource:scope=Namespaced,shortName=imp,categories={bubu,ai}
+// +kubebuilder:printcolumn:name="Template",type=string,JSONPath=.spec.templateRef.name
+// +kubebuilder:printcolumn:name="Story",type=string,JSONPath=.spec.storyRef.name
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
+// +kubebuilder:printcolumn:name="Triggers",type=integer,JSONPath=.status.triggersReceived
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;patch
 type Impulse struct {
 	metav1.TypeMeta `json:",inline"`
-
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of Impulse
 	// +required
-	Spec ImpulseSpec `json:"spec"`
+	Spec ImpulseSpec `json:"spec,omitempty"`
 
 	// status defines the observed state of Impulse
 	// +optional
 	Status ImpulseStatus `json:"status,omitzero"`
 }
 
-// +kubebuilder:object:root=true
+// ImpulseSpec describes a trigger instance and the Story it activates.
+type ImpulseSpec struct {
+	// Version identifies this Impulse instance for pinning by references.
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	Version string `json:"version,omitempty"`
 
-// ImpulseList contains a list of Impulse
+	// TemplateRef selects the ImpulseTemplate that implements the trigger mechanics.
+	// +kubebuilder:validation:Required
+	TemplateRef refs.ImpulseTemplateReference `json:"templateRef"`
+
+	// StoryRef identifies the Story executed when the trigger fires.
+	// +kubebuilder:validation:Required
+	StoryRef refs.StoryReference `json:"storyRef"`
+
+	// With carries template-specific configuration and is validated by the template.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	With *runtime.RawExtension `json:"with,omitempty"`
+
+	// Secrets maps template-defined secret inputs to concrete namespace Secrets.
+	Secrets map[string]string `json:"secrets,omitempty"`
+
+	// Mapping describes how an incoming event is converted into Story inputs.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Mapping *runtime.RawExtension `json:"mapping,omitempty"`
+
+	// DeliveryPolicy controls trigger deduplication and retry behavior.
+	// Overrides delivery defaults from the referenced ImpulseTemplate.
+	// +optional
+	DeliveryPolicy *TriggerDeliveryPolicy `json:"deliveryPolicy,omitempty"`
+
+	// Throttle limits trigger submission rate and concurrency for this Impulse.
+	// +optional
+	Throttle *TriggerThrottlePolicy `json:"throttle,omitempty"`
+
+	// Workload controls the backing workload for the impulse (deployment or statefulset).
+	Workload *WorkloadSpec `json:"workload,omitempty"`
+
+	// Service controls instance-level exposure of the impulse via a Service.
+	// Ports and health come from the template; this sets type/labels/annotations.
+	// If omitted, defaults to ClusterIP with template-defined ports.
+	Service *ServiceExposure `json:"service,omitempty"`
+
+	// Execution provides instance-level execution overrides.
+	Execution *ExecutionOverrides `json:"execution,omitempty"`
+}
+
+// All shared types moved to shared_types.go
+
+// ImpulseStatus reports observed trigger state and counters.
+type ImpulseStatus struct {
+	// observedGeneration is the most recent generation observed for this Impulse. It corresponds to the
+	// Impulse's generation, which is updated on mutation by the API Server.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions is the standard Kubernetes condition set (Ready, etc.).
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Replicas and ReadyReplicas surface readiness information reported by the backing workload.
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+	// +optional
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+	// +optional
+	Phase enums.Phase `json:"phase,omitempty"`
+
+	// TriggersReceived counts all events seen by the impulse.
+	// +optional
+	TriggersReceived int64 `json:"triggersReceived"`
+	// StoriesLaunched counts StoryRuns successfully started from events.
+	// +optional
+	StoriesLaunched int64 `json:"storiesLaunched"`
+	// FailedTriggers counts events that failed validation or launch.
+	// +optional
+	FailedTriggers int64 `json:"failedTriggers"`
+	// ThrottledTriggers counts events delayed by trigger throttling.
+	// +optional
+	ThrottledTriggers int64 `json:"throttledTriggers"`
+	// LastTrigger records the timestamp of the most recent event.
+	// +optional
+	LastTrigger *metav1.Time `json:"lastTrigger,omitempty"`
+	// LastThrottled records the timestamp of the most recent throttled trigger.
+	// +optional
+	LastThrottled *metav1.Time `json:"lastThrottled,omitempty"`
+	// LastSuccess records the timestamp of the most recent successful Story launch.
+	// +optional
+	LastSuccess *metav1.Time `json:"lastSuccess,omitempty"`
+}
+
+// +kubebuilder:object:root=true
 type ImpulseList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

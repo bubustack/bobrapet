@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,70 +17,263 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"slices"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// StoryRunSpec defines the desired state of StoryRun
-type StoryRunSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of StoryRun. Edit storyrun_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
-}
-
-// StoryRunStatus defines the observed state of StoryRun.
-type StoryRunStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the StoryRun resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
+// StoryRun represents an actual execution instance of a Story
+//
+// Think of the relationship like this:
+// - Story = A movie script (defines what should happen)
+// - StoryRun = Actually filming the movie (executing the script with specific actors and locations)
+//
+// Every time a Story is triggered (by an Impulse, manual trigger, or another Story),
+// a new StoryRun is created to track that specific execution.
+//
+// StoryRuns are the "run history" of your automation - they show:
+// - When each story execution started and finished
+// - What inputs were provided
+// - Which steps succeeded or failed
+// - What outputs were produced
+// - Any errors that occurred
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
-// StoryRun is the Schema for the storyruns API
+// +kubebuilder:resource:scope=Namespaced,shortName=srun,categories={bubu,ai,runs}
+// +kubebuilder:printcolumn:name="Story",type=string,JSONPath=.spec.storyRef.name
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
+// +kubebuilder:printcolumn:name="Duration",type=string,JSONPath=.status.duration
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 type StoryRun struct {
 	metav1.TypeMeta `json:",inline"`
-
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of StoryRun
 	// +required
-	Spec StoryRunSpec `json:"spec"`
+	Spec StoryRunSpec `json:"spec,omitempty"`
 
 	// status defines the observed state of StoryRun
 	// +optional
 	Status StoryRunStatus `json:"status,omitzero"`
 }
 
-// +kubebuilder:object:root=true
+// StoryRunSpec defines what Story to run and with what inputs
+type StoryRunSpec struct {
+	// Which Story to execute
+	// References can be same-namespace (name only) or cross-namespace with explicit namespace
+	// Examples: "ci-pipeline", cross-ns: {"name": "deploy-app", "namespace": "production"}
+	// +kubebuilder:validation:Required
+	StoryRef refs.StoryReference `json:"storyRef"`
 
-// StoryRunList contains a list of StoryRun
+	// Which Impulse triggered this StoryRun, if any
+	// This provides a clear audit trail from an event trigger to its corresponding workflow execution
+	// +optional
+	ImpulseRef *refs.ImpulseReference `json:"impulseRef,omitempty"`
+
+	// Input data for this specific story execution
+	// This data gets validated against the Story's inputsSchema
+	// Examples:
+	// - CI pipeline: {"repository": "my-app", "branch": "main", "commit": "abc123"}
+	// - Data processing: {"filename": "data.csv", "format": "csv", "destination": "warehouse"}
+	// - Deployment: {"environment": "production", "version": "v1.2.3", "rollback": false}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Inputs *runtime.RawExtension `json:"inputs,omitempty"`
+}
+
+// StoryRunStatus tracks the current state and results of this story execution
+// +kubebuilder:validation:XValidation:rule="!has(self.conditions) || self.conditions.exists(c, c.type == 'Ready')",message="status.conditions must include Ready when conditions are set"
+// +kubebuilder:validation:XValidation:rule="!has(self.conditions) || self.conditions.all(c, has(c.lastTransitionTime))",message="status.conditions entries must set lastTransitionTime"
+// +kubebuilder:validation:XValidation:message="status.conditions reason field must be <= 64 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.reason) || size(c.reason) <= 64)"
+// +kubebuilder:validation:XValidation:message="status.conditions message field must be <= 2048 characters",rule="!has(self.conditions) || self.conditions.all(c, !has(c.message) || size(c.message) <= 2048)"
+type StoryRunStatus struct {
+	// observedGeneration is the most recent generation observed for this StoryRun. It corresponds to the
+	// StoryRun's generation, which is updated on mutation by the API Server.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Current execution phase
+	// - Pending: StoryRun created but not yet started
+	// - Running: Story is actively executing steps
+	// - Succeeded: All steps completed successfully
+	// - Failed: A step failed and the story cannot continue
+	// - Finished: Execution was stopped/canceled by user or system (non-failure termination)
+	Phase enums.Phase `json:"phase,omitempty"`
+
+	// Human-readable message about the story's status
+	Message string `json:"message,omitempty"`
+
+	// List of steps that are currently executing
+	Active []string `json:"active,omitempty"`
+
+	// List of steps that have completed successfully
+	Completed []string `json:"completed,omitempty"`
+
+	// Tracks the child StepRuns created by primitive steps (e.g., parallel branches)
+	// Key: Name of the parent primitive step (e.g., "my-parallel-step")
+	// Value: List of child StepRun names created by that primitive
+	// +optional
+	PrimitiveChildren map[string][]string `json:"primitiveChildren,omitempty"`
+
+	// Execution timing
+	StartedAt  *metav1.Time `json:"startedAt,omitempty"`
+	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
+
+	// Timestamp when child resources (StepRuns, Pods) were cleaned up
+	// Used to track the two-phase cleanup process (children first, then parent)
+	// +optional
+	ChildrenCleanedAt *metav1.Time `json:"childrenCleanedAt,omitempty"`
+
+	// How long did this execution take? (calculated field)
+	Duration string `json:"duration,omitempty"`
+
+	// Trace captures the OpenTelemetry trace context for this StoryRun.
+	// +optional
+	Trace *TraceInfo `json:"trace,omitempty"`
+
+	// Attempts counts how many times the StoryRun has entered Running.
+	// This increments on each transition into Running.
+	Attempts int32 `json:"attempts,omitempty"`
+
+	// InputSchemaRef identifies the schema used to validate StoryRun inputs.
+	// +optional
+	InputSchemaRef *SchemaReference `json:"inputSchemaRef,omitempty"`
+
+	// OutputSchemaRef identifies the schema expected for StoryRun outputs.
+	// +optional
+	OutputSchemaRef *SchemaReference `json:"outputSchemaRef,omitempty"`
+
+	// What data did this story produce upon completion?
+	// For small outputs (< 1MB), stored inline here
+	// For large outputs, automatically stored in shared storage (if enabled) and path referenced here
+	// This gets validated against the Story's outputSchema
+	// Examples:
+	// - CI pipeline: {"buildArtifact": "app-v1.2.3.tar.gz", "testResults": {...}, "deploymentUrl": "https://..."}
+	// - Data processing: {"processedRows": 1000, "outputFile": "processed-data.json", "errors": 5}
+	// - Large output: {"result": "success", "outputPath": "/shared/storage/story-123/final-output.json"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Output *runtime.RawExtension `json:"output,omitempty"`
+
+	// StepStates provides a detailed, real-time status for each step in the Story.
+	// The key is the step name.
+	// +optional
+	StepStates map[string]StepState `json:"stepStates,omitempty"`
+
+	// Gates captures manual gate decisions keyed by step name.
+	// +optional
+	Gates map[string]GateStatus `json:"gates,omitempty"`
+
+	// If the story failed, what was the error?
+	// Contains structured error information for debugging
+	// Examples:
+	// - Step failure: {"failedStep": "deploy", "reason": "timeout", "details": "..."}
+	// - Validation error: {"type": "input_validation", "field": "url", "message": "Invalid URL"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Error *runtime.RawExtension `json:"error,omitempty"`
+
+	// Conditions provide the canonical lifecycle status. Phase/Message are summaries.
+	// The Ready condition reason holds stable reason codes for state transitions.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Step execution summary for quick overview
+	StepsTotal    int32 `json:"stepsTotal,omitempty"`    // Total number of steps in the story
+	StepsComplete int32 `json:"stepsComplete,omitempty"` // Number of steps that completed successfully
+	StepsFailed   int32 `json:"stepsFailed,omitempty"`   // Number of steps that failed
+	StepsSkipped  int32 `json:"stepsSkipped,omitempty"`  // Number of steps that were skipped
+
+	// AllowedFailures lists steps that failed but were explicitly allowed to fail.
+	// +optional
+	AllowedFailures []string `json:"allowedFailures,omitempty"`
+
+	// TriggerTokens tracks which parent resources have counted this StoryRun.
+	// Used for idempotent trigger counting by Story/Impulse controllers.
+	// Managed by the StoryRun controller to avoid annotation churn from multiple writers.
+	// Possible tokens:
+	//   - "story": counted by parent Story's trigger count
+	//   - "impulse": counted by parent Impulse's trigger count
+	//   - "impulse-success": counted by parent Impulse's success count
+	//   - "impulse-failed": counted by parent Impulse's failure count
+	// +optional
+	TriggerTokens []string `json:"triggerTokens,omitempty"`
+}
+
+// HasTriggerToken checks if the StoryRun has been marked with a specific trigger token.
+func (s *StoryRunStatus) HasTriggerToken(token string) bool {
+	return slices.Contains(s.TriggerTokens, token)
+}
+
+// AddTriggerToken adds a trigger token to the StoryRun if not already present.
+// Returns true if the token was newly added, false if already present.
+func (s *StoryRunStatus) AddTriggerToken(token string) bool {
+	if s.HasTriggerToken(token) {
+		return false
+	}
+	s.TriggerTokens = append(s.TriggerTokens, token)
+	return true
+}
+
+// AddTriggerTokens adds multiple trigger tokens and returns the tokens that were newly added.
+func (s *StoryRunStatus) AddTriggerTokens(tokens ...string) []string {
+	var added []string
+	for _, token := range tokens {
+		if s.AddTriggerToken(token) {
+			added = append(added, token)
+		}
+	}
+	return added
+}
+
+// StepState holds the detailed status of a single step within a StoryRun.
+type StepState struct {
+	// Phase is the current execution phase of the step.
+	Phase enums.Phase `json:"phase"`
+	// Message provides a human-readable summary of the step's status.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// StartedAt records when the step first entered a non-empty phase.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+	// FinishedAt records when the step reached a terminal phase.
+	// +optional
+	FinishedAt *metav1.Time `json:"finishedAt,omitempty"`
+	// For 'executeStory' steps, this tracks the name of the created sub-StoryRun.
+	// +optional
+	SubStoryRunName string `json:"subStoryRunName,omitempty"`
+}
+
+// GateDecisionState captures a manual gate decision for a step.
+// +kubebuilder:validation:Enum=Pending;Approved;Rejected
+type GateDecisionState string
+
+const (
+	GateDecisionPending  GateDecisionState = "Pending"
+	GateDecisionApproved GateDecisionState = "Approved"
+	GateDecisionRejected GateDecisionState = "Rejected"
+)
+
+// GateStatus records a decision for a gate step.
+type GateStatus struct {
+	// State is the gate decision state (Pending/Approved/Rejected).
+	// +optional
+	State GateDecisionState `json:"state,omitempty"`
+	// Message provides optional human context for the decision.
+	// +optional
+	Message string `json:"message,omitempty"`
+	// UpdatedAt records when the decision was last updated.
+	// +optional
+	UpdatedAt *metav1.Time `json:"updatedAt,omitempty"`
+	// UpdatedBy is an optional identifier for who/what updated the decision.
+	// +optional
+	UpdatedBy string `json:"updatedBy,omitempty"`
+}
+
+// +kubebuilder:object:root=true
 type StoryRunList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

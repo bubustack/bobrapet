@@ -1,9 +1,0 @@
-apiVersion: transport.bubustack.io/v1alpha1
-kind: TransportBinding
-metadata:
-  labels:
-    app.kubernetes.io/name: bobrapet
-    app.kubernetes.io/managed-by: kustomize
-  name: transportbinding-sample
-spec:
-  # TODO(user): Add fields here

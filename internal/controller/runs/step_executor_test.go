@@ -323,7 +323,7 @@ func TestCreateEngramStepRun_SetsTemplateGeneration(t *testing.T) {
 	}
 
 	stepName := kubeutil.ComposeName(srun.Name, step.Name)
-	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil)
+	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil, nil)
 	require.NoError(t, err)
 
 	var created runsv1alpha1.StepRun
@@ -382,7 +382,7 @@ func TestCreateEngramStepRun_TemplateGenerationZeroWhenTemplateMissing(t *testin
 	}
 
 	stepName := kubeutil.ComposeName(srun.Name, step.Name)
-	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil)
+	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil, nil)
 	require.NoError(t, err)
 
 	var created runsv1alpha1.StepRun
@@ -393,6 +393,143 @@ func TestCreateEngramStepRun_TemplateGenerationZeroWhenTemplateMissing(t *testin
 
 	require.Equal(t, int64(0), created.Spec.TemplateGeneration,
 		"StepRun should have zero TemplateGeneration when template is missing")
+}
+
+func TestCreateEngramStepRun_IdempotencyKeyTemplate(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, runsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, bubuv1alpha1.AddToScheme(scheme))
+	require.NoError(t, catalogv1alpha1.AddToScheme(scheme))
+
+	engram := &bubuv1alpha1.Engram{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "notify",
+			Namespace: "default",
+		},
+		Spec: bubuv1alpha1.EngramSpec{
+			TemplateRef: refs.EngramTemplateReference{Name: "notify-tpl"},
+		},
+	}
+	srun := &runsv1alpha1.StoryRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "run-abc",
+			Namespace: "default",
+			UID:       "uid-123",
+		},
+	}
+	story := &bubuv1alpha1.Story{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-story",
+			Namespace: "default",
+		},
+	}
+
+	tpl := "notify-{{ .inputs.orderId }}-{{ .inputs.customerId }}"
+	step := &bubuv1alpha1.Step{
+		Name:                   "send-notify",
+		Ref:                    &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "notify"}},
+		IdempotencyKeyTemplate: &tpl,
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(engram).
+		Build()
+
+	eval, err := templating.New(templating.Config{})
+	require.NoError(t, err)
+	t.Cleanup(eval.Close)
+
+	executor := &StepExecutor{
+		Client:            k8sClient,
+		Scheme:            scheme,
+		TemplateEvaluator: eval,
+	}
+
+	vars := map[string]any{
+		"inputs": map[string]any{
+			"orderId":    "order-42",
+			"customerId": "cust-7",
+		},
+		"steps": map[string]any{},
+	}
+
+	stepName := kubeutil.ComposeName(srun.Name, step.Name)
+	err = executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil, vars)
+	require.NoError(t, err)
+
+	var created runsv1alpha1.StepRun
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{
+		Name:      stepName,
+		Namespace: srun.Namespace,
+	}, &created))
+
+	require.Equal(t, "notify-order-42-cust-7", created.Spec.IdempotencyKey,
+		"StepRun should use evaluated idempotency key template")
+}
+
+func TestCreateEngramStepRun_IdempotencyKeyTemplateFallback(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, runsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, bubuv1alpha1.AddToScheme(scheme))
+	require.NoError(t, catalogv1alpha1.AddToScheme(scheme))
+
+	engram := &bubuv1alpha1.Engram{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "notify",
+			Namespace: "default",
+		},
+		Spec: bubuv1alpha1.EngramSpec{
+			TemplateRef: refs.EngramTemplateReference{Name: "notify-tpl"},
+		},
+	}
+	srun := &runsv1alpha1.StoryRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "run-abc",
+			Namespace: "default",
+			UID:       "uid-123",
+		},
+	}
+	story := &bubuv1alpha1.Story{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-story",
+			Namespace: "default",
+		},
+	}
+
+	// No IdempotencyKeyTemplate set — should use auto-generated key.
+	step := &bubuv1alpha1.Step{
+		Name: "send-notify",
+		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "notify"}},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(engram).
+		Build()
+
+	executor := &StepExecutor{
+		Client: k8sClient,
+		Scheme: scheme,
+	}
+
+	stepName := kubeutil.ComposeName(srun.Name, step.Name)
+	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil, nil)
+	require.NoError(t, err)
+
+	var created runsv1alpha1.StepRun
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{
+		Name:      stepName,
+		Namespace: srun.Namespace,
+	}, &created))
+
+	expected := runsidentity.StepRunIdempotencyKey(srun.Namespace, srun.Name, step.Name)
+	require.Equal(t, expected, created.Spec.IdempotencyKey,
+		"StepRun should use auto-generated idempotency key when template is not set")
 }
 
 func int32Ptr(v int32) *int32 {

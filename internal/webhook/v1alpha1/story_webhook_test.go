@@ -607,6 +607,37 @@ var _ = Describe("Story Webhook", func() {
 		})
 	})
 
+	Context("idempotencyKeyTemplate validation", func() {
+		It("accepts a valid idempotency key template", func() {
+			story := minimalStory("idem-valid")
+			tpl := "notify-{{ .inputs.orderId }}"
+			story.Spec.Steps[0].IdempotencyKeyTemplate = &tpl
+
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("rejects an idempotency key template with invalid syntax", func() {
+			story := minimalStory("idem-invalid")
+			tpl := "notify-{{ .inputs.orderId"
+			story.Spec.Steps[0].IdempotencyKeyTemplate = &tpl
+
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("idempotencyKeyTemplate"))
+		})
+
+		It("rejects an idempotency key template with disallowed functions", func() {
+			story := minimalStory("idem-disallowed")
+			tpl := "{{ env \"HOME\" }}"
+			story.Spec.Steps[0].IdempotencyKeyTemplate = &tpl
+
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("idempotencyKeyTemplate"))
+		})
+	})
+
 	Context("policy.with validation", func() {
 		It("rejects policy.with blocks with disallowed template functions", func() {
 			story := minimalStory("policy-with-bad")

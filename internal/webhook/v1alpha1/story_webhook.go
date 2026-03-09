@@ -642,6 +642,14 @@ func (sv *stepShapeValidator) checkExpressions(story *bubushv1alpha1.Story, step
 		}
 	}
 
+	if step.IdempotencyKeyTemplate != nil && strings.TrimSpace(*step.IdempotencyKeyTemplate) != "" {
+		if err := templatesafety.ValidateTemplateString(*step.IdempotencyKeyTemplate); err != nil {
+			agg.AddFieldError(stepPath+".idempotencyKeyTemplate", conditions.ReasonValidationFailed, err.Error())
+		} else if err := templating.ValidateTemplateString(*step.IdempotencyKeyTemplate, batchScope); err != nil {
+			agg.AddFieldError(stepPath+".idempotencyKeyTemplate", conditions.ReasonValidationFailed, err.Error())
+		}
+	}
+
 	if step.With != nil && len(step.With.Raw) > 0 {
 		scope := batchScope
 		if story.Spec.Pattern == enums.StreamingPattern {

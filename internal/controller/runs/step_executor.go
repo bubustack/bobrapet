@@ -155,7 +155,7 @@ func (e *StepExecutor) Execute(ctx context.Context, srun *runsv1alpha1.StoryRun,
 
 	// An Engram step is defined by the presence of the 'ref' field.
 	if step.Ref != nil {
-		return e.executeEngramStep(ctx, srun, story, step)
+		return e.executeEngramStep(ctx, srun, story, step, vars)
 	}
 
 	// If 'ref' is not present, a 'type' must be specified.
@@ -201,7 +201,7 @@ func (e *StepExecutor) Execute(ctx context.Context, srun *runsv1alpha1.StoryRun,
 //
 // Side Effects:
 //   - Creates or patches a StepRun resource.
-func (e *StepExecutor) executeEngramStep(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step) error {
+func (e *StepExecutor) executeEngramStep(ctx context.Context, srun *runsv1alpha1.StoryRun, story *bubuv1alpha1.Story, step *bubuv1alpha1.Step, vars map[string]any) error {
 	stepName := kubeutil.ComposeName(srun.Name, step.Name)
 	desiredTimeout, desiredRetry := extractExecutionOverrides(step)
 	desiredRetry = resolveStepRetryPolicy(desiredRetry, story)
@@ -213,7 +213,7 @@ func (e *StepExecutor) executeEngramStep(ctx context.Context, srun *runsv1alpha1
 	var stepRun runsv1alpha1.StepRun
 	err := e.Get(ctx, types.NamespacedName{Name: stepName, Namespace: srun.Namespace}, &stepRun)
 	if k8serrors.IsNotFound(err) {
-		return e.createEngramStepRun(ctx, srun, story, step, stepName, desiredTimeout, desiredRetry)
+		return e.createEngramStepRun(ctx, srun, story, step, stepName, desiredTimeout, desiredRetry, vars)
 	}
 	if err != nil {
 		return err
@@ -362,6 +362,7 @@ func (e *StepExecutor) createEngramStepRun(
 	stepName string,
 	timeout string,
 	retry *bubuv1alpha1.RetryPolicy,
+	vars map[string]any,
 ) error {
 	log := logging.NewReconcileLogger(ctx, "step-executor").WithValues("storyrun", srun.Name, "step", stepName)
 	if step.Ref == nil {
@@ -426,7 +427,7 @@ func (e *StepExecutor) createEngramStepRun(
 		},
 	}
 	if strings.TrimSpace(stepRun.Spec.IdempotencyKey) == "" {
-		stepRun.Spec.IdempotencyKey = runsidentity.StepRunIdempotencyKey(srun.Namespace, srun.Name, step.Name)
+		stepRun.Spec.IdempotencyKey = e.resolveIdempotencyKey(ctx, srun, step, vars, log)
 	}
 
 	if err := controllerutil.SetControllerReference(srun, &stepRun, e.Scheme); err != nil {
@@ -871,6 +872,38 @@ func ensureStepRunLabels(existing, desired *runsv1alpha1.StepRun) bool {
 		}
 	}
 	return changed
+}
+
+// resolveIdempotencyKey evaluates the step's IdempotencyKeyTemplate if set,
+// falling back to the auto-generated execution-scoped key. The result is
+// truncated to 256 characters (maxIdempotencyKeyLength in pkg/runs/identity).
+func (e *StepExecutor) resolveIdempotencyKey(
+	ctx context.Context,
+	srun *runsv1alpha1.StoryRun,
+	step *bubuv1alpha1.Step,
+	vars map[string]any,
+	log *logging.ControllerLogger,
+) string {
+	if step.IdempotencyKeyTemplate != nil && strings.TrimSpace(*step.IdempotencyKeyTemplate) != "" && e.TemplateEvaluator != nil {
+		resolved, err := e.TemplateEvaluator.ResolveTemplateString(ctx, *step.IdempotencyKeyTemplate, vars)
+		if err != nil {
+			log.Info("IdempotencyKeyTemplate evaluation failed; falling back to auto-generated key",
+				"template", *step.IdempotencyKeyTemplate, "error", err)
+		} else {
+			key := fmt.Sprintf("%v", resolved)
+			key = strings.TrimSpace(key)
+			if key != "" {
+				const maxLen = 256
+				if len(key) > maxLen {
+					key = key[:maxLen]
+				}
+				return key
+			}
+			log.Info("IdempotencyKeyTemplate evaluated to empty; falling back to auto-generated key",
+				"template", *step.IdempotencyKeyTemplate)
+		}
+	}
+	return runsidentity.StepRunIdempotencyKey(srun.Namespace, srun.Name, step.Name)
 }
 
 func ensureStoryNameLabel(stepRun *runsv1alpha1.StepRun, storyName string) (bool, error) {

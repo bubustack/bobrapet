@@ -109,6 +109,7 @@ const (
 	eventReasonJobTemplateBlocked                    = "JobTemplateBlocked"
 	eventReasonTransportConditionUpdated             = "TransportConditionUpdated"
 	eventReasonJobCreateTooLarge                     = "JobCreateTooLarge"
+	eventReasonOutputKeyMismatch                     = "OutputKeyMismatch"
 )
 
 var errTransportBindingPending = fmt.Errorf("transport binding not yet observed in informer cache")
@@ -903,6 +904,53 @@ func (r *StepRunReconciler) getEngramTemplateForEngram(ctx context.Context, engr
 		return nil, fmt.Errorf("get EngramTemplate %s: %w", name, err)
 	}
 	return template, nil
+}
+
+// checkDeclaredOutputKeys emits a warning event when the actual output keys
+// of a completed StepRun don't match the DeclaredOutputKeys on its
+// EngramTemplate.  This is informational only — it never fails the step.
+func (r *StepRunReconciler) checkDeclaredOutputKeys(ctx context.Context, step *runsv1alpha1.StepRun, logger *logging.ControllerLogger) {
+	if step.Status.Output == nil || len(step.Status.Output.Raw) == 0 {
+		return
+	}
+
+	engram, err := r.getEngramForStep(ctx, step)
+	if err != nil || engram == nil {
+		return
+	}
+	template, err := r.getEngramTemplateForEngram(ctx, engram)
+	if err != nil || template == nil || len(template.Spec.DeclaredOutputKeys) == 0 {
+		return
+	}
+
+	var output map[string]json.RawMessage
+	if err := json.Unmarshal(step.Status.Output.Raw, &output); err != nil {
+		return
+	}
+
+	declared := make(map[string]struct{}, len(template.Spec.DeclaredOutputKeys))
+	for _, k := range template.Spec.DeclaredOutputKeys {
+		declared[k] = struct{}{}
+	}
+
+	var missing, extra []string
+	for _, k := range template.Spec.DeclaredOutputKeys {
+		if _, ok := output[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	for k := range output {
+		if _, ok := declared[k]; !ok {
+			extra = append(extra, k)
+		}
+	}
+
+	if len(missing) > 0 || len(extra) > 0 {
+		sort.Strings(extra) // deterministic ordering for output map iteration
+		msg := fmt.Sprintf("Output key mismatch: missing=%v extra=%v", missing, extra)
+		logger.Info(msg)
+		r.emitStepRunLabeledEvent(ctx, step, corev1.EventTypeWarning, eventReasonOutputKeyMismatch, msg)
+	}
 }
 
 // reconcileDelete handles StepRun deletion and resource cleanup.
@@ -1861,6 +1909,15 @@ func (r *StepRunReconciler) handleJobSucceeded(ctx context.Context, step *runsv1
 		}
 		return ctrl.Result{}, nil
 	}
+	// Evaluate post-execution verification if defined.
+	if postExecErr := r.evaluatePostExecution(ctx, step); postExecErr != nil {
+		logger.Info("Post-execution check failed", "error", postExecErr)
+		message := fmt.Sprintf("Post-execution verification failed: %v", postExecErr)
+		if err := r.setStepRunPhase(ctx, step, enums.PhaseFailed, conditions.ReasonExpressionFailed, message); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
 	if step.Status.Phase != enums.PhaseSucceeded {
 		logger.Info("Job pod exited 0, but Engram SDK did not patch StepRun status to Succeeded. Controller will mark as Succeeded as a fallback.")
 		successMsg := "StepRun pod completed successfully; final status updated by controller."
@@ -1882,6 +1939,8 @@ func (r *StepRunReconciler) handleJobSucceeded(ctx context.Context, step *runsv1
 		}
 	}
 	r.emitStepRunLabeledEvent(ctx, step, corev1.EventTypeNormal, eventReasonJobSucceeded, "StepRun job completed successfully")
+	// Warn if output keys don't match declared keys (informational only).
+	r.checkDeclaredOutputKeys(ctx, step, logger)
 	r.maybeWriteCache(ctx, step, logger)
 	return ctrl.Result{}, nil
 }
@@ -1961,6 +2020,46 @@ func (r *StepRunReconciler) failStepRunOutputValidation(ctx context.Context, ste
 		sr.Status.ExitClass = enums.ExitClassTerminal
 		sr.Status.NextRetryAt = nil
 	})
+}
+
+// evaluatePostExecution checks the optional PostExecution condition defined on the
+// Story step. If the condition evaluates to false, an error is returned so the
+// caller can fail the StepRun with a verification error.
+func (r *StepRunReconciler) evaluatePostExecution(ctx context.Context, step *runsv1alpha1.StepRun) error {
+	story, err := r.getStoryForStep(ctx, step)
+	if err != nil {
+		return nil // Don't block on transient errors
+	}
+	storyStep := findStoryStep(story, step.Spec.StepID)
+	if storyStep == nil || storyStep.PostExecution == nil {
+		return nil
+	}
+
+	// Build vars with step's own output.
+	vars := map[string]any{}
+	if step.Status.Output != nil && len(step.Status.Output.Raw) > 0 {
+		var output any
+		if err := json.Unmarshal(step.Status.Output.Raw, &output); err == nil {
+			vars["steps"] = map[string]any{
+				step.Spec.StepID: map[string]any{
+					"output": output,
+				},
+			}
+		}
+	}
+
+	result, err := r.TemplateEvaluator.EvaluateCondition(ctx, storyStep.PostExecution.Condition, vars)
+	if err != nil {
+		return fmt.Errorf("post-execution condition evaluation error: %w", err)
+	}
+	if !result {
+		msg := "post-execution condition evaluated to false"
+		if storyStep.PostExecution.FailureMessage != "" {
+			msg = storyStep.PostExecution.FailureMessage
+		}
+		return fmt.Errorf("%s", msg)
+	}
+	return nil
 }
 
 func (r *StepRunReconciler) failStepRunInputValidation(ctx context.Context, step *runsv1alpha1.StepRun, validationErr error) error {

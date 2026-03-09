@@ -82,6 +82,14 @@ spec:
                   Example: {"timeout": {"type": "string"}, "retries": {"type": "integer"}}
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
+              declaredOutputKeys:
+                description: |-
+                  DeclaredOutputKeys lists the top-level keys this engram is expected to produce in its output.
+                  Used for documentation, static analysis, and downstream template validation.
+                  Example: ["body", "status", "headers"]
+                items:
+                  type: string
+                type: array
               description:
                 description: |-
                   Human-readable description of what this template does

@@ -81,6 +81,12 @@ type EngramTemplateSpec struct {
 	// - Database: {"rows": "array", "rowCount": "integer", "duration": "number"}
 	// +kubebuilder:pruning:PreserveUnknownFields
 	OutputSchema *runtime.RawExtension `json:"outputSchema,omitempty"`
+
+	// DeclaredOutputKeys lists the top-level keys this engram is expected to produce in its output.
+	// Used for documentation, static analysis, and downstream template validation.
+	// Example: ["body", "status", "headers"]
+	// +optional
+	DeclaredOutputKeys []string `json:"declaredOutputKeys,omitempty"`
 }
 
 // EngramTemplateStatus defines the observed state of EngramTemplate

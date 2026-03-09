@@ -1870,6 +1870,17 @@ func (r *StepRunReconciler) handleJobSucceeded(ctx context.Context, step *runsv1
 		}
 		r.emitStepRunLabeledEvent(ctx, step, corev1.EventTypeNormal, eventReasonJobPatched, "StepRun job succeeded but controller patched status because the SDK had not updated it")
 	}
+	// Record output timestamp for staleness detection.
+	if step.Status.Output != nil && len(step.Status.Output.Raw) > 0 && step.Status.LastOutputAt == nil {
+		now := metav1.Now()
+		if err := kubeutil.RetryableStatusPatch(ctx, r.Client, step, func(obj client.Object) {
+			sr := obj.(*runsv1alpha1.StepRun)
+			sr.Status.LastOutputAt = &now
+		}); err != nil {
+			logger.Error(err, "Failed to set LastOutputAt")
+			// Non-fatal — don't block success.
+		}
+	}
 	r.emitStepRunLabeledEvent(ctx, step, corev1.EventTypeNormal, eventReasonJobSucceeded, "StepRun job completed successfully")
 	r.maybeWriteCache(ctx, step, logger)
 	return ctrl.Result{}, nil
@@ -2980,6 +2991,8 @@ func (r *StepRunReconciler) applyCacheHit(ctx context.Context, step *runsv1alpha
 			sr.Status.Output = &runtime.RawExtension{}
 		}
 		sr.Status.Output.Raw = append([]byte(nil), output...)
+		now := metav1.Now()
+		sr.Status.LastOutputAt = &now
 	})
 }
 

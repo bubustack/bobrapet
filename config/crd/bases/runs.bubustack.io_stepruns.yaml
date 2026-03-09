@@ -1305,6 +1305,12 @@ spec:
                 required:
                 - name
                 type: object
+              templateGeneration:
+                description: |-
+                  TemplateGeneration records the EngramTemplate metadata.generation at the time
+                  this StepRun was created. Enables auditing and replay against the exact template version.
+                format: int64
+                type: integer
               timeout:
                 description: |-
                   Execution timing constraints (inherited from Story → Engram → Template hierarchy)
@@ -1436,6 +1442,7 @@ spec:
                 - retry
                 - terminal
                 - rateLimited
+                - unknown
                 type: string
               exitCode:
                 description: Process execution details
@@ -1486,6 +1493,13 @@ spec:
                     type: string
                 type: object
               lastFailureMsg:
+                type: string
+              lastOutputAt:
+                description: |-
+                  LastOutputAt records when the step's output was last written.
+                  Useful for staleness detection — downstream consumers can compare this
+                  against their own scheduling time.
+                format: date-time
                 type: string
               logs:
                 description: |-

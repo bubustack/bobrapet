@@ -95,6 +95,11 @@ type StepRunSpec struct {
 	// Primitive types: condition, parallel, sleep, stop, wait, executeStory, gate.
 	EngramRef *refs.EngramReference `json:"engramRef,omitempty"` // Reference to an Engram for custom logic
 
+	// TemplateGeneration records the EngramTemplate metadata.generation at the time
+	// this StepRun was created. Enables auditing and replay against the exact template version.
+	// +optional
+	TemplateGeneration int64 `json:"templateGeneration,omitempty"`
+
 	// What data should be passed to this step?
 	// This is the resolved input after template evaluation and data flow from previous steps
 	// Examples:
@@ -203,6 +208,12 @@ type StepRunStatus struct {
 	StartedAt  *metav1.Time `json:"startedAt,omitempty"`  // When did this step start?
 	FinishedAt *metav1.Time `json:"finishedAt,omitempty"` // When did this step finish?
 	Duration   string       `json:"duration,omitempty"`   // How long did execution take? (calculated field)
+
+	// LastOutputAt records when the step's output was last written.
+	// Useful for staleness detection — downstream consumers can compare this
+	// against their own scheduling time.
+	// +optional
+	LastOutputAt *metav1.Time `json:"lastOutputAt,omitempty"`
 
 	// Trace captures the OpenTelemetry trace context for this StepRun.
 	// +optional

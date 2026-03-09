@@ -351,6 +351,10 @@ func (in *StepRunStatus) DeepCopyInto(out *StepRunStatus) {
 		in, out := &in.FinishedAt, &out.FinishedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.LastOutputAt != nil {
+		in, out := &in.LastOutputAt, &out.LastOutputAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Trace != nil {
 		in, out := &in.Trace, &out.Trace
 		*out = new(TraceInfo)

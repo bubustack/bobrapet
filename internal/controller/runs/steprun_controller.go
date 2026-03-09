@@ -113,6 +113,7 @@ const (
 
 var errTransportBindingPending = fmt.Errorf("transport binding not yet observed in informer cache")
 var errStepRunInputSchemaInvalid = errors.New("step input schema validation failed")
+var errStepRunRequiresContextNil = errors.New("required context path is nil")
 var errStepRunCacheHit = errors.New("step output cache hit")
 
 const (
@@ -547,6 +548,9 @@ func (r *StepRunReconciler) reconcileJobExecution(ctx context.Context, step *run
 					return ctrl.Result{}, nil
 				}
 				if errors.Is(createErr, errStepRunInputSchemaInvalid) {
+					return ctrl.Result{}, nil
+				}
+				if errors.Is(createErr, errStepRunRequiresContextNil) {
 					return ctrl.Result{}, nil
 				}
 				var evalBlocked *templating.ErrEvaluationBlocked
@@ -5199,10 +5203,26 @@ func (r *StepRunReconciler) checkRequiresContext(ctx context.Context, step *runs
 	for _, path := range storyStep.Requires {
 		val := resolveNestedPath(vars, strings.Split(path, "."))
 		if val == nil {
-			return fmt.Errorf("required context '%s' is nil — upstream step produced no output for this key", path)
+			message := fmt.Sprintf("required context '%s' is nil — upstream step produced no output for this key", path)
+			if failErr := r.failStepRunRequiresContext(ctx, step, message); failErr != nil {
+				return failErr
+			}
+			return fmt.Errorf("%w: %s", errStepRunRequiresContextNil, path)
 		}
 	}
 	return nil
+}
+
+func (r *StepRunReconciler) failStepRunRequiresContext(ctx context.Context, step *runsv1alpha1.StepRun, message string) error {
+	if err := r.setStepRunPhase(ctx, step, enums.PhaseFailed, conditions.ReasonDependencyFailed, message); err != nil {
+		return err
+	}
+	return kubeutil.RetryableStatusPatch(ctx, r.Client, step, func(obj client.Object) {
+		sr := obj.(*runsv1alpha1.StepRun)
+		sr.Status.LastFailureMsg = message
+		sr.Status.ExitClass = enums.ExitClassTerminal
+		sr.Status.NextRetryAt = nil
+	})
 }
 
 // resolveNestedPath traverses a nested map structure following the given path segments.

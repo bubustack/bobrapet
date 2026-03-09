@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
@@ -143,9 +144,11 @@ func TestCheckRequiresContext(t *testing.T) {
 
 	t.Run("returns error when required path is nil", func(t *testing.T) {
 		t.Parallel()
+		stepRunCopy := stepRun.DeepCopy()
 		client := fake.NewClientBuilder().
 			WithScheme(scheme).
-			WithObjects(story, storyRun, stepRun).
+			WithObjects(story, storyRun, stepRunCopy).
+			WithStatusSubresource(stepRunCopy).
 			Build()
 
 		reconciler := &StepRunReconciler{
@@ -164,10 +167,17 @@ func TestCheckRequiresContext(t *testing.T) {
 			},
 		}
 
-		err := reconciler.checkRequiresContext(context.Background(), stepRun, vars)
+		err := reconciler.checkRequiresContext(context.Background(), stepRunCopy, vars)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "required context")
+		assert.ErrorIs(t, err, errStepRunRequiresContextNil)
 		assert.Contains(t, err.Error(), "steps.fetch.output.body")
+
+		// Verify the step was set to Failed
+		var updated runsv1alpha1.StepRun
+		require.NoError(t, client.Get(context.Background(), types.NamespacedName{Name: stepRunCopy.Name, Namespace: stepRunCopy.Namespace}, &updated))
+		assert.Equal(t, enums.PhaseFailed, updated.Status.Phase)
+		assert.Contains(t, updated.Status.LastFailureMsg, "required context")
+		assert.Equal(t, enums.ExitClassTerminal, updated.Status.ExitClass)
 	})
 
 	t.Run("passes when required path is present", func(t *testing.T) {

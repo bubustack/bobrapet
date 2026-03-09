@@ -273,6 +273,27 @@ type Step struct {
 	// Execution carries per-step execution overrides. Prefer story- or template-level
 	// configuration when possible.
 	Execution *ExecutionOverrides `json:"execution,omitempty"`
+
+	// PostExecution defines optional verification to run after the step completes.
+	// The controller evaluates the condition template against the step's output.
+	// If the condition evaluates to false, the step is marked as failed with a
+	// verification error, even though the engram itself succeeded.
+	// +optional
+	PostExecution *PostExecutionCheck `json:"postExecution,omitempty"`
+}
+
+// PostExecutionCheck defines a verification condition evaluated after step completion.
+type PostExecutionCheck struct {
+	// Condition is a Go template expression that must evaluate to "true" for the step
+	// to be considered truly successful. Has access to steps.<name>.output.* context.
+	// Example: '{{ ne (index .steps "send-notification").output.deliveryStatus "failed" }}'
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Condition string `json:"condition"`
+
+	// FailureMessage is a human-readable message used when the condition evaluates to false.
+	// +optional
+	FailureMessage string `json:"failureMessage,omitempty"`
 }
 
 // StoryPolicy aggregates optional defaults applied across the Story.

@@ -696,6 +696,14 @@ func (sv *stepShapeValidator) checkExpressions(story *bubushv1alpha1.Story, step
 			}
 		}
 	}
+
+	if step.PostExecution != nil && strings.TrimSpace(step.PostExecution.Condition) != "" {
+		if err := templatesafety.ValidateTemplateString(step.PostExecution.Condition); err != nil {
+			agg.AddFieldError(stepPath+".postExecution.condition", conditions.ReasonValidationFailed, err.Error())
+		} else if err := templating.ValidateTemplateString(step.PostExecution.Condition, batchScope); err != nil {
+			agg.AddFieldError(stepPath+".postExecution.condition", conditions.ReasonValidationFailed, err.Error())
+		}
+	}
 }
 
 func (sv *stepShapeValidator) runtimeAllowedForBatchStory(story *bubushv1alpha1.Story, step *bubushv1alpha1.Step) (bool, string) {

@@ -1405,6 +1405,27 @@ spec:
                       items:
                         type: string
                       type: array
+                    postExecution:
+                      description: |-
+                        PostExecution defines optional verification to run after the step completes.
+                        The controller evaluates the condition template against the step's output.
+                        If the condition evaluates to false, the step is marked as failed with a
+                        verification error, even though the engram itself succeeded.
+                      properties:
+                        condition:
+                          description: |-
+                            Condition is a Go template expression that must evaluate to "true" for the step
+                            to be considered truly successful. Has access to steps.<name>.output.* context.
+                            Example: '{{ ne (index .steps "send-notification").output.deliveryStatus "failed" }}'
+                          minLength: 1
+                          type: string
+                        failureMessage:
+                          description: FailureMessage is a human-readable message
+                            used when the condition evaluates to false.
+                          type: string
+                      required:
+                      - condition
+                      type: object
                     ref:
                       description: Ref points to the Engram executed by this step.
                       properties:
@@ -2902,6 +2923,27 @@ spec:
                       items:
                         type: string
                       type: array
+                    postExecution:
+                      description: |-
+                        PostExecution defines optional verification to run after the step completes.
+                        The controller evaluates the condition template against the step's output.
+                        If the condition evaluates to false, the step is marked as failed with a
+                        verification error, even though the engram itself succeeded.
+                      properties:
+                        condition:
+                          description: |-
+                            Condition is a Go template expression that must evaluate to "true" for the step
+                            to be considered truly successful. Has access to steps.<name>.output.* context.
+                            Example: '{{ ne (index .steps "send-notification").output.deliveryStatus "failed" }}'
+                          minLength: 1
+                          type: string
+                        failureMessage:
+                          description: FailureMessage is a human-readable message
+                            used when the condition evaluates to false.
+                          type: string
+                      required:
+                      - condition
+                      type: object
                     ref:
                       description: Ref points to the Engram executed by this step.
                       properties:
@@ -5844,6 +5886,27 @@ spec:
                       items:
                         type: string
                       type: array
+                    postExecution:
+                      description: |-
+                        PostExecution defines optional verification to run after the step completes.
+                        The controller evaluates the condition template against the step's output.
+                        If the condition evaluates to false, the step is marked as failed with a
+                        verification error, even though the engram itself succeeded.
+                      properties:
+                        condition:
+                          description: |-
+                            Condition is a Go template expression that must evaluate to "true" for the step
+                            to be considered truly successful. Has access to steps.<name>.output.* context.
+                            Example: '{{ ne (index .steps "send-notification").output.deliveryStatus "failed" }}'
+                          minLength: 1
+                          type: string
+                        failureMessage:
+                          description: FailureMessage is a human-readable message
+                            used when the condition evaluates to false.
+                          type: string
+                      required:
+                      - condition
+                      type: object
                     ref:
                       description: Ref points to the Engram executed by this step.
                       properties:

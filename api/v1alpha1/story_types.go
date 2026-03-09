@@ -191,6 +191,12 @@ type Step struct {
 	// +optional
 	AllowFailure *bool `json:"allowFailure,omitempty"`
 
+	// SideEffects indicates this step performs external mutations (e.g., API calls,
+	// notifications). When true and no explicit retry policy is set, retries default to 0
+	// to prevent duplicate side effects.
+	// +optional
+	SideEffects *bool `json:"sideEffects,omitempty"`
+
 	// Ref points to the Engram executed by this step.
 	// +optional
 	Ref *refs.EngramReference `json:"ref,omitempty"`

@@ -1464,6 +1464,12 @@ spec:
                       description: Secrets overrides template secret bindings for
                         Engram steps.
                       type: object
+                    sideEffects:
+                      description: |-
+                        SideEffects indicates this step performs external mutations (e.g., API calls,
+                        notifications). When true and no explicit retry policy is set, retries default to 0
+                        to prevent duplicate side effects.
+                      type: boolean
                     transport:
                       description: |-
                         Transport selects a named transport declared in Story.spec.transports. Streaming
@@ -2939,6 +2945,12 @@ spec:
                       description: Secrets overrides template secret bindings for
                         Engram steps.
                       type: object
+                    sideEffects:
+                      description: |-
+                        SideEffects indicates this step performs external mutations (e.g., API calls,
+                        notifications). When true and no explicit retry policy is set, retries default to 0
+                        to prevent duplicate side effects.
+                      type: boolean
                     transport:
                       description: |-
                         Transport selects a named transport declared in Story.spec.transports. Streaming
@@ -5854,6 +5866,12 @@ spec:
                       description: Secrets overrides template secret bindings for
                         Engram steps.
                       type: object
+                    sideEffects:
+                      description: |-
+                        SideEffects indicates this step performs external mutations (e.g., API calls,
+                        notifications). When true and no explicit retry policy is set, retries default to 0
+                        to prevent duplicate side effects.
+                      type: boolean
                     transport:
                       description: |-
                         Transport selects a named transport declared in Story.spec.transports. Streaming

@@ -1035,6 +1035,11 @@ func (in *Step) DeepCopyInto(out *Step) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.SideEffects != nil {
+		in, out := &in.SideEffects, &out.SideEffects
+		*out = new(bool)
+		**out = **in
+	}
 	if in.Ref != nil {
 		in, out := &in.Ref, &out.Ref
 		*out = new(refs.EngramReference)

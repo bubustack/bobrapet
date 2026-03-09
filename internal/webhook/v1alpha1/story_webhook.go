@@ -137,6 +137,19 @@ func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) er
 			}
 		}
 		for i := range story.Spec.Steps {
+			// Default maxRetries=0 for side-effect steps without explicit retry policy
+			step := &story.Spec.Steps[i]
+			if step.SideEffects != nil && *step.SideEffects {
+				if step.Execution == nil {
+					step.Execution = &bubushv1alpha1.ExecutionOverrides{}
+				}
+				if step.Execution.Retry == nil {
+					zero := int32(0)
+					step.Execution.Retry = &bubushv1alpha1.RetryPolicy{
+						MaxRetries: &zero,
+					}
+				}
+			}
 			if story.Spec.Steps[i].Execution != nil {
 				story.Spec.Steps[i].Execution.Retry = ResolveRetryPolicy(cfg, story.Spec.Steps[i].Execution.Retry)
 			}

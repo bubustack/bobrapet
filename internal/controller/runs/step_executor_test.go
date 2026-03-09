@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/pkg/enums"
@@ -265,6 +266,133 @@ func TestResolveStepRetryPolicyNilWhenUnset(t *testing.T) {
 	if resolved != nil {
 		t.Fatalf("expected nil retry policy, got %+v", resolved)
 	}
+}
+
+func TestCreateEngramStepRun_SetsTemplateGeneration(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, runsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, bubuv1alpha1.AddToScheme(scheme))
+	require.NoError(t, catalogv1alpha1.AddToScheme(scheme))
+
+	const templateGeneration int64 = 42
+
+	engramTemplate := &catalogv1alpha1.EngramTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "greeting-template",
+			Generation: templateGeneration,
+		},
+		Spec: catalogv1alpha1.EngramTemplateSpec{},
+	}
+	engram := &bubuv1alpha1.Engram{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "greeting",
+			Namespace: "default",
+		},
+		Spec: bubuv1alpha1.EngramSpec{
+			TemplateRef: refs.EngramTemplateReference{Name: "greeting-template"},
+		},
+	}
+	srun := &runsv1alpha1.StoryRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-run",
+			Namespace: "default",
+			UID:       types.UID("test-uid"),
+		},
+	}
+	story := &bubuv1alpha1.Story{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-story",
+			Namespace: "default",
+		},
+	}
+	step := &bubuv1alpha1.Step{
+		Name: "greet",
+		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "greeting"}},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(engramTemplate, engram).
+		Build()
+
+	executor := &StepExecutor{
+		Client: k8sClient,
+		Scheme: scheme,
+	}
+
+	stepName := kubeutil.ComposeName(srun.Name, step.Name)
+	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil)
+	require.NoError(t, err)
+
+	var created runsv1alpha1.StepRun
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{
+		Name:      stepName,
+		Namespace: srun.Namespace,
+	}, &created))
+
+	require.Equal(t, templateGeneration, created.Spec.TemplateGeneration,
+		"StepRun should record EngramTemplate generation")
+}
+
+func TestCreateEngramStepRun_TemplateGenerationZeroWhenTemplateMissing(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, runsv1alpha1.AddToScheme(scheme))
+	require.NoError(t, bubuv1alpha1.AddToScheme(scheme))
+	require.NoError(t, catalogv1alpha1.AddToScheme(scheme))
+
+	engram := &bubuv1alpha1.Engram{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "greeting",
+			Namespace: "default",
+		},
+		Spec: bubuv1alpha1.EngramSpec{
+			TemplateRef: refs.EngramTemplateReference{Name: "missing-template"},
+		},
+	}
+	srun := &runsv1alpha1.StoryRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-run",
+			Namespace: "default",
+			UID:       types.UID("test-uid"),
+		},
+	}
+	story := &bubuv1alpha1.Story{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-story",
+			Namespace: "default",
+		},
+	}
+	step := &bubuv1alpha1.Step{
+		Name: "greet",
+		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "greeting"}},
+	}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(engram).
+		Build()
+
+	executor := &StepExecutor{
+		Client: k8sClient,
+		Scheme: scheme,
+	}
+
+	stepName := kubeutil.ComposeName(srun.Name, step.Name)
+	err := executor.createEngramStepRun(context.Background(), srun, story, step, stepName, "", nil)
+	require.NoError(t, err)
+
+	var created runsv1alpha1.StepRun
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{
+		Name:      stepName,
+		Namespace: srun.Namespace,
+	}, &created))
+
+	require.Equal(t, int64(0), created.Spec.TemplateGeneration,
+		"StepRun should have zero TemplateGeneration when template is missing")
 }
 
 func int32Ptr(v int32) *int32 {

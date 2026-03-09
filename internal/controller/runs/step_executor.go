@@ -246,6 +246,22 @@ func (e *StepExecutor) mergeTemplateRetryIntoPolicy(ctx context.Context, policy 
 	return config.MergeTemplateRetryIntoPolicy(policy, template.Spec.Execution.Retry)
 }
 
+// lookupTemplateGeneration fetches the EngramTemplate referenced by the engram and returns
+// its metadata.generation. Returns 0 if the engram is nil, has no template ref, or the
+// template cannot be fetched (best-effort; StepRun creation should not fail for this).
+func (e *StepExecutor) lookupTemplateGeneration(ctx context.Context, engram *bubuv1alpha1.Engram, log *logging.ControllerLogger) int64 {
+	if engram == nil || engram.Spec.TemplateRef.Name == "" {
+		return 0
+	}
+	var tmpl catalogv1alpha1.EngramTemplate
+	templateName := types.NamespacedName{Name: engram.Spec.TemplateRef.Name}
+	if err := e.Get(ctx, templateName, &tmpl); err != nil {
+		log.V(1).Info("Could not fetch EngramTemplate for generation pinning; skipping", "template", templateName.Name, "error", err)
+		return 0
+	}
+	return tmpl.Generation
+}
+
 // extractExecutionOverrides extracts timeout and retry from step.Execution.
 //
 // Behavior:
@@ -401,11 +417,12 @@ func (e *StepExecutor) createEngramStepRun(
 			StoryRunRef: refs.StoryRunReference{
 				ObjectReference: refs.ObjectReference{Name: srun.Name},
 			},
-			StepID:    step.Name,
-			EngramRef: step.Ref,
-			Input:     mergedWith,
-			Timeout:   timeout,
-			Retry:     retry,
+			StepID:             step.Name,
+			EngramRef:          step.Ref,
+			TemplateGeneration: e.lookupTemplateGeneration(ctx, &engram, log),
+			Input:              mergedWith,
+			Timeout:            timeout,
+			Retry:              retry,
 		},
 	}
 	if strings.TrimSpace(stepRun.Spec.IdempotencyKey) == "" {
@@ -733,6 +750,17 @@ func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alph
 		childTimeout, childRetry := extractExecutionOverrides(childStep)
 		childRetry = resolveStepRetryPolicy(childRetry, story)
 
+		// Look up EngramTemplate generation for version pinning.
+		var templateGeneration int64
+		if childStep.Ref != nil {
+			engramKey := childStep.Ref.ToNamespacedName(srun)
+			var childEngram bubuv1alpha1.Engram
+			if err := e.Get(ctx, engramKey, &childEngram); err == nil {
+				pLog := logging.NewReconcileLogger(ctx, "step-executor").WithValues("storyrun", srun.Name, "step", childStepName)
+				templateGeneration = e.lookupTemplateGeneration(ctx, &childEngram, pLog)
+			}
+		}
+
 		childLabels := runsidentity.SelectorLabels(srun.Name)
 		if story != nil && story.Name != "" {
 			childLabels[contracts.StoryNameLabelKey] = story.Name
@@ -746,12 +774,13 @@ func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alph
 				Labels:    childLabels,
 			},
 			Spec: runsv1alpha1.StepRunSpec{
-				StoryRunRef: refs.StoryRunReference{ObjectReference: refs.ObjectReference{Name: srun.Name}},
-				StepID:      childStep.Name,
-				EngramRef:   childStep.Ref,
-				Input:       resolvedWithBytes,
-				Timeout:     childTimeout,
-				Retry:       childRetry,
+				StoryRunRef:        refs.StoryRunReference{ObjectReference: refs.ObjectReference{Name: srun.Name}},
+				StepID:             childStep.Name,
+				EngramRef:          childStep.Ref,
+				TemplateGeneration: templateGeneration,
+				Input:              resolvedWithBytes,
+				Timeout:            childTimeout,
+				Retry:              childRetry,
 			},
 		}
 		if err := e.createOrUpdateChildStepRun(ctx, srun, stepRun); err != nil {

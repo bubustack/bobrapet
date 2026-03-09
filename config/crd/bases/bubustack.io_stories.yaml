@@ -6543,6 +6543,12 @@ spec:
                 - unknown
                 - pending
                 type: string
+              validationWarnings:
+                description: ValidationWarnings captures non-fatal validation issues
+                  (e.g., unreachable step references in templates).
+                items:
+                  type: string
+                type: array
             type: object
         required:
         - spec

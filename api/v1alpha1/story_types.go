@@ -342,6 +342,10 @@ type StoryStatus struct {
 	// ValidationErrors captures human-readable validation problems, when present.
 	ValidationErrors []string `json:"validationErrors,omitempty"`
 
+	// ValidationWarnings captures non-fatal validation issues (e.g., unreachable step references in templates).
+	// +optional
+	ValidationWarnings []string `json:"validationWarnings,omitempty"`
+
 	// UsageCount reports how many Impulses reference this Story.
 	// +optional
 	UsageCount int32 `json:"usageCount"`

@@ -58,6 +58,75 @@ var _ = Describe("Story Webhook", func() {
 			Expect(*story.Spec.Policy.Retries.ContinueOnStepFailure).To(BeFalse())
 			Expect(story.Spec.Steps[0].Execution.Retry).NotTo(BeNil())
 		})
+
+		It("warns on unknown step references in template expressions", func() {
+			story := minimalStory("tpl-unknown-ref")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{
+					Name: "fetch-feed",
+					Type: enums.StepTypeCondition,
+				},
+				{
+					Name:  "process",
+					Type:  enums.StepTypeCondition,
+					Needs: []string{"fetch-feed"},
+					With: mustRawExtension(map[string]any{
+						"url": `{{ (index .steps "fech-feed").output.body }}`,
+					}),
+				},
+			}
+
+			Expect(defaulter.Default(ctx, story)).To(Succeed())
+			Expect(story.Status.ValidationWarnings).To(HaveLen(1))
+			Expect(story.Status.ValidationWarnings[0]).To(ContainSubstring("unknown step 'fech-feed'"))
+		})
+
+		It("produces no warnings for valid upstream step references", func() {
+			story := minimalStory("tpl-valid-ref")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{
+					Name: "fetch-feed",
+					Type: enums.StepTypeCondition,
+				},
+				{
+					Name:  "process",
+					Type:  enums.StepTypeCondition,
+					Needs: []string{"fetch-feed"},
+					With: mustRawExtension(map[string]any{
+						"url": `{{ (index .steps "fetch-feed").output.body }}`,
+					}),
+				},
+			}
+
+			Expect(defaulter.Default(ctx, story)).To(Succeed())
+			Expect(story.Status.ValidationWarnings).To(BeEmpty())
+		})
+
+		It("warns on unreachable step references in template expressions", func() {
+			story := minimalStory("tpl-unreachable-ref")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{
+					Name: "stepa",
+					Type: enums.StepTypeCondition,
+				},
+				{
+					Name: "stepb",
+					Type: enums.StepTypeCondition,
+				},
+				{
+					Name:  "stepc",
+					Type:  enums.StepTypeCondition,
+					Needs: []string{"stepa"},
+					With: mustRawExtension(map[string]any{
+						"data": `{{ (index .steps "stepb").output.value }}`,
+					}),
+				},
+			}
+
+			Expect(defaulter.Default(ctx, story)).To(Succeed())
+			Expect(story.Status.ValidationWarnings).To(HaveLen(1))
+			Expect(story.Status.ValidationWarnings[0]).To(ContainSubstring("not in its upstream dependency chain"))
+		})
 	})
 
 	Context("executeStory validation", func() {

@@ -154,6 +154,17 @@ func (d *StoryCustomDefaulter) Default(_ context.Context, obj runtime.Object) er
 				story.Spec.Steps[i].Execution.Retry = ResolveRetryPolicy(cfg, story.Spec.Steps[i].Execution.Retry)
 			}
 		}
+
+		// Collect template step reference warnings
+		reachability := buildReachabilityMap(story.Spec.Steps)
+		allStepNames := collectStepNames(story.Spec.Steps)
+		var warnings []string
+		for i := range story.Spec.Steps {
+			step := &story.Spec.Steps[i]
+			warnings = append(warnings, validateStepTemplateRefs(step, allStepNames, reachability[step.Name])...)
+		}
+		story.Status.ValidationWarnings = warnings
+
 		return nil
 	})
 }
@@ -1690,4 +1701,56 @@ func (v *StoryCustomValidator) validateEngramStepCached(
 	}
 
 	return warnings, nil
+}
+
+// extractTemplateStringsFromJSON walks a JSON value and collects all string values containing "{{".
+func extractTemplateStringsFromJSON(raw []byte) []string {
+	var node any
+	if err := json.Unmarshal(raw, &node); err != nil {
+		return nil
+	}
+	var result []string
+	collectTemplateStrings(node, &result)
+	return result
+}
+
+func collectTemplateStrings(node any, result *[]string) {
+	switch typed := node.(type) {
+	case map[string]any:
+		for _, v := range typed {
+			collectTemplateStrings(v, result)
+		}
+	case []any:
+		for _, v := range typed {
+			collectTemplateStrings(v, result)
+		}
+	case string:
+		if strings.Contains(typed, "{{") {
+			*result = append(*result, typed)
+		}
+	}
+}
+
+// validateStepTemplateRefs checks that template expressions in a step's with/runtime
+// fields reference only known and reachable upstream steps.
+func validateStepTemplateRefs(step *bubushv1alpha1.Step, allStepNames map[string]struct{}, reachable map[string]struct{}) []string {
+	var warnings []string
+	var templates []string
+	if step.With != nil && len(step.With.Raw) > 0 {
+		templates = append(templates, extractTemplateStringsFromJSON(step.With.Raw)...)
+	}
+	if step.Runtime != nil && len(step.Runtime.Raw) > 0 {
+		templates = append(templates, extractTemplateStringsFromJSON(step.Runtime.Raw)...)
+	}
+	for _, tpl := range templates {
+		refs := templating.ExtractStepReferences(tpl)
+		for _, ref := range refs {
+			if _, ok := allStepNames[ref]; !ok {
+				warnings = append(warnings, fmt.Sprintf("step '%s' references unknown step '%s' in template expression", step.Name, ref))
+			} else if _, ok := reachable[ref]; !ok {
+				warnings = append(warnings, fmt.Sprintf("step '%s' references step '%s' which is not in its upstream dependency chain", step.Name, ref))
+			}
+		}
+	}
+	return warnings
 }

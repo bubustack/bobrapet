@@ -1736,6 +1736,9 @@ func collectTemplateStrings(node any, result *[]string) {
 func validateStepTemplateRefs(step *bubushv1alpha1.Step, allStepNames map[string]struct{}, reachable map[string]struct{}) []string {
 	var warnings []string
 	var templates []string
+	if step.If != nil {
+		templates = append(templates, *step.If)
+	}
 	if step.With != nil && len(step.With.Raw) > 0 {
 		templates = append(templates, extractTemplateStringsFromJSON(step.With.Raw)...)
 	}

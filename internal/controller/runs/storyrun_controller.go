@@ -261,6 +261,10 @@ func (r *StoryRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 	if handled, result, err := r.handleRedriveIfRequested(ctx, &srun, log); handled {
 		return result, err
 	}
+	// Check for graceful cancel request
+	if srun.Spec.CancelRequested != nil && *srun.Spec.CancelRequested {
+		return r.handleGracefulCancel(ctx, &srun)
+	}
 	if srun.Status.Phase.IsTerminal() {
 		story, err := r.getStoryOptional(ctx, &srun)
 		if err != nil {
@@ -1418,6 +1422,54 @@ func (r *StoryRunReconciler) recordDependentMetrics(srun *runsv1alpha1.StoryRun,
 //   - Emits a structured log with the number of dependents removed and the ChildrenCleanedAt
 //     timestamp as soon as cleanup completes so retention enforcement is auditable (lines 452-462).
 //
+// handleGracefulCancel processes a graceful cancel request on a StoryRun.
+// It annotates all non-terminal StepRuns with "bubustack.io/cancel-requested"
+// so SDKs can drain in-flight work, then transitions the StoryRun to Finished
+// once all steps reach a terminal phase.
+func (r *StoryRunReconciler) handleGracefulCancel(ctx context.Context, srun *runsv1alpha1.StoryRun) (ctrl.Result, error) {
+	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", srun.Name)
+	log.Info("Graceful cancel requested")
+
+	// 1. List all StepRuns belonging to this StoryRun
+	stepRunList := &runsv1alpha1.StepRunList{}
+	if err := runslist.StepRunsByStoryRun(ctx, r.Client, srun.Namespace, srun.Name, nil, stepRunList); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// 2. Annotate all non-terminal StepRuns with cancel signal
+	allTerminal := true
+	for i := range stepRunList.Items {
+		sr := &stepRunList.Items[i]
+		if !sr.Status.Phase.IsTerminal() {
+			allTerminal = false
+			// Set cancel annotation so SDK can detect and drain gracefully
+			if sr.Annotations == nil || sr.Annotations["bubustack.io/cancel-requested"] != "true" {
+				patch := client.MergeFrom(sr.DeepCopy())
+				if sr.Annotations == nil {
+					sr.Annotations = map[string]string{}
+				}
+				sr.Annotations["bubustack.io/cancel-requested"] = "true"
+				if err := r.Patch(ctx, sr, patch); err != nil {
+					log.Error(err, "Failed to annotate StepRun with cancel", "steprun", sr.Name)
+				}
+			}
+		}
+	}
+
+	// 3. If all steps are terminal, set StoryRun to Finished
+	if allTerminal {
+		if srun.Status.Phase != enums.PhaseFinished {
+			if err := r.setStoryRunPhase(ctx, srun, enums.PhaseFinished, conditions.ReasonCanceled, "StoryRun gracefully canceled"); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// 4. Otherwise, requeue to check again
+	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
 // Inputs:
 //   - ctx context.Context propagated into cleanup, status patches, and deletes.
 //   - srun/story/log describe the StoryRun, the parent Story policy, and the logger.

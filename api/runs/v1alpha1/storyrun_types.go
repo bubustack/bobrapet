@@ -85,6 +85,15 @@ type StoryRunSpec struct {
 	// - Deployment: {"environment": "production", "version": "v1.2.3", "rollback": false}
 	// +kubebuilder:pruning:PreserveUnknownFields
 	Inputs *runtime.RawExtension `json:"inputs,omitempty"`
+
+	// CancelRequested signals that this StoryRun should be gracefully canceled.
+	// When set to true, the controller will:
+	// 1. Stop scheduling new steps
+	// 2. Set running steps' CancelRequested annotation
+	// 3. Wait for GracefulShutdownTimeout (default 30s) before force-killing
+	// 4. Set the StoryRun phase to Finished
+	// +optional
+	CancelRequested *bool `json:"cancelRequested,omitempty"`
 }
 
 // StoryRunStatus tracks the current state and results of this story execution

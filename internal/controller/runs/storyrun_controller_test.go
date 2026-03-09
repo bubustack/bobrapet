@@ -248,6 +248,137 @@ var _ = Describe("StoryRun Controller", func() {
 			Expect(updated.Annotations[runsidentity.StoryRunRedriveObservedAnnotation]).To(Equal("token-1"))
 		})
 
+		It("should annotate running StepRuns when cancelRequested is true", func() {
+			By("setting StoryRun phase to Running")
+			current := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			base := current.DeepCopy()
+			current.Status.Phase = enums.PhaseRunning
+			Expect(k8sClient.Status().Patch(ctx, current, client.MergeFrom(base))).To(Succeed())
+
+			By("creating a running StepRun")
+			stepRun := &runsv1alpha1.StepRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cancel-step-running",
+					Namespace: "default",
+					Labels:    runsidentity.SelectorLabels(resourceName),
+				},
+				Spec: runsv1alpha1.StepRunSpec{
+					StoryRunRef: refs.StoryRunReference{
+						ObjectReference: refs.ObjectReference{Name: resourceName},
+					},
+					StepID: "step1",
+				},
+			}
+			Expect(k8sClient.Create(ctx, stepRun)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, stepRun)
+			})
+
+			// Set StepRun phase to Running
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: stepRun.Name, Namespace: stepRun.Namespace}, stepRun)).To(Succeed())
+			srBase := stepRun.DeepCopy()
+			stepRun.Status.Phase = enums.PhaseRunning
+			Expect(k8sClient.Status().Patch(ctx, stepRun, client.MergeFrom(srBase))).To(Succeed())
+
+			By("setting cancelRequested on the StoryRun")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			patch := client.MergeFrom(current.DeepCopy())
+			cancelTrue := true
+			current.Spec.CancelRequested = &cancelTrue
+			Expect(k8sClient.Patch(ctx, current, patch)).To(Succeed())
+
+			By("reconciling")
+			controllerReconciler := buildReconciler()
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+
+			By("verifying StepRun has cancel annotation")
+			updated := &runsv1alpha1.StepRun{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: stepRun.Name, Namespace: stepRun.Namespace}, updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue("bubustack.io/cancel-requested", "true"))
+		})
+
+		It("should finish StoryRun when all steps are terminal and cancelRequested", func() {
+			By("setting StoryRun phase to Running")
+			current := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			base := current.DeepCopy()
+			current.Status.Phase = enums.PhaseRunning
+			Expect(k8sClient.Status().Patch(ctx, current, client.MergeFrom(base))).To(Succeed())
+
+			By("creating a terminal StepRun")
+			stepRun := &runsv1alpha1.StepRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cancel-step-done",
+					Namespace: "default",
+					Labels:    runsidentity.SelectorLabels(resourceName),
+				},
+				Spec: runsv1alpha1.StepRunSpec{
+					StoryRunRef: refs.StoryRunReference{
+						ObjectReference: refs.ObjectReference{Name: resourceName},
+					},
+					StepID: "step1",
+				},
+			}
+			Expect(k8sClient.Create(ctx, stepRun)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, stepRun)
+			})
+
+			// Set StepRun phase to Succeeded (terminal)
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: stepRun.Name, Namespace: stepRun.Namespace}, stepRun)).To(Succeed())
+			srBase := stepRun.DeepCopy()
+			stepRun.Status.Phase = enums.PhaseSucceeded
+			Expect(k8sClient.Status().Patch(ctx, stepRun, client.MergeFrom(srBase))).To(Succeed())
+
+			By("setting cancelRequested on the StoryRun")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			patch := client.MergeFrom(current.DeepCopy())
+			cancelTrue := true
+			current.Spec.CancelRequested = &cancelTrue
+			Expect(k8sClient.Patch(ctx, current, patch)).To(Succeed())
+
+			By("reconciling")
+			controllerReconciler := buildReconciler()
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			By("verifying StoryRun phase is Finished")
+			updated := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(enums.PhaseFinished))
+		})
+
+		It("should finish StoryRun when cancelRequested and no StepRuns exist", func() {
+			By("setting cancelRequested on the StoryRun")
+			current := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			patch := client.MergeFrom(current.DeepCopy())
+			cancelTrue := true
+			current.Spec.CancelRequested = &cancelTrue
+			Expect(k8sClient.Patch(ctx, current, patch)).To(Succeed())
+
+			By("reconciling")
+			controllerReconciler := buildReconciler()
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
+			By("verifying StoryRun phase is Finished")
+			updated := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(enums.PhaseFinished))
+		})
+
 		It("should wait for dependents cleanup before redrive", func() {
 			By("creating dependent StepRun and child StoryRun")
 			stepRun := &runsv1alpha1.StepRun{

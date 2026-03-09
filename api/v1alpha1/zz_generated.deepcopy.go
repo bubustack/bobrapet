@@ -1045,6 +1045,11 @@ func (in *Step) DeepCopyInto(out *Step) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.IdempotencyKeyTemplate != nil {
+		in, out := &in.IdempotencyKeyTemplate, &out.IdempotencyKeyTemplate
+		*out = new(string)
+		**out = **in
+	}
 	if in.Ref != nil {
 		in, out := &in.Ref, &out.Ref
 		*out = new(refs.EngramReference)
@@ -1364,6 +1369,11 @@ func (in *StoryTimeouts) DeepCopyInto(out *StoryTimeouts) {
 	if in.Step != nil {
 		in, out := &in.Step, &out.Step
 		*out = new(string)
+		**out = **in
+	}
+	if in.GracefulShutdownTimeout != nil {
+		in, out := &in.GracefulShutdownTimeout, &out.GracefulShutdownTimeout
+		*out = new(metav1.Duration)
 		**out = **in
 	}
 }

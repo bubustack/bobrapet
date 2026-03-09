@@ -203,6 +203,14 @@ type Step struct {
 	// +optional
 	Requires []string `json:"requires,omitempty"`
 
+	// IdempotencyKeyTemplate is a Go template that produces a business-scoped idempotency key.
+	// When set, the evaluated result replaces the auto-generated execution-scoped key.
+	// Template has access to inputs.* and steps.* contexts.
+	// Example: "send-notification-{{ .inputs.customerId }}-{{ .inputs.orderId }}"
+	// +kubebuilder:validation:MaxLength=512
+	// +optional
+	IdempotencyKeyTemplate *string `json:"idempotencyKeyTemplate,omitempty"`
+
 	// Ref points to the Engram executed by this step.
 	// +optional
 	Ref *refs.EngramReference `json:"ref,omitempty"`
@@ -306,6 +314,11 @@ type StoryTimeouts struct {
 
 	// Default timeout for individual steps
 	Step *string `json:"step,omitempty"`
+
+	// GracefulShutdownTimeout is the maximum time to wait for steps to complete
+	// after cancel is requested. Defaults to 30s.
+	// +optional
+	GracefulShutdownTimeout *metav1.Duration `json:"gracefulShutdownTimeout,omitempty"`
 }
 
 type StoryRetries struct {

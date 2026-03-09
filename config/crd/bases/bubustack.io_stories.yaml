@@ -1379,6 +1379,14 @@ spec:
                       maxLength: 63
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
+                    idempotencyKeyTemplate:
+                      description: |-
+                        IdempotencyKeyTemplate is a Go template that produces a business-scoped idempotency key.
+                        When set, the evaluated result replaces the auto-generated execution-scoped key.
+                        Template has access to inputs.* and steps.* contexts.
+                        Example: "send-notification-{{ .inputs.customerId }}-{{ .inputs.orderId }}"
+                      maxLength: 512
+                      type: string
                     if:
                       description: If gates execution on a template expression that
                         evaluates to true.
@@ -2867,6 +2875,14 @@ spec:
                         for programmatic processing of the workflow graph.
                       maxLength: 63
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    idempotencyKeyTemplate:
+                      description: |-
+                        IdempotencyKeyTemplate is a Go template that produces a business-scoped idempotency key.
+                        When set, the evaluated result replaces the auto-generated execution-scoped key.
+                        Template has access to inputs.* and steps.* contexts.
+                        Example: "send-notification-{{ .inputs.customerId }}-{{ .inputs.orderId }}"
+                      maxLength: 512
                       type: string
                     if:
                       description: If gates execution on a template expression that
@@ -4469,6 +4485,11 @@ spec:
                   timeouts:
                     description: Timeouts
                     properties:
+                      gracefulShutdownTimeout:
+                        description: |-
+                          GracefulShutdownTimeout is the maximum time to wait for steps to complete
+                          after cancel is requested. Defaults to 30s.
+                        type: string
                       step:
                         description: Default timeout for individual steps
                         type: string
@@ -5796,6 +5817,14 @@ spec:
                         for programmatic processing of the workflow graph.
                       maxLength: 63
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    idempotencyKeyTemplate:
+                      description: |-
+                        IdempotencyKeyTemplate is a Go template that produces a business-scoped idempotency key.
+                        When set, the evaluated result replaces the auto-generated execution-scoped key.
+                        Template has access to inputs.* and steps.* contexts.
+                        Example: "send-notification-{{ .inputs.customerId }}-{{ .inputs.orderId }}"
+                      maxLength: 512
                       type: string
                     if:
                       description: If gates execution on a template expression that

@@ -276,7 +276,7 @@ const (
 // ExitClass defines how container exit codes should be interpreted.
 // This enables intelligent retry logic based on the type of failure.
 //
-// +kubebuilder:validation:Enum=success;retry;terminal;rateLimited
+// +kubebuilder:validation:Enum=success;retry;terminal;rateLimited;unknown
 type ExitClass string
 
 const (
@@ -298,6 +298,11 @@ const (
 	// This represents failures due to rate limiting that require longer delays.
 	// Examples: API rate limits, quota exhaustion, throttling.
 	ExitClassRateLimited ExitClass = "rateLimited"
+
+	// ExitClassUnknown indicates the exit code could not be determined.
+	// This represents infrastructure failures where the pod state is indeterminate.
+	// Treated as retryable but does NOT count against the retry budget.
+	ExitClassUnknown ExitClass = "unknown"
 )
 
 // SecretMountType defines how secrets should be made available to the workload

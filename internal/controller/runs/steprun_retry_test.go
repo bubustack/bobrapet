@@ -277,3 +277,19 @@ func TestReconcileJobExecutionRetryDueWithActivePods(t *testing.T) {
 	err = client.Get(context.Background(), types.NamespacedName{Name: step.Name, Namespace: step.Namespace}, &job)
 	require.True(t, apierrors.IsNotFound(err))
 }
+
+func TestClassifyExitCode_UnknownForSentinel(t *testing.T) {
+	t.Parallel()
+	require.Equal(t, enums.ExitClassUnknown, classifyExitCode(-1))
+}
+
+func TestRetryableExitClass_UnknownIsRetryable(t *testing.T) {
+	t.Parallel()
+	require.True(t, retryableExitClass(enums.ExitClassUnknown))
+}
+
+func TestClassifyExitCode_SuccessStillZero(t *testing.T) {
+	t.Parallel()
+	// Ensure 0 is still success (not accidentally caught by -1 change)
+	require.Equal(t, enums.ExitClassSuccess, classifyExitCode(0))
+}

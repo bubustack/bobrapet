@@ -2013,6 +2013,10 @@ func (r *StepRunReconciler) scheduleRetryIfNeeded(
 	}
 
 	attempt := step.Status.Retries + 1
+	// Unknown exit class: retry without counting against budget (infrastructure failure)
+	if exitClass == enums.ExitClassUnknown {
+		attempt = step.Status.Retries // don't increment
+	}
 	delay := computeRetryDelay(policy, attempt, logger)
 	nextRetry := metav1.NewTime(time.Now().Add(delay))
 	message := fmt.Sprintf("Retrying in %s (attempt %d/%d)", delay.String(), attempt, maxRetries)
@@ -2145,7 +2149,7 @@ func computeRetryDelay(policy *v1alpha1.RetryPolicy, attempt int32, logger *logg
 
 func retryableExitClass(exitClass enums.ExitClass) bool {
 	switch exitClass {
-	case enums.ExitClassRetry, enums.ExitClassRateLimited:
+	case enums.ExitClassRetry, enums.ExitClassRateLimited, enums.ExitClassUnknown:
 		return true
 	default:
 		return false
@@ -2202,19 +2206,19 @@ func (r *StepRunReconciler) applyFailureFallback(ctx context.Context, step *runs
 // Behavior:
 //   - Lists pods owned by the Job.
 //   - Returns exit code from most recent failed pod.
-//   - Returns 0 if pod or exit code cannot be determined.
+//   - Returns -1 if pod or exit code cannot be determined.
 //
 // Arguments:
 //   - ctx context.Context: for API calls.
 //   - job *batchv1.Job: the Job to inspect.
 //
 // Returns:
-//   - int: the exit code (0 if unknown).
+//   - int: the exit code (-1 if unknown).
 func (r *StepRunReconciler) extractPodExitCode(ctx context.Context, job *batchv1.Job) int {
 	// List pods owned by this Job
 	var podList corev1.PodList
 	if err := kubeutil.ListByLabels(ctx, r.Client, job.Namespace, map[string]string{"job-name": job.Name}, &podList); err != nil {
-		return 0
+		return -1
 	}
 
 	// Find the most recent failed pod
@@ -2229,7 +2233,7 @@ func (r *StepRunReconciler) extractPodExitCode(ctx context.Context, job *batchv1
 			}
 		}
 	}
-	return 0
+	return -1
 }
 
 // hasActiveJobPods checks for running/pending pods for the StepRun's Job name.
@@ -4010,7 +4014,7 @@ func (r *StepRunReconciler) desiredRunScopedDeployment(
 	defaultPort := transportutil.EffectiveServicePort(resolvedCfg, int32(operatorCfg.Controller.Engram.EngramControllerConfig.DefaultGRPCPort))
 
 	labels, podLabels := buildRealtimeLabels(step, story, engram)
-	podAnnotations := buildRealtimeAnnotations(step, story, bindingEnv)
+	podAnnotations := buildRealtimeAnnotations(step, story, bindingEnv, bindingInfo)
 
 	schemaName := fmt.Sprintf("EngramTemplate %s inputs", template.Name)
 	baseEnv, err := r.buildRealtimeBaseEnv(ctx, step, story, storyRun, engram, template.Spec.InputSchema, schemaName, bindingEnv, bindingInfo, allowInsecure, stepTimeout, runtimeEnvCfg, operatorCfg)
@@ -4255,7 +4259,12 @@ func (r *StepRunReconciler) emitStepRunLabeledEvent(
 	}
 }
 
-func buildRealtimeAnnotations(step *runsv1alpha1.StepRun, story *v1alpha1.Story, bindingEnv string) map[string]string {
+func buildRealtimeAnnotations(
+	step *runsv1alpha1.StepRun,
+	story *v1alpha1.Story,
+	bindingEnv string,
+	bindingInfo *transportpb.BindingInfo,
+) map[string]string {
 	annotations := map[string]string{
 		contracts.StoryRunAnnotation: step.Spec.StoryRunRef.Name,
 		contracts.StepAnnotation:     step.Spec.StepID,
@@ -4267,7 +4276,13 @@ func buildRealtimeAnnotations(step *runsv1alpha1.StepRun, story *v1alpha1.Story,
 		if !isMaterializeStepRun(step) {
 			analyzer := transportutil.NewTopologyAnalyzer(story)
 			if routingInfo, err := analyzer.AnalyzeStepRouting(step.Spec.StepID); err == nil {
-				annotations["transport.bubustack.io/routing-mode"] = string(routingInfo.RoutingMode)
+				routingMode := routingInfo.RoutingMode
+				if override, ok := routingModeFromBindingSettings(bindingInfo); ok && override == transportutil.RoutingModeHub {
+					// Binding settings override topology analysis. Keep pod annotation
+					// aligned with binding so connector-webhook resolves the same mode.
+					routingMode = transportutil.RoutingModeHub
+				}
+				annotations["transport.bubustack.io/routing-mode"] = string(routingMode)
 				if len(routingInfo.DownstreamSteps) > 0 {
 					annotations["transport.bubustack.io/downstream-steps"] = strings.Join(routingInfo.DownstreamSteps, ",")
 				}
@@ -4278,6 +4293,18 @@ func buildRealtimeAnnotations(step *runsv1alpha1.StepRun, story *v1alpha1.Story,
 		annotations[contracts.TransportBindingAnnotation] = bindingEnv
 	}
 	return annotations
+}
+
+func routingModeFromBindingSettings(bindingInfo *transportpb.BindingInfo) (transportutil.RoutingMode, bool) {
+	if bindingInfo == nil || len(bindingInfo.GetPayload()) == 0 {
+		return "", false
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(bindingInfo.GetPayload(), &settings); err != nil {
+		return "", false
+	}
+	mode, ok, _ := transportutil.RoutingModeOverride(settings)
+	return mode, ok
 }
 
 func (r *StepRunReconciler) buildRealtimeBaseEnv(
@@ -4456,6 +4483,9 @@ func (r *StepRunReconciler) reconcileRunScopedDeployment(ctx context.Context, ow
 //   - enums.ExitClass: the classification.
 func classifyExitCode(code int) enums.ExitClass {
 	switch {
+	case code == -1:
+		// Sentinel: exit code could not be determined (pod evicted, API error)
+		return enums.ExitClassUnknown
 	case code == 0:
 		return enums.ExitClassSuccess
 	case code == 124:

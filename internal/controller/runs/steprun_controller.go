@@ -2643,6 +2643,9 @@ func (r *StepRunReconciler) resolveRunScopedInputs(ctx context.Context, step *ru
 			"inputs": storyInputs,
 			"steps":  stepOutputs,
 		}
+		if reqErr := r.checkRequiresContext(ctx, step, vars); reqErr != nil {
+			return nil, reqErr
+		}
 		resolvedInputs, err = r.TemplateEvaluator.ResolveWithInputs(ctx, withBlock, vars)
 		if err != nil {
 			// When evaluator hits a ref during resolution it returns ErrOffloadedDataUsage.
@@ -5179,6 +5182,41 @@ func findStoryStep(story *v1alpha1.Story, stepID string) *v1alpha1.Step {
 		}
 	}
 	return nil
+}
+
+// checkRequiresContext validates that all requires paths declared on the Story step
+// resolve to non-nil values in the template context. This catches nil upstream outputs
+// before the step is scheduled, providing a clear error instead of silently passing null.
+func (r *StepRunReconciler) checkRequiresContext(ctx context.Context, step *runsv1alpha1.StepRun, vars map[string]any) error {
+	story, err := r.getStoryForStep(ctx, step)
+	if err != nil {
+		return nil // Don't block on transient errors
+	}
+	storyStep := findStoryStep(story, step.Spec.StepID)
+	if storyStep == nil || len(storyStep.Requires) == 0 {
+		return nil
+	}
+	for _, path := range storyStep.Requires {
+		val := resolveNestedPath(vars, strings.Split(path, "."))
+		if val == nil {
+			return fmt.Errorf("required context '%s' is nil — upstream step produced no output for this key", path)
+		}
+	}
+	return nil
+}
+
+// resolveNestedPath traverses a nested map structure following the given path segments.
+// Returns nil if any segment is missing or the intermediate value is not a map.
+func resolveNestedPath(data map[string]any, parts []string) any {
+	var current any = data
+	for _, part := range parts {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current = m[part]
+	}
+	return current
 }
 
 // getStoryForStep fetches the Story referenced by the StepRun's parent StoryRun.

@@ -197,6 +197,12 @@ type Step struct {
 	// +optional
 	SideEffects *bool `json:"sideEffects,omitempty"`
 
+	// Requires lists dot-paths that must resolve to non-nil values before this step
+	// is scheduled. Paths follow the format "steps.<name>.output.<key>".
+	// If any required path is nil, the step fails immediately with a descriptive error.
+	// +optional
+	Requires []string `json:"requires,omitempty"`
+
 	// Ref points to the Engram executed by this step.
 	// +optional
 	Ref *refs.EngramReference `json:"ref,omitempty"`

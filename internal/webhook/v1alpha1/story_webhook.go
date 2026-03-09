@@ -352,6 +352,11 @@ func (v *StoryCustomValidator) validateStory(ctx context.Context, story *bubushv
 		agg.AddFieldError("spec.finally", conditions.ReasonValidationFailed, err.Error())
 	}
 
+	// Validate requires paths reference known upstream steps.
+	validateRequiresPathsForSlice(story.Spec.Steps, "spec.steps", mainNames, agg)
+	validateRequiresPathsForSlice(story.Spec.Compensations, "spec.compensations", compAllowed, agg)
+	validateRequiresPathsForSlice(story.Spec.Finally, "spec.finally", finallyAllowed, agg)
+
 	transportByName, err := validateStoryTransportsSpec(story)
 	if err != nil {
 		agg.AddFieldError("spec.transports", conditions.ReasonValidationFailed, err.Error())
@@ -996,6 +1001,72 @@ func collectStepNames(steps []bubushv1alpha1.Step) map[string]struct{} {
 		names[steps[i].Name] = struct{}{}
 	}
 	return names
+}
+
+// validateRequiresPathsForSlice validates requires paths for all steps in a slice.
+func validateRequiresPathsForSlice(steps []bubushv1alpha1.Step, field string, allStepNames map[string]struct{}, agg *validation.Aggregator) {
+	reachable := buildReachabilityMap(steps)
+	for i := range steps {
+		s := &steps[i]
+		if len(s.Requires) == 0 {
+			continue
+		}
+		stepPath := fmt.Sprintf("%s[%d]", field, i)
+		validateRequiresPaths(s, stepPath, allStepNames, reachable[s.Name], agg)
+	}
+}
+
+// validateRequiresPaths validates that each requires path is well-formed and references
+// a step that exists in the DAG and is transitively upstream via needs.
+func validateRequiresPaths(step *bubushv1alpha1.Step, stepPath string, allStepNames map[string]struct{}, reachable map[string]struct{}, agg *validation.Aggregator) {
+	for i, path := range step.Requires {
+		if !strings.HasPrefix(path, "steps.") {
+			agg.AddFieldError(fmt.Sprintf("%s.requires[%d]", stepPath, i), conditions.ReasonValidationFailed,
+				fmt.Sprintf("requires path must start with 'steps.', got %q", path))
+			continue
+		}
+		parts := strings.SplitN(path, ".", 4) // steps.<name>.output.<key>
+		if len(parts) < 3 {
+			agg.AddFieldError(fmt.Sprintf("%s.requires[%d]", stepPath, i), conditions.ReasonValidationFailed,
+				fmt.Sprintf("requires path must have at least 3 segments (steps.<name>.<field>), got %q", path))
+			continue
+		}
+		stepName := parts[1]
+		if _, ok := allStepNames[stepName]; !ok {
+			agg.AddFieldError(fmt.Sprintf("%s.requires[%d]", stepPath, i), conditions.ReasonValidationFailed,
+				fmt.Sprintf("requires references unknown step %q", stepName))
+			continue
+		}
+		if _, ok := reachable[stepName]; !ok {
+			agg.AddFieldError(fmt.Sprintf("%s.requires[%d]", stepPath, i), conditions.ReasonValidationFailed,
+				fmt.Sprintf("requires references step %q which is not upstream (add it to needs or needs chain)", stepName))
+		}
+	}
+}
+
+// buildReachabilityMap computes the transitive upstream closure for each step via needs.
+func buildReachabilityMap(steps []bubushv1alpha1.Step) map[string]map[string]struct{} {
+	direct := make(map[string][]string)
+	for _, s := range steps {
+		direct[s.Name] = s.Needs
+	}
+	reachable := make(map[string]map[string]struct{})
+	for _, s := range steps {
+		visited := make(map[string]struct{})
+		queue := make([]string, len(s.Needs))
+		copy(queue, s.Needs)
+		for len(queue) > 0 {
+			curr := queue[0]
+			queue = queue[1:]
+			if _, ok := visited[curr]; ok {
+				continue
+			}
+			visited[curr] = struct{}{}
+			queue = append(queue, direct[curr]...)
+		}
+		reachable[s.Name] = visited
+	}
+	return reachable
 }
 
 func mergeStepNameSets(sets ...map[string]struct{}) map[string]struct{} {

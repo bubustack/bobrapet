@@ -1040,6 +1040,11 @@ func (in *Step) DeepCopyInto(out *Step) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.Requires != nil {
+		in, out := &in.Requires, &out.Requires
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Ref != nil {
 		in, out := &in.Ref, &out.Ref
 		*out = new(refs.EngramReference)

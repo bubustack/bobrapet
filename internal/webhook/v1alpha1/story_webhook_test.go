@@ -793,6 +793,70 @@ var _ = Describe("Story Webhook", func() {
 		})
 	})
 
+	Context("requires validation", func() {
+		It("accepts requires referencing an upstream step", func() {
+			story := minimalStory("requires-valid")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{Name: "fetch", Type: enums.StepTypeCondition},
+				{Name: "process", Type: enums.StepTypeCondition, Needs: []string{"fetch"}, Requires: []string{"steps.fetch.output.body"}},
+			}
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("rejects requires referencing an unknown step", func() {
+			story := minimalStory("requires-unknown")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{Name: "process", Type: enums.StepTypeCondition, Requires: []string{"steps.nonexistent.output.body"}},
+			}
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("unknown step"))
+		})
+
+		It("rejects requires referencing a step not in the upstream chain", func() {
+			story := minimalStory("requires-not-upstream")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{Name: "fetch", Type: enums.StepTypeCondition},
+				{Name: "process", Type: enums.StepTypeCondition, Requires: []string{"steps.fetch.output.body"}},
+			}
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("not upstream"))
+		})
+
+		It("rejects requires with invalid prefix", func() {
+			story := minimalStory("requires-bad-prefix")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{Name: "process", Type: enums.StepTypeCondition, Requires: []string{"invalid-path"}},
+			}
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("must start with 'steps.'"))
+		})
+
+		It("rejects requires with too few segments", func() {
+			story := minimalStory("requires-short")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{Name: "process", Type: enums.StepTypeCondition, Requires: []string{"steps.foo"}},
+			}
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("at least 3 segments"))
+		})
+
+		It("accepts transitive upstream requires", func() {
+			story := minimalStory("requires-transitive")
+			story.Spec.Steps = []bubushv1alpha1.Step{
+				{Name: "a", Type: enums.StepTypeCondition},
+				{Name: "b", Type: enums.StepTypeCondition, Needs: []string{"a"}},
+				{Name: "c", Type: enums.StepTypeCondition, Needs: []string{"b"}, Requires: []string{"steps.a.output.body"}},
+			}
+			_, err := validator.ValidateCreate(ctx, story)
+			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
 })
 
 func minimalStory(name string) *bubushv1alpha1.Story {

@@ -1438,6 +1438,14 @@ spec:
                       required:
                       - name
                       type: object
+                    requires:
+                      description: |-
+                        Requires lists dot-paths that must resolve to non-nil values before this step
+                        is scheduled. Paths follow the format "steps.<name>.output.<key>".
+                        If any required path is nil, the step fails immediately with a descriptive error.
+                      items:
+                        type: string
+                      type: array
                     runtime:
                       description: |-
                         Runtime carries dynamic per-packet configuration for realtime/streaming steps.
@@ -2919,6 +2927,14 @@ spec:
                       required:
                       - name
                       type: object
+                    requires:
+                      description: |-
+                        Requires lists dot-paths that must resolve to non-nil values before this step
+                        is scheduled. Paths follow the format "steps.<name>.output.<key>".
+                        If any required path is nil, the step fails immediately with a descriptive error.
+                      items:
+                        type: string
+                      type: array
                     runtime:
                       description: |-
                         Runtime carries dynamic per-packet configuration for realtime/streaming steps.
@@ -5840,6 +5856,14 @@ spec:
                       required:
                       - name
                       type: object
+                    requires:
+                      description: |-
+                        Requires lists dot-paths that must resolve to non-nil values before this step
+                        is scheduled. Paths follow the format "steps.<name>.output.<key>".
+                        If any required path is nil, the step fails immediately with a descriptive error.
+                      items:
+                        type: string
+                      type: array
                     runtime:
                       description: |-
                         Runtime carries dynamic per-packet configuration for realtime/streaming steps.

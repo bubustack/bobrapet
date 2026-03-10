@@ -388,6 +388,9 @@ spec:
         required:
         - spec
         type: object
+    selectableFields:
+    - jsonPath: .spec.transportRef
+    - jsonPath: .spec.storyRunRef.name
     served: true
     storage: true
     subresources:

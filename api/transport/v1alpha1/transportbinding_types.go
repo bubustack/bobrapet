@@ -196,6 +196,8 @@ type TransportBindingStatus struct {
 // +kubebuilder:printcolumn:name="Driver",type=string,JSONPath=.spec.driver
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=.status.endpoint
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
+// +kubebuilder:selectablefield:JSONPath=".spec.transportRef"
+// +kubebuilder:selectablefield:JSONPath=".spec.storyRunRef.name"
 
 // TransportBinding is the Schema for the transportbindings API
 type TransportBinding struct {

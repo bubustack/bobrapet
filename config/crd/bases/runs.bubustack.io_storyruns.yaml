@@ -500,6 +500,9 @@ spec:
         required:
         - spec
         type: object
+    selectableFields:
+    - jsonPath: .spec.storyRef.name
+    - jsonPath: .status.phase
     served: true
     storage: true
     subresources:

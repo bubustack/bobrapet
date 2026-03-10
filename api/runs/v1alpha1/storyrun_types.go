@@ -49,6 +49,8 @@ import (
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=.status.phase
 // +kubebuilder:printcolumn:name="Duration",type=string,JSONPath=.status.duration
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
+// +kubebuilder:selectablefield:JSONPath=".spec.storyRef.name"
+// +kubebuilder:selectablefield:JSONPath=".status.phase"
 type StoryRun struct {
 	metav1.TypeMeta `json:",inline"`
 	// metadata is a standard object metadata

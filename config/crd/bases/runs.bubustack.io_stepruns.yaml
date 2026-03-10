@@ -1648,6 +1648,10 @@ spec:
         required:
         - spec
         type: object
+    selectableFields:
+    - jsonPath: .spec.storyRunRef.name
+    - jsonPath: .spec.stepId
+    - jsonPath: .status.phase
     served: true
     storage: true
     subresources:

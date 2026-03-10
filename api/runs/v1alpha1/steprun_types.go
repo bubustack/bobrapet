@@ -54,6 +54,9 @@ import (
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;watch
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns/status,verbs=patch;update
+// +kubebuilder:selectablefield:JSONPath=".spec.storyRunRef.name"
+// +kubebuilder:selectablefield:JSONPath=".spec.stepId"
+// +kubebuilder:selectablefield:JSONPath=".status.phase"
 type StepRun struct {
 	metav1.TypeMeta `json:",inline"`
 	// metadata is a standard object metadata

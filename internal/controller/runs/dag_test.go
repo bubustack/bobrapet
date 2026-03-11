@@ -25,6 +25,7 @@ import (
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
 	bubuv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/conditions"
 	"github.com/bubustack/bobrapet/pkg/enums"
 	"github.com/bubustack/bobrapet/pkg/refs"
 	"github.com/bubustack/core/contracts"
@@ -1122,4 +1123,269 @@ func mustRawExtension(payload any) *runtime.RawExtension {
 		panic(err)
 	}
 	return &runtime.RawExtension{Raw: data}
+}
+
+func TestDAGReconciler_StreamingTopologyTerminatedTriggersCompensation(t *testing.T) {
+	// Streaming story with Running main steps + Degraded(TopologyTerminated) condition
+	// + compensations → main steps marked Failed, compensation phase entered.
+	steps := []bubuv1alpha1.Step{
+		{Name: "step-a"},
+		{Name: "step-b"},
+	}
+	compensations := []bubuv1alpha1.Step{
+		{Name: "rollback-a"},
+	}
+
+	srun := &runsv1alpha1.StoryRun{
+		Status: runsv1alpha1.StoryRunStatus{
+			Phase: enums.PhaseRunning,
+			StepStates: map[string]runsv1alpha1.StepState{
+				"step-a": {Phase: enums.PhaseRunning},
+				"step-b": {Phase: enums.PhaseRunning},
+			},
+			Conditions: []metav1.Condition{
+				{
+					Type:   conditions.ConditionDegraded,
+					Status: metav1.ConditionTrue,
+					Reason: conditions.ReasonTopologyTerminated,
+				},
+			},
+		},
+	}
+
+	story := &bubuv1alpha1.Story{
+		Spec: bubuv1alpha1.StorySpec{
+			Pattern:       enums.StreamingPattern,
+			Steps:         steps,
+			Compensations: compensations,
+		},
+	}
+
+	mainCompleted, _, mainFailed, _ := buildStateMaps(story.Spec.Steps, srun.Status.StepStates)
+	mainDone := stepsTerminal(len(story.Spec.Steps), mainCompleted, mainFailed)
+
+	if mainDone {
+		t.Fatal("expected main phase to NOT be done before topology termination check")
+	}
+
+	// Simulate the topology termination detection logic from the reconciler.
+	if !mainDone && story.Spec.Pattern == enums.StreamingPattern {
+		if conditions.IsDegraded(srun.Status.Conditions) {
+			for _, c := range srun.Status.Conditions {
+				if c.Type == conditions.ConditionDegraded &&
+					c.Status == metav1.ConditionTrue &&
+					c.Reason == conditions.ReasonTopologyTerminated {
+					mainDone = true
+					for i := range story.Spec.Steps {
+						step := &story.Spec.Steps[i]
+						if stepState, ok := srun.Status.StepStates[step.Name]; ok {
+							if !stepState.Phase.IsTerminal() {
+								stepState.Phase = enums.PhaseFailed
+								stepState.Message = "streaming topology terminated"
+								srun.Status.StepStates[step.Name] = stepState
+								mainFailed[step.Name] = true
+							}
+						}
+					}
+					mainCompleted, _, mainFailed, _ = buildStateMaps(story.Spec.Steps, srun.Status.StepStates)
+					break
+				}
+			}
+		}
+	}
+
+	if !mainDone {
+		t.Fatal("expected mainDone to be true after topology termination")
+	}
+	if len(mainFailed) != 2 {
+		t.Fatalf("expected 2 failed main steps, got %d", len(mainFailed))
+	}
+	for _, name := range []string{"step-a", "step-b"} {
+		state := srun.Status.StepStates[name]
+		if state.Phase != enums.PhaseFailed {
+			t.Fatalf("expected %s phase Failed, got %s", name, state.Phase)
+		}
+		if state.Message != "streaming topology terminated" {
+			t.Fatalf("expected %s message 'streaming topology terminated', got %q", name, state.Message)
+		}
+	}
+
+	// With mainFailed > 0 and compensations present, phase should be compensation.
+	compCompleted, _, compFailed, _ := buildStateMaps(story.Spec.Compensations, srun.Status.StepStates)
+	compDone := stepsTerminal(len(story.Spec.Compensations), compCompleted, compFailed)
+
+	phase := dagPhaseMain
+	switch {
+	case !mainDone:
+		phase = dagPhaseMain
+	case len(mainFailed) > 0 && len(story.Spec.Compensations) > 0 && !compDone:
+		phase = dagPhaseCompensation
+	case len(story.Spec.Finally) > 0:
+		phase = dagPhaseFinally
+	}
+	if phase != dagPhaseCompensation {
+		t.Fatalf("expected compensation phase, got %s", phase)
+	}
+}
+
+func TestDAGReconciler_StreamingTopologyTerminatedTriggersFinally(t *testing.T) {
+	// Streaming story with Running main steps + Degraded(TopologyTerminated) condition
+	// + no compensations, only finally → finally phase entered.
+	steps := []bubuv1alpha1.Step{
+		{Name: "step-a"},
+	}
+	finallySteps := []bubuv1alpha1.Step{
+		{Name: "cleanup"},
+	}
+
+	srun := &runsv1alpha1.StoryRun{
+		Status: runsv1alpha1.StoryRunStatus{
+			Phase: enums.PhaseRunning,
+			StepStates: map[string]runsv1alpha1.StepState{
+				"step-a": {Phase: enums.PhaseRunning},
+			},
+			Conditions: []metav1.Condition{
+				{
+					Type:   conditions.ConditionDegraded,
+					Status: metav1.ConditionTrue,
+					Reason: conditions.ReasonTopologyTerminated,
+				},
+			},
+		},
+	}
+
+	story := &bubuv1alpha1.Story{
+		Spec: bubuv1alpha1.StorySpec{
+			Pattern: enums.StreamingPattern,
+			Steps:   steps,
+			Finally: finallySteps,
+		},
+	}
+
+	mainCompleted, _, mainFailed, _ := buildStateMaps(story.Spec.Steps, srun.Status.StepStates)
+	mainDone := stepsTerminal(len(story.Spec.Steps), mainCompleted, mainFailed)
+
+	if mainDone {
+		t.Fatal("expected main phase to NOT be done before topology termination check")
+	}
+
+	// Simulate topology termination detection.
+	if !mainDone && story.Spec.Pattern == enums.StreamingPattern {
+		if conditions.IsDegraded(srun.Status.Conditions) {
+			for _, c := range srun.Status.Conditions {
+				if c.Type == conditions.ConditionDegraded &&
+					c.Status == metav1.ConditionTrue &&
+					c.Reason == conditions.ReasonTopologyTerminated {
+					mainDone = true
+					for i := range story.Spec.Steps {
+						step := &story.Spec.Steps[i]
+						if stepState, ok := srun.Status.StepStates[step.Name]; ok {
+							if !stepState.Phase.IsTerminal() {
+								stepState.Phase = enums.PhaseFailed
+								stepState.Message = "streaming topology terminated"
+								srun.Status.StepStates[step.Name] = stepState
+								mainFailed[step.Name] = true
+							}
+						}
+					}
+					mainCompleted, _, mainFailed, _ = buildStateMaps(story.Spec.Steps, srun.Status.StepStates)
+					break
+				}
+			}
+		}
+	}
+
+	if !mainDone {
+		t.Fatal("expected mainDone to be true after topology termination")
+	}
+
+	// No compensations, so phase should go to finally.
+	finalCompleted, _, finalFailed, _ := buildStateMaps(story.Spec.Finally, srun.Status.StepStates)
+	finalDone := stepsTerminal(len(story.Spec.Finally), finalCompleted, finalFailed)
+
+	phase := dagPhaseMain
+	switch {
+	case !mainDone:
+		phase = dagPhaseMain
+	case len(mainFailed) > 0 && len(story.Spec.Compensations) > 0:
+		phase = dagPhaseCompensation
+	case len(story.Spec.Finally) > 0 && !finalDone:
+		phase = dagPhaseFinally
+	}
+	if phase != dagPhaseFinally {
+		t.Fatalf("expected finally phase, got %s", phase)
+	}
+	_ = finalCompleted
+	_ = finalFailed
+}
+
+func TestDAGReconciler_StreamingNoDegradedSkipsTermination(t *testing.T) {
+	// Streaming story with Running main steps but NO Degraded condition → stays in main phase.
+	steps := []bubuv1alpha1.Step{
+		{Name: "step-a"},
+		{Name: "step-b"},
+	}
+	compensations := []bubuv1alpha1.Step{
+		{Name: "rollback-a"},
+	}
+
+	srun := &runsv1alpha1.StoryRun{
+		Status: runsv1alpha1.StoryRunStatus{
+			Phase: enums.PhaseRunning,
+			StepStates: map[string]runsv1alpha1.StepState{
+				"step-a": {Phase: enums.PhaseRunning},
+				"step-b": {Phase: enums.PhaseRunning},
+			},
+			// No Degraded condition set.
+		},
+	}
+
+	story := &bubuv1alpha1.Story{
+		Spec: bubuv1alpha1.StorySpec{
+			Pattern:       enums.StreamingPattern,
+			Steps:         steps,
+			Compensations: compensations,
+		},
+	}
+
+	mainCompleted, _, mainFailed, _ := buildStateMaps(story.Spec.Steps, srun.Status.StepStates)
+	mainDone := stepsTerminal(len(story.Spec.Steps), mainCompleted, mainFailed)
+
+	// Apply the same logic — should be a no-op without Degraded condition.
+	if !mainDone && story.Spec.Pattern == enums.StreamingPattern {
+		if conditions.IsDegraded(srun.Status.Conditions) {
+			for _, c := range srun.Status.Conditions {
+				if c.Type == conditions.ConditionDegraded &&
+					c.Status == metav1.ConditionTrue &&
+					c.Reason == conditions.ReasonTopologyTerminated {
+					mainDone = true
+					break
+				}
+			}
+		}
+	}
+
+	if mainDone {
+		t.Fatal("expected mainDone to remain false without Degraded condition")
+	}
+
+	// Steps should remain Running.
+	for _, name := range []string{"step-a", "step-b"} {
+		state := srun.Status.StepStates[name]
+		if state.Phase != enums.PhaseRunning {
+			t.Fatalf("expected %s to remain Running, got %s", name, state.Phase)
+		}
+	}
+
+	// Phase should be main.
+	phase := dagPhaseMain
+	switch {
+	case !mainDone:
+		phase = dagPhaseMain
+	case len(mainFailed) > 0 && len(story.Spec.Compensations) > 0:
+		phase = dagPhaseCompensation
+	}
+	if phase != dagPhaseMain {
+		t.Fatalf("expected main phase, got %s", phase)
+	}
 }

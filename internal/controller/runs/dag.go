@@ -411,6 +411,40 @@ func (r *DAGReconciler) runDagIterations(ctx context.Context, srun *runsv1alpha1
 			clearConcurrencyQueuedSteps(mainRunning, srun.Status.StepStates)
 		}
 		mainDone := stepsTerminal(len(state.story.Spec.Steps), mainCompleted, mainFailed)
+
+		// For streaming stories, topology termination (Degraded condition) means
+		// main phase is done — streaming steps run indefinitely until the hub signals
+		// all have disconnected.
+		if !mainDone && state.story.Spec.Pattern == enums.StreamingPattern {
+			if conditions.IsDegraded(srun.Status.Conditions) {
+				for _, c := range srun.Status.Conditions {
+					if c.Type == conditions.ConditionDegraded &&
+						c.Status == metav1.ConditionTrue &&
+						c.Reason == conditions.ReasonTopologyTerminated {
+						mainDone = true
+						// Mark all non-terminal streaming main steps as Failed so
+						// compensation/finally phases can evaluate them.
+						for i := range state.story.Spec.Steps {
+							step := &state.story.Spec.Steps[i]
+							if stepState, ok := srun.Status.StepStates[step.Name]; ok {
+								if !stepState.Phase.IsTerminal() {
+									stepState.Phase = enums.PhaseFailed
+									stepState.Message = "streaming topology terminated"
+									srun.Status.StepStates[step.Name] = stepState
+									mainFailed[step.Name] = true
+									state.needsPersist = true
+								}
+							}
+						}
+						// Rebuild state maps after marking failures.
+						mainCompleted, mainRunning, mainFailed, _ = buildStateMaps(state.story.Spec.Steps, srun.Status.StepStates)
+						clearConcurrencyQueuedSteps(mainRunning, srun.Status.StepStates)
+						break
+					}
+				}
+			}
+		}
+
 		if mainDone && len(mainFailed) == 0 && len(state.story.Spec.Compensations) > 0 {
 			if markCompensationsSkipped(srun, state.story) {
 				state.needsPersist = true

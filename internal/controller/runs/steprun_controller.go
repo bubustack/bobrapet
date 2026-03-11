@@ -112,7 +112,7 @@ const (
 	eventReasonOutputKeyMismatch                     = "OutputKeyMismatch"
 )
 
-const connectorGenerationAnnotation = "bubustack.dev/connector-generation"
+const connectorGenerationAnnotation = "bubustack.io/connector-generation"
 
 var errTransportBindingPending = fmt.Errorf("transport binding not yet observed in informer cache")
 var errStepRunInputSchemaInvalid = errors.New("step input schema validation failed")
@@ -2655,6 +2655,60 @@ func (r *StepRunReconciler) resolveConnectorGeneration(step *runsv1alpha1.StepRu
 	return int32(n)
 }
 
+// maybeIncrementConnectorGeneration checks if the desired deployment template differs
+// from the current one. If so, it increments the connector-generation annotation on
+// the StepRun and returns the new generation. Otherwise returns the current generation.
+func (r *StepRunReconciler) maybeIncrementConnectorGeneration(ctx context.Context, step *runsv1alpha1.StepRun, desired *appsv1.Deployment) (int32, error) {
+	currentGen := r.resolveConnectorGeneration(step)
+
+	// Look up existing deployment.
+	var current appsv1.Deployment
+	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, &current)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// First deployment — use current gen (1), no bump needed.
+			return currentGen, nil
+		}
+		return currentGen, err
+	}
+
+	// Strip connector generation env var from the current template before comparison,
+	// since the desired template doesn't have it injected yet at this point.
+	currentTemplate := current.Spec.Template.DeepCopy()
+	stripEnvVar(currentTemplate, contracts.ConnectorGenerationEnv)
+
+	if !workload.PodTemplateChanged(currentTemplate, &desired.Spec.Template) {
+		return currentGen, nil
+	}
+
+	// Template changed — increment generation.
+	newGen := currentGen + 1
+	patch := client.MergeFrom(step.DeepCopy())
+	if step.Annotations == nil {
+		step.Annotations = make(map[string]string)
+	}
+	step.Annotations[connectorGenerationAnnotation] = strconv.FormatInt(int64(newGen), 10)
+	if err := r.Patch(ctx, step, patch); err != nil {
+		return currentGen, fmt.Errorf("failed to patch connector generation annotation: %w", err)
+	}
+	return newGen, nil
+}
+
+// stripEnvVar removes all occurrences of the named env var from every container
+// in the given pod template. Used to normalise templates before comparison so that
+// the connector-generation env var does not cause spurious diffs.
+func stripEnvVar(template *corev1.PodTemplateSpec, envName string) {
+	for i := range template.Spec.Containers {
+		filtered := template.Spec.Containers[i].Env[:0]
+		for _, e := range template.Spec.Containers[i].Env {
+			if e.Name != envName {
+				filtered = append(filtered, e)
+			}
+		}
+		template.Spec.Containers[i].Env = filtered
+	}
+}
+
 func (r *StepRunReconciler) ensureRealtimeDeployment(
 	ctx context.Context,
 	step *runsv1alpha1.StepRun,
@@ -2676,7 +2730,13 @@ func (r *StepRunReconciler) ensureRealtimeDeployment(
 		return ctrl.Result{}, err
 	}
 	// Inject connector generation for blue-green handoff.
-	gen := r.resolveConnectorGeneration(step)
+	// If the deployment template changed (e.g. Engram image update), bump the
+	// generation so the hub treats the new connector as green.
+	gen, err := r.maybeIncrementConnectorGeneration(ctx, step, deployment)
+	if err != nil {
+		rtx.logger.Error(err, "Failed to check/increment connector generation")
+		gen = r.resolveConnectorGeneration(step)
+	}
 	if gen > 0 {
 		for i := range deployment.Spec.Template.Spec.Containers {
 			deployment.Spec.Template.Spec.Containers[i].Env = append(

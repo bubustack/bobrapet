@@ -112,6 +112,8 @@ const (
 	eventReasonOutputKeyMismatch                     = "OutputKeyMismatch"
 )
 
+const connectorGenerationAnnotation = "bubustack.dev/connector-generation"
+
 var errTransportBindingPending = fmt.Errorf("transport binding not yet observed in informer cache")
 var errStepRunInputSchemaInvalid = errors.New("step input schema validation failed")
 var errStepRunRequiresContextNil = errors.New("required context path is nil")
@@ -326,6 +328,16 @@ func (r *StepRunReconciler) reconcileNormal(ctx context.Context, step *runsv1alp
 	}
 
 	stepLogger.Info("Determined execution mode", "mode", mode)
+
+	// If mode is now job but a previous reconciliation created realtime resources
+	// (TransportBinding, Deployment, etc.), clean them up to avoid orphaned resources.
+	if mode == enums.WorkloadModeJob {
+		if cleaned, err := r.cleanupRunScopedRuntime(ctx, step); err != nil {
+			return ctrl.Result{}, err
+		} else if cleaned {
+			stepLogger.Info("Cleaned up stale realtime resources after mode change to job", "step", step.Name)
+		}
+	}
 
 	switch mode {
 	case enums.WorkloadModeDeployment, enums.WorkloadModeStatefulSet:
@@ -2626,6 +2638,23 @@ func (r *StepRunReconciler) ensureRealtimeService(
 	return nil
 }
 
+// resolveConnectorGeneration reads the current connector generation from StepRun
+// annotations. Returns 1 as default if not set.
+func (r *StepRunReconciler) resolveConnectorGeneration(step *runsv1alpha1.StepRun) int32 {
+	if step.Annotations == nil {
+		return 1
+	}
+	genStr, ok := step.Annotations[connectorGenerationAnnotation]
+	if !ok || genStr == "" {
+		return 1
+	}
+	n, err := strconv.ParseInt(genStr, 10, 32)
+	if err != nil || n < 1 {
+		return 1
+	}
+	return int32(n)
+}
+
 func (r *StepRunReconciler) ensureRealtimeDeployment(
 	ctx context.Context,
 	step *runsv1alpha1.StepRun,
@@ -2646,6 +2675,20 @@ func (r *StepRunReconciler) ensureRealtimeDeployment(
 		}
 		return ctrl.Result{}, err
 	}
+	// Inject connector generation for blue-green handoff.
+	gen := r.resolveConnectorGeneration(step)
+	if gen > 0 {
+		for i := range deployment.Spec.Template.Spec.Containers {
+			deployment.Spec.Template.Spec.Containers[i].Env = append(
+				deployment.Spec.Template.Spec.Containers[i].Env,
+				corev1.EnvVar{
+					Name:  contracts.ConnectorGenerationEnv,
+					Value: strconv.FormatInt(int64(gen), 10),
+				},
+			)
+		}
+	}
+
 	lifecycle := resolveLifecycleSettings(binding, rtx.logger)
 	applyRealtimeDeploymentStrategy(deployment, lifecycle)
 	currentDeployment, err := r.reconcileRunScopedDeployment(ctx, step, deployment)

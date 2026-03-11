@@ -195,6 +195,77 @@ func isLikelyJSON(raw string) bool {
 	}
 }
 
+// templateBlockPattern matches individual Go template expressions {{ ... }},
+// including optional whitespace-trim markers ({{- ... -}}).
+var templateBlockPattern = regexp.MustCompile(`\{\{-?\s*(.*?)\s*-?\}\}`)
+
+// detectOffloadedWithFunctions is like detectOffloadedInJSON but only triggers
+// when a template expression applies pipe functions (e.g. | toString | trunc)
+// to an offloaded step output reference. Simple pass-through references like
+// {{ (index .steps "name").output.field }} are left for the SDK to handle via
+// its own hydration, since the SDK supports storage-ref resolution at runtime.
+func detectOffloadedWithFunctions(node any, steps map[string]any) *templating.ErrOffloadedDataUsage {
+	switch typed := node.(type) {
+	case map[string]any:
+		for _, value := range typed {
+			if err := detectOffloadedWithFunctions(value, steps); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, value := range typed {
+			if err := detectOffloadedWithFunctions(value, steps); err != nil {
+				return err
+			}
+		}
+	case string:
+		if !strings.Contains(typed, "{{") {
+			return nil
+		}
+		return detectOffloadedWithFunctionsInTemplate(typed, steps)
+	}
+	return nil
+}
+
+// detectOffloadedWithFunctionsInTemplate checks each {{ }} block in the
+// template string. If a block references an offloaded step output AND contains
+// a pipe operator, it returns ErrOffloadedDataUsage (controller must
+// materialize). Blocks without pipes are simple pass-throughs the SDK handles.
+func detectOffloadedWithFunctionsInTemplate(expr string, steps map[string]any) *templating.ErrOffloadedDataUsage {
+	if expr == "" || len(steps) == 0 {
+		return nil
+	}
+	blocks := templateBlockPattern.FindAllString(expr, -1)
+	for _, block := range blocks {
+		// Check if this template block references an offloaded step output.
+		matches := stepOutputRefPattern.FindAllStringSubmatch(block, -1)
+		for _, match := range matches {
+			stepName := ""
+			if len(match) > 5 && match[5] != "" {
+				stepName = match[5]
+			} else if len(match) > 3 && match[3] != "" {
+				stepName = match[3]
+			} else if len(match) > 1 && match[1] != "" {
+				stepName = match[1]
+			}
+			if stepName == "" {
+				continue
+			}
+			if !stepOutputHasStorageRef(steps, stepName) {
+				continue
+			}
+			// This block references an offloaded output. Only trigger
+			// materialization if the block applies functions via pipe.
+			if strings.Contains(block, "|") {
+				return &templating.ErrOffloadedDataUsage{
+					Reason: fmt.Sprintf("template applies functions to offloaded output from step %q", stepName),
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func containsStorageRef(value any, depth int) bool {
 	if depth > 8 || value == nil {
 		return false

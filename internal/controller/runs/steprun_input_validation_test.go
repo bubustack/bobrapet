@@ -79,8 +79,15 @@ func TestResolveRunScopedInputsRejectsInvalidSchema(t *testing.T) {
 		},
 	}
 
+	storyRun := &runsv1alpha1.StoryRun{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "run",
+			Namespace: "default",
+		},
+	}
+
 	ctx := context.Background()
-	_, err = reconciler.resolveRunScopedInputs(ctx, step, nil, nil, &runtime.RawExtension{Raw: inputSchema}, "EngramTemplate template inputs")
+	_, err = reconciler.resolveRunScopedInputs(ctx, step, storyRun, nil, &runtime.RawExtension{Raw: inputSchema}, "EngramTemplate template inputs")
 	require.ErrorIs(t, err, errStepRunInputSchemaInvalid)
 
 	var updated runsv1alpha1.StepRun

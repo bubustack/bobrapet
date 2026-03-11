@@ -134,9 +134,8 @@ type ControllerConfig struct {
 	AutomountServiceAccountToken     bool                 `json:"automountServiceAccountToken,omitempty"`
 
 	// Templating Configuration
-	TemplateEvaluationTimeout   time.Duration `json:"templateEvaluationTimeout,omitempty"`
-	TemplateMaxExpressionLength int           `json:"templateMaxExpressionLength,omitempty"`
-	TemplateMaxOutputBytes      int           `json:"templateMaxOutputBytes,omitempty"`
+	TemplateEvaluationTimeout time.Duration `json:"templateEvaluationTimeout,omitempty"`
+	TemplateMaxOutputBytes    int           `json:"templateMaxOutputBytes,omitempty"`
 	// TemplateDeterministic disables non-deterministic helpers (for example, now()).
 	TemplateDeterministic bool `json:"templateDeterministic,omitempty"`
 	// TemplateOffloadedPolicy controls how templates behave when offloaded data is accessed.
@@ -224,8 +223,9 @@ const (
 )
 
 const (
-	TemplatingOffloadedPolicyError  = "error"
-	TemplatingOffloadedPolicyInject = "inject"
+	TemplatingOffloadedPolicyError      = "error"
+	TemplatingOffloadedPolicyInject     = "inject"
+	TemplatingOffloadedPolicyController = "controller"
 )
 
 const (
@@ -315,19 +315,18 @@ func validateTemplatingSettings(cfg *ControllerConfig) []error {
 	if cfg.TemplateEvaluationTimeout < 0 {
 		errs = append(errs, fmt.Errorf("templating.evaluation-timeout cannot be negative"))
 	}
-	if cfg.TemplateMaxExpressionLength < 0 {
-		errs = append(errs, fmt.Errorf("templating.max-expression-length cannot be negative"))
-	}
 	if cfg.TemplateMaxOutputBytes < 0 {
 		errs = append(errs, fmt.Errorf("templating.max-output-bytes cannot be negative"))
 	}
 	if policy := strings.TrimSpace(cfg.TemplateOffloadedPolicy); policy != "" {
 		switch policy {
-		case TemplatingOffloadedPolicyError, TemplatingOffloadedPolicyInject:
+		case TemplatingOffloadedPolicyError, TemplatingOffloadedPolicyInject, TemplatingOffloadedPolicyController:
 		default:
-			errs = append(errs, fmt.Errorf("templating.offloaded-data-policy must be one of [%s, %s]", TemplatingOffloadedPolicyError, TemplatingOffloadedPolicyInject))
+			errs = append(errs, fmt.Errorf("templating.offloaded-data-policy must be one of [%s, %s, %s]", TemplatingOffloadedPolicyError, TemplatingOffloadedPolicyInject, TemplatingOffloadedPolicyController))
 		}
 	}
+	// Only "inject" policy requires a materialize engram (pod-based materialization).
+	// "controller" policy resolves offloaded data in-process and does not need one.
 	if strings.TrimSpace(cfg.TemplateOffloadedPolicy) == TemplatingOffloadedPolicyInject {
 		if strings.TrimSpace(cfg.TemplateMaterializeEngram) == "" {
 			errs = append(errs, fmt.Errorf("templating.materialize-engram must be set when offloaded-data-policy is inject"))
@@ -706,7 +705,7 @@ func controllerConfigDefaults() ControllerConfig {
 		DefaultCPULimit:                  "500m",
 		DefaultMemoryRequest:             "128Mi",
 		DefaultMemoryLimit:               "512Mi",
-		JobBackoffLimit:                  3,
+		JobBackoffLimit:                  0,
 		JobRestartPolicy:                 corev1.RestartPolicyNever,
 		TTLSecondsAfterFinished:          3600,
 		StreamingTTLSecondsAfterFinished: 0,
@@ -801,7 +800,6 @@ func controllerConfigDefaults() ControllerConfig {
 		},
 		MaxStoryWithBlockSizeBytes:    64 * 1024, // 64 KiB
 		TemplateEvaluationTimeout:     30 * time.Second,
-		TemplateMaxExpressionLength:   1000,
 		TemplateMaxOutputBytes:        64 * 1024,
 		TemplateDeterministic:         false,
 		TemplateOffloadedPolicy:       TemplatingOffloadedPolicyInject, // inject so materialize StepRuns are created when templates reference offloaded data

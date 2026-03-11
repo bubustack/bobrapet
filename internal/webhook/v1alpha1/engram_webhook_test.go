@@ -161,7 +161,7 @@ var _ = Describe("Engram Webhook", func() {
 
 			_, err := validator.ValidateCreate(context.Background(), engram)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("expected template version"))
+			Expect(err.Error()).To(ContainSubstring("does not match template's actual version"))
 		})
 
 		It("rejects unsupported workload modes", func() {

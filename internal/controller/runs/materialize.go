@@ -217,6 +217,13 @@ func ensureMaterializeStepRun(
 		return nil, err
 	}
 	if err := c.Create(ctx, &stepRun); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Cache was stale; re-read the existing object from the API server.
+			if getErr := c.Get(ctx, key, existing); getErr != nil {
+				return nil, getErr
+			}
+			return existing, nil
+		}
 		return nil, err
 	}
 	return &stepRun, nil

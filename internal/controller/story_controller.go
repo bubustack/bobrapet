@@ -875,7 +875,7 @@ func (r *StoryReconciler) validateExecuteStoryStep(ctx context.Context, story *b
 	); err != nil {
 		return validation.WrapWithReason(conditions.ReasonStoryReferenceInvalid, fmt.Errorf("step '%s' references Story in namespace '%s': %w", step.Name, targetNamespace, err))
 	}
-	_, key, err := refs.LoadNamespacedReference(
+	subStory, key, err := refs.LoadNamespacedReference(
 		ctx,
 		r.Client,
 		story,
@@ -890,6 +890,14 @@ func (r *StoryReconciler) validateExecuteStoryStep(ctx context.Context, story *b
 					step.Name, key.Name, key.Namespace))
 		}
 		return fmt.Errorf("failed to get story for step '%s': %w", step.Name, err)
+	}
+
+	// Validate pattern compatibility: a batch story cannot invoke a streaming
+	// sub-story because batch StoryRuns have no transport bindings or connectors.
+	if story.Spec.Pattern == enums.BatchPattern && subStory.Spec.Pattern == enums.StreamingPattern {
+		return validation.WrapWithReason(conditions.ReasonStoryReferenceInvalid,
+			fmt.Errorf("step '%s' references streaming story '%s' from a batch story; batch stories cannot invoke streaming sub-stories",
+				step.Name, key.Name))
 	}
 	return nil
 }

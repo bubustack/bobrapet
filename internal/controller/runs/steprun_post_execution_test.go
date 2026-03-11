@@ -37,9 +37,8 @@ import (
 func newTestEvaluator(t *testing.T) *templating.Evaluator {
 	t.Helper()
 	eval, err := templating.New(templating.Config{
-		EvaluationTimeout:   5 * time.Second,
-		MaxExpressionLength: 4096,
-		MaxOutputBytes:      4096,
+		EvaluationTimeout: 5 * time.Second,
+		MaxOutputBytes:    4096,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { eval.Close() })

@@ -89,10 +89,13 @@ func (a *TopologyAnalyzer) AnalyzeStepRouting(stepName string) (*StepRoutingInfo
 	// 1. Current step does NOT have runtime config (checked above)
 	// 2. There is exactly one downstream step
 	// 3. The downstream step does not need hub routing (no runtime config)
+	// 4. If the current step has upstreams, ALL upstream edges to this step are
+	//    already direct P2P. Otherwise this step must stay on hub so hub-routed
+	//    upstreams can deliver packets to it.
 	if len(info.DownstreamSteps) == 1 {
 		downstreamName := info.DownstreamSteps[0]
 		downstreamStep, ok := a.steps[downstreamName]
-		if ok && !StepNeedsHubRouting(downstreamStep) {
+		if ok && !StepNeedsHubRouting(downstreamStep) && a.hasOnlyP2PUpstreams(stepName, currentStep.Needs) {
 			info.RoutingMode = RoutingModeP2P
 			// UpstreamEndpoint will be populated later with the actual service endpoint
 			// when we have access to the engram name/namespace
@@ -105,6 +108,26 @@ func (a *TopologyAnalyzer) AnalyzeStepRouting(stepName string) (*StepRoutingInfo
 	}
 
 	return info, nil
+}
+
+func (a *TopologyAnalyzer) hasOnlyP2PUpstreams(stepName string, upstreamSteps []string) bool {
+	if len(upstreamSteps) == 0 {
+		// Source steps are allowed to choose P2P based on downstream topology.
+		return true
+	}
+	for _, upstreamName := range upstreamSteps {
+		info, err := a.AnalyzeStepRouting(upstreamName)
+		if err != nil {
+			return false
+		}
+		if info.RoutingMode != RoutingModeP2P {
+			return false
+		}
+		if len(info.DownstreamSteps) != 1 || info.DownstreamSteps[0] != stepName {
+			return false
+		}
+	}
+	return true
 }
 
 // getDownstreamSteps finds all steps that depend on the given step.

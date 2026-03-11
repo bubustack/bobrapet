@@ -80,9 +80,21 @@ func TestNormalizeSchemaBytesNormalizesIf(t *testing.T) {
 		t.Fatalf("failed to unmarshal normalized schema: %v", err)
 	}
 
-	ifSchema, ok := out["if"].(map[string]any)
+	// The root object schema gets wrapped by allowStorageRefAlternative into
+	// {"anyOf": [<original>, storageRef, ...]}. Navigate into the first anyOf
+	// entry to find the original object with "if".
+	anyOf, ok := out["anyOf"].([]any)
+	if !ok || len(anyOf) == 0 {
+		t.Fatalf("expected root to be wrapped with anyOf, got %v", out)
+	}
+	root, ok := anyOf[0].(map[string]any)
 	if !ok {
-		t.Fatalf("expected 'if' to be an object schema, got %T", out["if"])
+		t.Fatalf("expected first anyOf entry to be an object, got %T", anyOf[0])
+	}
+
+	ifSchema, ok := root["if"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected 'if' to be an object schema, got %T", root["if"])
 	}
 	if _, ok := ifSchema["anyOf"]; !ok {
 		t.Fatalf("expected 'if' schema to be normalized with anyOf alternatives, got %v", ifSchema)

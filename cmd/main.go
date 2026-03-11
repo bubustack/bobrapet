@@ -576,10 +576,9 @@ func mustInitOperatorServices(
 	configResolver := config.NewResolver(mgr.GetClient(), operatorConfigManager)
 	setupLog.Info("configuration resolver initialized")
 	templateCfg := templating.Config{
-		EvaluationTimeout:   controllerConfig.TemplateEvaluationTimeout,
-		MaxExpressionLength: controllerConfig.TemplateMaxExpressionLength,
-		MaxOutputBytes:      controllerConfig.TemplateMaxOutputBytes,
-		Deterministic:       controllerConfig.TemplateDeterministic,
+		EvaluationTimeout: controllerConfig.TemplateEvaluationTimeout,
+		MaxOutputBytes:    controllerConfig.TemplateMaxOutputBytes,
+		Deterministic:     controllerConfig.TemplateDeterministic,
 	}
 	templateEvaluator, err := templating.New(templateCfg)
 	if err != nil {

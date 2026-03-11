@@ -743,7 +743,7 @@ func (e *StepExecutor) executeParallelStep(ctx context.Context, srun *runsv1alph
 		childStepName := kubeutil.ComposeName(srun.Name, step.Name, childStep.Name)
 		childStepRunNames = append(childStepRunNames, childStepName)
 
-		resolvedWithBytes, err := e.resolveTemplateWith(ctx, srun, materializePurposeParallel, step.Name, childStep.Name, childStep.With, vars)
+		resolvedWithBytes, err := e.resolveTemplateWith(ctx, srun, materializePurposeParallel, step.Name, childStep.Name, childStep.With, vars, story.GetAnnotations())
 		if err != nil {
 			return fmt.Errorf("failed to resolve 'with' for parallel branch '%s' in step '%s': %w", childStep.Name, step.Name, err)
 		}
@@ -940,7 +940,7 @@ func ensureStoryNameLabel(stepRun *runsv1alpha1.StepRun, storyName string) (bool
 // Returns:
 //   - *runtime.RawExtension: the resolved 'with' block.
 //   - error: nil on success, or evaluation errors.
-func (e *StepExecutor) resolveTemplateWith(ctx context.Context, srun *runsv1alpha1.StoryRun, purpose, stepName, childName string, raw *runtime.RawExtension, vars map[string]any) (*runtime.RawExtension, error) {
+func (e *StepExecutor) resolveTemplateWith(ctx context.Context, srun *runsv1alpha1.StoryRun, purpose, stepName, childName string, raw *runtime.RawExtension, vars map[string]any, storyAnnotations map[string]string) (*runtime.RawExtension, error) {
 	if raw == nil || len(raw.Raw) == 0 {
 		return nil, nil
 	}
@@ -953,15 +953,82 @@ func (e *StepExecutor) resolveTemplateWith(ctx context.Context, srun *runsv1alph
 		return nil, fmt.Errorf("failed to parse 'with' block: %w", err)
 	}
 
-	// Do not inject materialize for "with" blocks: the SDK evaluates them at runtime and can
-	// resolve storage refs (it only needs access to the data). Materialize is for controller
-	// built-in actions (if, step input/config) where the controller must evaluate the template.
+	// Pre-check: detect offloaded step outputs referenced by templates.
+	// Policy "controller" or Story annotation bubustack.io/controller-resolve: "true":
+	//   ALL offloaded refs → hydrate from S3 in-process and evaluate templates.
+	// Policy "inject": only pipe expressions (| toString | trunc) trigger pod-based materialization.
+	// Policy "error": fail on offloaded data access.
+	stepOutputs, _ := vars["steps"].(map[string]any)
+	policy := resolveOffloadedPolicy(e.ConfigResolver)
+	resolveAll := shouldResolveAllOffloaded(policy) || storyForcesControllerResolve(storyAnnotations)
+	var offloadedDetect *templating.ErrOffloadedDataUsage
+	if resolveAll {
+		offloadedDetect = detectOffloadedInJSON(withVars, stepOutputs)
+	} else {
+		offloadedDetect = detectOffloadedWithFunctions(withVars, stepOutputs)
+	}
+	if offloadedDetect != nil {
+		if resolveAll {
+			// In-process resolution: hydrate offloaded data from S3 and
+			// evaluate templates directly in the controller — no extra pod.
+			resolved, ipErr := resolveOffloadedInProcess(ctx, e.TemplateEvaluator, withVars, vars)
+			if ipErr != nil {
+				return nil, fmt.Errorf("in-process resolution failed for 'with' block: %w", ipErr)
+			}
+			encoded, mErr := json.Marshal(resolved)
+			if mErr != nil {
+				return nil, fmt.Errorf("failed to marshal in-process resolved 'with' block: %w", mErr)
+			}
+			return &runtime.RawExtension{Raw: encoded}, nil
+		}
+		if shouldBlockOffloaded(policy) && srun != nil {
+			// Pod-based materialization for "inject" policy (pipe expressions only).
+			materialized, matErr := resolveMaterialize(ctx, e.Client, e.Scheme, e.ConfigResolver, srun, purpose, stepName, childName, materializeModeObject, withVars, vars, string(enums.WorkloadModeJob))
+			if matErr != nil {
+				return nil, matErr
+			}
+			encoded, mErr := json.Marshal(materialized)
+			if mErr != nil {
+				return nil, fmt.Errorf("failed to marshal materialized 'with' block: %w", mErr)
+			}
+			return &runtime.RawExtension{Raw: encoded}, nil
+		}
+		// Policy does not inject; pass raw template through.
+		return raw, nil
+	}
+
 	resolved, err := e.TemplateEvaluator.ResolveWithInputs(ctx, withVars, vars)
 	if err != nil {
-		// When resolution hits a ref, evaluator returns ErrOffloadedDataUsage. Pass the raw
-		// template through so the StepRun gets it and the SDK can resolve and hydrate at runtime.
+		// Fallback: evaluator hit an offloaded ref that pre-detection missed.
 		var offloaded *templating.ErrOffloadedDataUsage
 		if errors.As(err, &offloaded) {
+			if resolveAll {
+				// In-process fallback: hydrate and re-evaluate.
+				ipResolved, ipErr := resolveOffloadedInProcess(ctx, e.TemplateEvaluator, withVars, vars)
+				if ipErr == nil {
+					encoded, mErr := json.Marshal(ipResolved)
+					if mErr != nil {
+						return nil, fmt.Errorf("failed to marshal in-process resolved 'with' block: %w", mErr)
+					}
+					return &runtime.RawExtension{Raw: encoded}, nil
+				}
+				return nil, fmt.Errorf("in-process resolution fallback failed: %w", ipErr)
+			}
+			if detectOffloadedWithFunctions(withVars, stepOutputs) != nil {
+				// Pod-based materialization fallback for "inject" policy.
+				if shouldBlockOffloaded(policy) && srun != nil {
+					materialized, matErr := resolveMaterialize(ctx, e.Client, e.Scheme, e.ConfigResolver, srun, purpose, stepName, childName, materializeModeObject, withVars, vars, string(enums.WorkloadModeJob))
+					if matErr != nil {
+						return nil, matErr
+					}
+					encoded, mErr := json.Marshal(materialized)
+					if mErr != nil {
+						return nil, fmt.Errorf("failed to marshal materialized 'with' block: %w", mErr)
+					}
+					return &runtime.RawExtension{Raw: encoded}, nil
+				}
+			}
+			// Simple pass-through or policy does not inject; leave for SDK.
 			return raw, nil
 		}
 		return nil, err
@@ -1066,7 +1133,7 @@ func (e *StepExecutor) executeStoryStep(ctx context.Context, srun *runsv1alpha1.
 		}
 	}
 
-	inputs, err := e.resolveStoryStepInputs(ctx, srun, mergedInputs, vars, step.Name)
+	inputs, err := e.resolveStoryStepInputs(ctx, srun, mergedInputs, vars, step.Name, story.GetAnnotations())
 	if err != nil {
 		return err
 	}
@@ -1289,11 +1356,11 @@ func (e *StepExecutor) getTargetStory(ctx context.Context, story *bubuv1alpha1.S
 // Returns:
 //   - *runtime.RawExtension: the resolved inputs.
 //   - error: nil on success, or resolution errors.
-func (e *StepExecutor) resolveStoryStepInputs(ctx context.Context, srun *runsv1alpha1.StoryRun, raw *runtime.RawExtension, vars map[string]any, stepName string) (*runtime.RawExtension, error) {
+func (e *StepExecutor) resolveStoryStepInputs(ctx context.Context, srun *runsv1alpha1.StoryRun, raw *runtime.RawExtension, vars map[string]any, stepName string, storyAnnotations map[string]string) (*runtime.RawExtension, error) {
 	if raw == nil {
 		return nil, nil
 	}
-	resolved, err := e.resolveTemplateWith(ctx, srun, materializePurposeExecute, stepName, "", raw, vars)
+	resolved, err := e.resolveTemplateWith(ctx, srun, materializePurposeExecute, stepName, "", raw, vars, storyAnnotations)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve 'with' block for story step '%s': %w", stepName, err)
 	}

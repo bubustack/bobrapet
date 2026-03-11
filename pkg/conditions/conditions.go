@@ -115,8 +115,8 @@ const (
 	ReasonInputSchemaFailed  = "InputSchemaFailed"
 	ReasonOutputSchemaFailed = "OutputSchemaFailed"
 	ReasonExpressionFailed   = "ExpressionFailed"
-	ReasonDependencyFailed      = "DependencyFailed"
-	ReasonTopologyTerminated    = "TopologyTerminated"
+	ReasonDependencyFailed   = "DependencyFailed"
+	ReasonTopologyTerminated = "TopologyTerminated"
 
 	// Transport validation reason codes
 	ReasonTransportDriverMissing       = "DriverMissing"

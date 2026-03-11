@@ -996,7 +996,6 @@ func parseJobConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 //
 // Behavior:
 //   - Reads "templating.evaluation-timeout" and stores as duration in TemplateEvaluationTimeout.
-//   - Reads "templating.max-expression-length" and stores as int in TemplateMaxExpressionLength.
 //   - Reads "templating.max-output-bytes" and stores as int in TemplateMaxOutputBytes.
 //   - Reads "templating.deterministic" and stores boolean in TemplateDeterministic.
 //   - Reads "templating.offloaded-data-policy" and stores as string in TemplateOffloadedPolicy.
@@ -1007,22 +1006,12 @@ func parseJobConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 //
 // Side Effects:
 //   - Mutates config.Controller templating-related fields.
-//
-// Notes:
-//   - TemplateMaxExpressionLength must be positive; non-positive values are ignored.
 func parseTemplatingConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	if val, exists := cm.Data[contracts.KeyTemplatingEvaluationTimeout]; exists {
 		if parsed, err := time.ParseDuration(val); err == nil {
 			config.Controller.TemplateEvaluationTimeout = parsed
 		} else {
 			configParserLog.Info("Ignoring invalid value", "key", contracts.KeyTemplatingEvaluationTimeout, "value", val, "error", err.Error())
-		}
-	}
-	if val, exists := cm.Data[contracts.KeyTemplatingMaxExpressionLength]; exists {
-		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
-			config.Controller.TemplateMaxExpressionLength = parsed
-		} else if err != nil {
-			configParserLog.Info("Ignoring invalid value", "key", contracts.KeyTemplatingMaxExpressionLength, "value", val, "error", err.Error())
 		}
 	}
 	if val, exists := cm.Data[contracts.KeyTemplatingMaxOutputBytes]; exists {
@@ -1043,7 +1032,6 @@ func parseTemplatingConfig(cm *corev1.ConfigMap, config *OperatorConfig) {
 	}
 	configParserLog.Info("Applied templating overrides",
 		"evaluationTimeout", config.Controller.TemplateEvaluationTimeout,
-		"maxExpressionLength", config.Controller.TemplateMaxExpressionLength,
 		"maxOutputBytes", config.Controller.TemplateMaxOutputBytes,
 		"deterministic", config.Controller.TemplateDeterministic,
 		"offloadedPolicy", config.Controller.TemplateOffloadedPolicy,

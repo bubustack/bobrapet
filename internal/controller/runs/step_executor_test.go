@@ -280,18 +280,18 @@ func TestCreateEngramStepRun_SetsTemplateGeneration(t *testing.T) {
 
 	engramTemplate := &catalogv1alpha1.EngramTemplate{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "greeting-template",
+			Name:       "text-emitter-template",
 			Generation: templateGeneration,
 		},
 		Spec: catalogv1alpha1.EngramTemplateSpec{},
 	}
 	engram := &bubuv1alpha1.Engram{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "greeting",
+			Name:      "text-emitter",
 			Namespace: "default",
 		},
 		Spec: bubuv1alpha1.EngramSpec{
-			TemplateRef: refs.EngramTemplateReference{Name: "greeting-template"},
+			TemplateRef: refs.EngramTemplateReference{Name: "text-emitter-template"},
 		},
 	}
 	srun := &runsv1alpha1.StoryRun{
@@ -308,8 +308,8 @@ func TestCreateEngramStepRun_SetsTemplateGeneration(t *testing.T) {
 		},
 	}
 	step := &bubuv1alpha1.Step{
-		Name: "greet",
-		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "greeting"}},
+		Name: "emit",
+		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "text-emitter"}},
 	}
 
 	k8sClient := fake.NewClientBuilder().
@@ -346,7 +346,7 @@ func TestCreateEngramStepRun_TemplateGenerationZeroWhenTemplateMissing(t *testin
 
 	engram := &bubuv1alpha1.Engram{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "greeting",
+			Name:      "text-emitter",
 			Namespace: "default",
 		},
 		Spec: bubuv1alpha1.EngramSpec{
@@ -367,8 +367,8 @@ func TestCreateEngramStepRun_TemplateGenerationZeroWhenTemplateMissing(t *testin
 		},
 	}
 	step := &bubuv1alpha1.Step{
-		Name: "greet",
-		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "greeting"}},
+		Name: "emit",
+		Ref:  &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "text-emitter"}},
 	}
 
 	k8sClient := fake.NewClientBuilder().

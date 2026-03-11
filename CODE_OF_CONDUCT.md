@@ -49,7 +49,7 @@ Tensions can occur between community members even when they are trying their bes
 When an incident does occur, it is important to report it promptly. To report a possible violation, please contact the Community Moderators via one of the following channels:
 
 - Email: community@bubustack.com
-- GitHub Discussions: https://github.com/bubustack/bobrapet/discussions (select the Community Moderation category)
+- GitHub Discussions: https://github.com/orgs/bubustack/discussions (select the Community Moderation category)
 
 If you are uncomfortable reporting publicly, email is preferred. We aim to acknowledge reports within 72 hours and will keep reporters updated as appropriate.
 

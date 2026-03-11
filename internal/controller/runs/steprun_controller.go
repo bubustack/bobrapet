@@ -1983,7 +1983,9 @@ func (r *StepRunReconciler) handleJobFailed(ctx context.Context, step *runsv1alp
 }
 
 func (r *StepRunReconciler) stepStatusPatchedBySDK(step *runsv1alpha1.StepRun) bool {
-	return step.Status.Phase == enums.PhaseFailed || step.Status.Phase == enums.PhaseTimeout
+	return step.Status.Phase == enums.PhaseFailed ||
+		step.Status.Phase == enums.PhaseTimeout ||
+		step.Status.Phase == enums.PhaseSucceeded
 }
 
 func (r *StepRunReconciler) ensureExitCodePatched(ctx context.Context, step *runsv1alpha1.StepRun, exitCode int, logger *logging.ControllerLogger) {
@@ -2863,35 +2865,111 @@ func (r *StepRunReconciler) resolveRunScopedInputs(ctx context.Context, step *ru
 		if reqErr := r.checkRequiresContext(ctx, step, vars); reqErr != nil {
 			return nil, reqErr
 		}
-		resolvedInputs, err = r.TemplateEvaluator.ResolveWithInputs(ctx, withBlock, vars)
-		if err != nil {
-			// When evaluator hits a ref during resolution it returns ErrOffloadedDataUsage.
-			// For step inputs, leave templates for the SDK instead of materializing.
-			var offloaded *templating.ErrOffloadedDataUsage
-			if errors.As(err, &offloaded) {
+
+		// Pre-check: detect offloaded step outputs referenced by templates.
+		// Policy "controller" or Story annotation bubustack.io/controller-resolve: "true":
+		//   ALL offloaded refs → hydrate from S3 in-process and evaluate templates.
+		// Policy "inject": only pipe expressions (| toString | trunc) trigger pod-based materialization.
+		// Policy "error": fail on offloaded data access.
+		stepOutputsMap, _ := vars["steps"].(map[string]any)
+		policy := resolveOffloadedPolicy(r.ConfigResolver)
+		resolveAll := shouldResolveAllOffloaded(policy) ||
+			(story != nil && storyForcesControllerResolve(story.GetAnnotations()))
+		var offloadedDetect *templating.ErrOffloadedDataUsage
+		if resolveAll {
+			offloadedDetect = detectOffloadedInJSON(withBlock, stepOutputsMap)
+		} else {
+			offloadedDetect = detectOffloadedWithFunctions(withBlock, stepOutputsMap)
+		}
+		if offloadedDetect != nil {
+			if resolveAll {
+				// In-process resolution: hydrate offloaded data from S3 and
+				// evaluate templates directly in the controller — no extra pod.
+				resolved, ipErr := resolveOffloadedInProcess(ctx, r.TemplateEvaluator, withBlock, vars)
+				if ipErr != nil {
+					var blocked *templating.ErrEvaluationBlocked
+					if errors.As(ipErr, &blocked) {
+						return nil, ipErr
+					}
+					return nil, fmt.Errorf("in-process resolution failed for step input: %w", ipErr)
+				}
+				resolvedInputs = resolved
+			} else if shouldBlockOffloaded(policy) && storyRun != nil {
+				// Pod-based materialization for "inject" policy (pipe expressions only).
+				materialized, matErr := resolveMaterialize(ctx, r.Client, r.Scheme, r.ConfigResolver, storyRun, materializePurposeStepInput, step.Spec.StepID, "", materializeModeObject, withBlock, vars, string(enums.WorkloadModeJob))
+				if matErr != nil {
+					var blocked *templating.ErrEvaluationBlocked
+					if errors.As(matErr, &blocked) {
+						return nil, matErr
+					}
+					return nil, fmt.Errorf("materialization failed for step input: %w", matErr)
+				}
+				if matResult, ok := materialized.(map[string]any); ok {
+					resolvedInputs = matResult
+				} else {
+					return nil, fmt.Errorf("materialize result for step input must be map, got %T", materialized)
+				}
+			} else {
 				logr.FromContextOrDiscard(ctx).Info(
-					"Step input evaluation hit offloaded data; leaving templates for SDK",
+					"Step input references offloaded output but resolution not enabled; set templating.offloaded-data-policy to 'inject' or 'controller'",
 					"stepRun", step.Name,
 					"stepID", step.Spec.StepID,
-					"reason", offloaded.Reason,
+					"policy", policy,
+					"reason", offloadedDetect.Reason,
 				)
 				resolvedInputs = withBlock
-				err = nil
-			}
-			if err != nil {
-				err = r.handleTemplateEvalError(err)
-				return nil, fmt.Errorf("failed to resolve step inputs: %w", err)
 			}
 		}
-		// Evaluator can "succeed" but return a value that contains nested refs (path_eval returns
-		// refs as values; ErrOffloadedDataUsage only for len/sample/etc.). For step inputs,
-		// keep refs and let the SDK hydrate them at runtime.
-		if resolvedInputs != nil && containsStorageRef(resolvedInputs, 0) {
-			logr.FromContextOrDiscard(ctx).Info(
-				"Step input includes storage refs; skipping controller materialize and leaving refs for SDK",
-				"stepRun", step.Name,
-				"stepID", step.Spec.StepID,
-			)
+
+		// Normal template evaluation (skipped when in-process or materialization already resolved inputs above).
+		if resolvedInputs == nil {
+			resolvedInputs, err = r.TemplateEvaluator.ResolveWithInputs(ctx, withBlock, vars)
+			if err != nil {
+				// Fallback: evaluator hit an offloaded ref that pre-detection missed.
+				var offloaded *templating.ErrOffloadedDataUsage
+				if errors.As(err, &offloaded) {
+					if resolveAll {
+						// In-process fallback: hydrate and re-evaluate.
+						resolved, ipErr := resolveOffloadedInProcess(ctx, r.TemplateEvaluator, withBlock, vars)
+						if ipErr == nil {
+							resolvedInputs = resolved
+							err = nil
+						} else {
+							var blocked *templating.ErrEvaluationBlocked
+							if errors.As(ipErr, &blocked) {
+								err = ipErr
+							} else {
+								err = fmt.Errorf("in-process resolution fallback failed: %w", ipErr)
+							}
+						}
+					} else if detectOffloadedWithFunctions(withBlock, stepOutputsMap) != nil {
+						// Pod-based materialization fallback for "inject" policy.
+						if shouldBlockOffloaded(policy) && storyRun != nil {
+							materialized, matErr := resolveMaterialize(ctx, r.Client, r.Scheme, r.ConfigResolver, storyRun, materializePurposeStepInput, step.Spec.StepID, "", materializeModeObject, withBlock, vars, string(enums.WorkloadModeJob))
+							if matErr == nil {
+								if matResult, ok := materialized.(map[string]any); ok {
+									resolvedInputs = matResult
+									err = nil
+								} else {
+									err = fmt.Errorf("materialize result for step input must be map, got %T", materialized)
+								}
+							} else {
+								err = matErr
+							}
+						}
+					}
+					if resolvedInputs == nil {
+						// Simple pass-through or policy does not inject; leave raw
+						// templates for the SDK.
+						resolvedInputs = withBlock
+						err = nil
+					}
+				}
+				if err != nil {
+					err = r.handleTemplateEvalError(err)
+					return nil, fmt.Errorf("failed to resolve step inputs: %w", err)
+				}
+			}
 		}
 	}
 

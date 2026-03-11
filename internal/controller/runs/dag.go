@@ -706,7 +706,7 @@ func (r *DAGReconciler) finalizeStoryRun(
 			var offloaded *templating.ErrOffloadedDataUsage
 			if errors.As(err, &offloaded) {
 				policy := resolveOffloadedPolicy(r.ConfigResolver)
-				if shouldBlockOffloaded(policy) {
+				if shouldBlockOffloaded(policy) || shouldResolveAllOffloaded(policy) {
 					if log != nil {
 						log.Info("Story output requires offloaded data; waiting for hydration", "reason", offloaded.Reason)
 					}
@@ -1312,7 +1312,11 @@ func (r *DAGReconciler) checkSyncWaitSteps(ctx context.Context, srun *runsv1alph
 		var evalErr error
 		if offloaded := detectOffloadedOutputRefs(cfg.until, prior); offloaded != nil {
 			policy := resolveOffloadedPolicy(r.ConfigResolver)
-			if shouldBlockOffloaded(policy) {
+			resolveAll := shouldResolveAllOffloaded(policy) ||
+				(story != nil && storyForcesControllerResolve(story.GetAnnotations()))
+			if resolveAll {
+				result, evalErr = resolveConditionInProcess(ctx, r.TemplateEvaluator, cfg.until, vars)
+			} else if shouldBlockOffloaded(policy) {
 				materialized, matErr := resolveMaterialize(ctx, r.Client, r.Scheme(), r.ConfigResolver, srun, materializePurposeWait, step.Name, "", materializeModeCondition, cfg.until, vars, string(enums.WorkloadModeJob))
 				if matErr != nil {
 					evalErr = matErr
@@ -1339,9 +1343,14 @@ func (r *DAGReconciler) checkSyncWaitSteps(ctx context.Context, srun *runsv1alph
 			var offloaded *templating.ErrOffloadedDataUsage
 			if errors.As(evalErr, &offloaded) {
 				policy := resolveOffloadedPolicy(r.ConfigResolver)
-				if shouldBlockOffloaded(policy) {
+				resolveAll := shouldResolveAllOffloaded(policy) ||
+					(story != nil && storyForcesControllerResolve(story.GetAnnotations()))
+				if resolveAll {
+					result, evalErr = resolveConditionInProcess(ctx, r.TemplateEvaluator, cfg.until, vars)
+				} else if shouldBlockOffloaded(policy) {
 					log.Info("Wait condition requires offloaded data; waiting for hydration", "step", step.Name, "reason", offloaded.Reason)
 					result = false
+					evalErr = nil
 				} else {
 					next := runsv1alpha1.StepState{Phase: enums.PhaseFailed, Message: offloaded.Error()}
 					next = ensureStepStateTimes(next, now)
@@ -1351,7 +1360,8 @@ func (r *DAGReconciler) checkSyncWaitSteps(ctx context.Context, srun *runsv1alph
 					}
 					continue
 				}
-			} else {
+			}
+			if evalErr != nil {
 				log.Info("Wait condition blocked or failed evaluation, step not ready", "step", step.Name, "reason", evalErr)
 				result = false
 			}
@@ -1701,7 +1711,7 @@ func (r *DAGReconciler) findAndLaunchReadySteps(ctx context.Context, srun *runsv
 			var offloaded *templating.ErrOffloadedDataUsage
 			if errors.As(err, &offloaded) {
 				policy := resolveOffloadedPolicy(r.ConfigResolver)
-				if shouldBlockOffloaded(policy) {
+				if shouldBlockOffloaded(policy) || shouldResolveAllOffloaded(policy) {
 					log.Info("Step execution requires offloaded data; waiting for hydration", "step", step.Name, "reason", offloaded.Reason)
 					continue
 				}
@@ -2607,7 +2617,11 @@ func (r *DAGReconciler) findReadySteps(
 					stepOutputs, _ := vars["steps"].(map[string]any)
 					if offloaded := detectOffloadedOutputRefs(*step.If, stepOutputs); offloaded != nil {
 						policy := resolveOffloadedPolicy(r.ConfigResolver)
-						if shouldBlockOffloaded(policy) && srun != nil {
+						resolveAll := shouldResolveAllOffloaded(policy) ||
+							(story != nil && storyForcesControllerResolve(story.GetAnnotations()))
+						if resolveAll {
+							result, evalErr = resolveConditionInProcess(ctx, r.TemplateEvaluator, *step.If, vars)
+						} else if shouldBlockOffloaded(policy) && srun != nil {
 							matVars := map[string]any{"inputs": vars["inputs"], "steps": filterStepsForTemplate(*step.If, stepOutputs)}
 							materialized, matErr := resolveMaterialize(ctx, r.Client, r.Scheme(), r.ConfigResolver, srun, materializePurposeIf, step.Name, "", materializeModeCondition, *step.If, matVars, string(enums.WorkloadModeJob))
 							if matErr != nil {
@@ -2695,7 +2709,11 @@ func (r *DAGReconciler) findReadySteps(
 				stepOutputs, _ := vars["steps"].(map[string]any)
 				if offloaded := detectOffloadedOutputRefs(*step.If, stepOutputs); offloaded != nil {
 					policy := resolveOffloadedPolicy(r.ConfigResolver)
-					if shouldBlockOffloaded(policy) && srun != nil {
+					resolveAll := shouldResolveAllOffloaded(policy) ||
+						(story != nil && storyForcesControllerResolve(story.GetAnnotations()))
+					if resolveAll {
+						result, err = resolveConditionInProcess(ctx, r.TemplateEvaluator, *step.If, vars)
+					} else if shouldBlockOffloaded(policy) && srun != nil {
 						materialized, matErr := resolveMaterialize(ctx, r.Client, r.Scheme(), r.ConfigResolver, srun, materializePurposeIf, step.Name, "", materializeModeCondition, *step.If, vars, string(enums.WorkloadModeJob))
 						if matErr != nil {
 							err = matErr
@@ -2705,19 +2723,22 @@ func (r *DAGReconciler) findReadySteps(
 							err = fmt.Errorf("materialize result must be bool, got %T", materialized)
 						}
 					} else {
-						logging.NewControllerLogger(ctx, "storyrun-if-eval").Info("Template 'if' references offloaded output but materialize not injected; set templating.offloaded-data-policy to 'inject'", "step", step.Name, "policy", policy, "reason", offloaded.Reason)
+						logging.NewControllerLogger(ctx, "storyrun-if-eval").Info("Template 'if' references offloaded output but resolution not enabled; set templating.offloaded-data-policy to 'inject' or 'controller'", "step", step.Name, "policy", policy, "reason", offloaded.Reason)
 						err = offloaded
 					}
 				} else {
 					result, err = r.TemplateEvaluator.EvaluateCondition(ctx, *step.If, vars)
 					// Evaluator can return ErrOffloadedDataUsage when it hits a ref during evaluation
-					// (detectOffloadedOutputRefs may have missed it). If policy is inject, create/wait
-					// for materialize StepRun and use its result.
+					// (detectOffloadedOutputRefs may have missed it). Handle via in-process or materialization.
 					if err != nil {
 						var offloaded *templating.ErrOffloadedDataUsage
 						if errors.As(err, &offloaded) {
 							policy := resolveOffloadedPolicy(r.ConfigResolver)
-							if shouldBlockOffloaded(policy) && srun != nil {
+							resolveAll := shouldResolveAllOffloaded(policy) ||
+								(story != nil && storyForcesControllerResolve(story.GetAnnotations()))
+							if resolveAll {
+								result, err = resolveConditionInProcess(ctx, r.TemplateEvaluator, *step.If, vars)
+							} else if shouldBlockOffloaded(policy) && srun != nil {
 								materialized, matErr := resolveMaterialize(ctx, r.Client, r.Scheme(), r.ConfigResolver, srun, materializePurposeIf, step.Name, "", materializeModeCondition, *step.If, vars, string(enums.WorkloadModeJob))
 								if matErr == nil {
 									if boolVal, ok := materialized.(bool); ok {
@@ -2741,8 +2762,8 @@ func (r *DAGReconciler) findReadySteps(
 					var offloaded *templating.ErrOffloadedDataUsage
 					if errors.As(err, &offloaded) {
 						policy := resolveOffloadedPolicy(r.ConfigResolver)
-						if shouldBlockOffloaded(policy) {
-							log.Info("Template 'if' condition requires offloaded data; waiting for materialize", "step", step.Name, "reason", offloaded.Reason)
+						if shouldBlockOffloaded(policy) || shouldResolveAllOffloaded(policy) {
+							log.Info("Template 'if' condition requires offloaded data; waiting for resolution", "step", step.Name, "reason", offloaded.Reason)
 							continue
 						}
 						state := runsv1alpha1.StepState{Phase: enums.PhaseFailed, Message: offloaded.Error()}
@@ -2838,7 +2859,14 @@ func (r *DAGReconciler) finalizeSuccessfulRun(ctx context.Context, srun *runsv1a
 	var resolvedOutput map[string]any
 	if offloaded := detectOffloadedOutputRefs(string(story.Spec.Output.Raw), priorStepOutputs); offloaded != nil {
 		policy := resolveOffloadedPolicy(r.ConfigResolver)
-		if shouldBlockOffloaded(policy) {
+		resolveAll := shouldResolveAllOffloaded(policy) || storyForcesControllerResolve(story.GetAnnotations())
+		if resolveAll {
+			resolved, ipErr := resolveOffloadedInProcess(ctx, r.TemplateEvaluator, outputTemplate, vars)
+			if ipErr != nil {
+				return fmt.Errorf("in-process resolution failed for story output: %w", ipErr)
+			}
+			resolvedOutput = resolved
+		} else if shouldBlockOffloaded(policy) {
 			filteredVars := map[string]any{"inputs": vars["inputs"], "steps": filterStepsForTemplate(string(story.Spec.Output.Raw), priorStepOutputs)}
 			result, err := resolveMaterialize(ctx, r.Client, r.Scheme(), r.ConfigResolver, srun, materializePurposeStoryOutput, "", "", materializeModeObject, outputTemplate, filteredVars, string(enums.WorkloadModeJob))
 			if err != nil {

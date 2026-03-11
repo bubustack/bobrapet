@@ -35,6 +35,7 @@ import (
 
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+	transportv1alpha1 "github.com/bubustack/bobrapet/api/transport/v1alpha1"
 	"github.com/bubustack/bobrapet/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
@@ -69,6 +70,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = v1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = transportv1alpha1.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	// +kubebuilder:scaffold:scheme

@@ -20,11 +20,6 @@ func TestValidateControllerConfig_TemplatingBounds(t *testing.T) {
 	require.ErrorContains(t, err, "templating.evaluation-timeout cannot be negative")
 
 	cfg = config.DefaultControllerConfig()
-	cfg.TemplateMaxExpressionLength = -100
-	err = config.ValidateControllerConfig(cfg)
-	require.ErrorContains(t, err, "templating.max-expression-length cannot be negative")
-
-	cfg = config.DefaultControllerConfig()
 	cfg.TemplateOffloadedPolicy = config.TemplatingOffloadedPolicyInject
 	cfg.TemplateMaterializeEngram = ""
 	err = config.ValidateControllerConfig(cfg)

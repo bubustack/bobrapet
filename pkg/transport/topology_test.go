@@ -165,6 +165,53 @@ func TestTopologyAnalyzer_MultipleDownstreams(t *testing.T) {
 	}
 }
 
+func TestTopologyAnalyzer_PreventsMixedHubAndP2PUpstreamDelivery(t *testing.T) {
+	// Reproduces livekit ingress fan-out:
+	// ingress -> buffer
+	// ingress -> greet
+	//
+	// ingress must use hub (multiple downstream). buffer has one downstream
+	// (transcribe), but it must also stay on hub so hub-routed ingress packets
+	// can be delivered to buffer.
+	story := &v1alpha1.Story{
+		Spec: v1alpha1.StorySpec{
+			Steps: []v1alpha1.Step{
+				{Name: "ingress"},
+				{
+					Name:  "buffer",
+					Needs: []string{"ingress"},
+				},
+				{
+					Name:  "greet",
+					Needs: []string{"ingress"},
+				},
+				{
+					Name:  "transcribe",
+					Needs: []string{"buffer"},
+				},
+			},
+		},
+	}
+
+	analyzer := NewTopologyAnalyzer(story)
+
+	ingress, err := analyzer.AnalyzeStepRouting("ingress")
+	if err != nil {
+		t.Fatalf("AnalyzeStepRouting(ingress) error = %v", err)
+	}
+	if ingress.RoutingMode != RoutingModeHub {
+		t.Fatalf("ingress RoutingMode = %v, want %v", ingress.RoutingMode, RoutingModeHub)
+	}
+
+	buffer, err := analyzer.AnalyzeStepRouting("buffer")
+	if err != nil {
+		t.Fatalf("AnalyzeStepRouting(buffer) error = %v", err)
+	}
+	if buffer.RoutingMode != RoutingModeHub {
+		t.Fatalf("buffer RoutingMode = %v, want %v", buffer.RoutingMode, RoutingModeHub)
+	}
+}
+
 func TestTopologyAnalyzer_HasP2PUpstream(t *testing.T) {
 	story := &v1alpha1.Story{
 		Spec: v1alpha1.StorySpec{

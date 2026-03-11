@@ -13,7 +13,7 @@ Thank you for using BubuStack. Here's how you can get help.
 For questions, discussions, and community support, please use the following channels:
 
 - **GitHub Issues**: For bug reports and feature requests, please open an issue: https://github.com/bubustack/bobrapet/issues
-- **GitHub Discussions**: For general questions and sharing your projects, please use Discussions: https://github.com/bubustack/bobrapet/discussions
+- **GitHub Discussions**: For general questions and sharing your projects, please use Discussions: https://github.com/orgs/bubustack/discussions
 
 ### Triage and response SLAs (best effort)
 

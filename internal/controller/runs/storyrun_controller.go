@@ -869,7 +869,7 @@ func (r *StoryRunReconciler) reconcileAfterSetup(ctx context.Context, srun *runs
 		var offloaded *templating.ErrOffloadedDataUsage
 		if stderrors.As(err, &offloaded) {
 			policy := resolveOffloadedPolicy(r.ConfigResolver)
-			if shouldBlockOffloaded(policy) {
+			if shouldBlockOffloaded(policy) || shouldResolveAllOffloaded(policy) {
 				if log != nil {
 					log.Info("Template evaluation requires offloaded data; requeueing", "reason", offloaded.Reason)
 				}

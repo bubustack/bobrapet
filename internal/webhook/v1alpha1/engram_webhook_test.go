@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,25 +17,30 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
-	// TODO (user): Add any additional imports if needed
+	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
+	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var _ = Describe("Engram Webhook", func() {
 	var (
-		obj       *bubustackiov1alpha1.Engram
-		oldObj    *bubustackiov1alpha1.Engram
+		obj       *bubushv1alpha1.Engram
+		oldObj    *bubushv1alpha1.Engram
 		validator EngramCustomValidator
 		defaulter EngramCustomDefaulter
 	)
 
 	BeforeEach(func() {
-		obj = &bubustackiov1alpha1.Engram{}
-		oldObj = &bubustackiov1alpha1.Engram{}
-		validator = EngramCustomValidator{}
+		obj = &bubushv1alpha1.Engram{}
+		oldObj = &bubushv1alpha1.Engram{}
+		validator = EngramCustomValidator{Client: k8sClient}
 		Expect(validator).NotTo(BeNil(), "Expected validator to be initialized")
 		defaulter = EngramCustomDefaulter{}
 		Expect(defaulter).NotTo(BeNil(), "Expected defaulter to be initialized")
@@ -61,26 +66,198 @@ var _ = Describe("Engram Webhook", func() {
 	})
 
 	Context("When creating or updating Engram under Validating Webhook", func() {
-		// TODO (user): Add logic for validating webhooks
-		// Example:
-		// It("Should deny creation if a required field is missing", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = ""
-		//     Expect(validator.ValidateCreate(ctx, obj)).Error().To(HaveOccurred())
-		// })
-		//
-		// It("Should admit creation if all required fields are present", func() {
-		//     By("simulating an invalid creation scenario")
-		//     obj.SomeRequiredField = "valid_value"
-		//     Expect(validator.ValidateCreate(ctx, obj)).To(BeNil())
-		// })
-		//
-		// It("Should validate updates correctly", func() {
-		//     By("simulating a valid update scenario")
-		//     oldObj.SomeRequiredField = "updated_value"
-		//     obj.SomeRequiredField = "updated_value"
-		//     Expect(validator.ValidateUpdate(ctx, oldObj, obj)).To(BeNil())
-		// })
+		It("warns when referenced secrets do not exist", func() {
+			template := &catalogv1alpha1.EngramTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "tpl-secret-warn",
+				},
+				Spec: catalogv1alpha1.EngramTemplateSpec{
+					TemplateSpec: catalogv1alpha1.TemplateSpec{
+						Version:        "v1",
+						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeJob},
+						SecretSchema: map[string]catalogv1alpha1.SecretDefinition{
+							"apiKey": {Required: true},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, template)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, template)
+			})
+
+			engram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "engram-secret-warn",
+					Namespace: "default",
+				},
+				Spec: bubushv1alpha1.EngramSpec{
+					TemplateRef: refs.EngramTemplateReference{
+						Name: "tpl-secret-warn",
+					},
+					Secrets: map[string]string{
+						"apiKey": "missing-secret",
+					},
+				},
+			}
+
+			warnings, err := validator.ValidateCreate(context.Background(), engram)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(warnings).NotTo(BeEmpty())
+			Expect(warnings[0]).To(ContainSubstring("not found"))
+		})
+
+		It("rejects spec changes when deletion is in progress", func() {
+			now := metav1.Now()
+			oldEngram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "engram-deleting",
+					Namespace: "default",
+				},
+				Spec: bubushv1alpha1.EngramSpec{
+					TemplateRef: refs.EngramTemplateReference{
+						Name: "tpl-old",
+					},
+				},
+			}
+			newEngram := oldEngram.DeepCopy()
+			newEngram.DeletionTimestamp = &now
+			newEngram.Spec.TemplateRef.Name = "tpl-new"
+
+			_, err := validator.ValidateUpdate(context.Background(), oldEngram, newEngram)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("deletion"))
+		})
+
+		It("rejects template version mismatches", func() {
+			template := &catalogv1alpha1.EngramTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "tpl-version",
+				},
+				Spec: catalogv1alpha1.EngramTemplateSpec{
+					TemplateSpec: catalogv1alpha1.TemplateSpec{
+						Version:        "v1",
+						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeJob},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, template)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, template)
+			})
+
+			engram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "engram-version",
+					Namespace: "default",
+				},
+				Spec: bubushv1alpha1.EngramSpec{
+					TemplateRef: refs.EngramTemplateReference{
+						Name:    "tpl-version",
+						Version: "v2",
+					},
+				},
+			}
+
+			_, err := validator.ValidateCreate(context.Background(), engram)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("does not match template's actual version"))
+		})
+
+		It("rejects unsupported workload modes", func() {
+			template := &catalogv1alpha1.EngramTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "tpl-modes",
+				},
+				Spec: catalogv1alpha1.EngramTemplateSpec{
+					TemplateSpec: catalogv1alpha1.TemplateSpec{
+						Version:        "v1",
+						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeJob},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, template)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, template)
+			})
+
+			engram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "engram-modes",
+					Namespace: "default",
+				},
+				Spec: bubushv1alpha1.EngramSpec{
+					TemplateRef: refs.EngramTemplateReference{
+						Name: "tpl-modes",
+					},
+					Mode: enums.WorkloadModeStatefulSet,
+				},
+			}
+
+			_, err := validator.ValidateCreate(context.Background(), engram)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("supportedModes"))
+		})
+
+		It("validates secrets against template secretSchema keys", func() {
+			template := &catalogv1alpha1.EngramTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "tpl-secrets",
+				},
+				Spec: catalogv1alpha1.EngramTemplateSpec{
+					TemplateSpec: catalogv1alpha1.TemplateSpec{
+						Version:        "v1",
+						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeJob},
+						SecretSchema: map[string]catalogv1alpha1.SecretDefinition{
+							"apiKey": {Required: true},
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, template)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, template)
+			})
+
+			engram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "engram-secrets",
+					Namespace: "default",
+				},
+				Spec: bubushv1alpha1.EngramSpec{
+					TemplateRef: refs.EngramTemplateReference{
+						Name: "tpl-secrets",
+					},
+					Secrets: map[string]string{
+						"unknown": "some-secret",
+					},
+				},
+			}
+
+			_, err := validator.ValidateCreate(context.Background(), engram)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("secret \"apiKey\" is required"))
+			Expect(err.Error()).To(ContainSubstring("secret \"unknown\" is not defined"))
+		})
+
+		It("skips validation when spec is unchanged on update", func() {
+			oldEngram := &bubushv1alpha1.Engram{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "engram-skip",
+					Namespace: "default",
+				},
+				Spec: bubushv1alpha1.EngramSpec{
+					TemplateRef: refs.EngramTemplateReference{
+						Name: "missing-template",
+					},
+				},
+			}
+			newEngram := oldEngram.DeepCopy()
+			newEngram.Labels = map[string]string{"note": "metadata-only"}
+
+			_, err := validator.ValidateUpdate(context.Background(), oldEngram, newEngram)
+			Expect(err).NotTo(HaveOccurred())
+		})
 	})
 
 })

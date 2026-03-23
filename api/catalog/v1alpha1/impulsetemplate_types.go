@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,70 +18,88 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// ImpulseTemplateSpec defines the desired state of ImpulseTemplate
-type ImpulseTemplateSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of ImpulseTemplate. Edit impulsetemplate_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
-}
-
-// ImpulseTemplateStatus defines the observed state of ImpulseTemplate.
-type ImpulseTemplateStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the ImpulseTemplate resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
-
+// ImpulseTemplate defines a reusable "trigger" component that launches stories
+//
+// Think of ImpulseTemplates as event listeners or sensors that know how to handle specific types of events:
+// - "github-webhook": Handles GitHub webhook events (push, PR, release, etc.)
+// - "slack-handler": Processes Slack events (mentions, slash commands, reactions)
+// - "file-watcher": Monitors file uploads/changes in cloud storage
+// - "cron-scheduler": Triggers stories on schedules (like GitHub Actions cron)
+// - "kafka-consumer": Consumes messages from Kafka topics
+//
+// Templates are cluster-scoped because they're meant to be shared across teams and namespaces.
+// They define WHAT events can be handled, while Impulses define HOW to configure and use them.
+//
+// The relationship is:
+// ImpulseTemplate (defines trigger capabilities) → Impulse (configured trigger) → Launches Stories
+//
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Cluster
-
-// ImpulseTemplate is the Schema for the impulsetemplates API
+// +kubebuilder:resource:scope=Cluster,shortName=itpl,categories={bubu,ai,catalog}
+// +kubebuilder:printcolumn:name="Description",type=string,JSONPath=.spec.description
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=.spec.version
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=.status.usageCount
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=.status.validationStatus
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=.metadata.creationTimestamp
 type ImpulseTemplate struct {
 	metav1.TypeMeta `json:",inline"`
-
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
 
 	// spec defines the desired state of ImpulseTemplate
 	// +required
-	Spec ImpulseTemplateSpec `json:"spec"`
+	Spec ImpulseTemplateSpec `json:"spec,omitempty"`
 
 	// status defines the observed state of ImpulseTemplate
 	// +optional
 	Status ImpulseTemplateStatus `json:"status,omitzero"`
 }
 
-// +kubebuilder:object:root=true
+// ImpulseTemplateSpec defines the capabilities and contract of a trigger component
+type ImpulseTemplateSpec struct {
+	// Common template fields (version, description, image, etc.)
+	TemplateSpec `json:",inline"`
 
-// ImpulseTemplateList contains a list of ImpulseTemplate
+	// What data does this trigger provide when events occur?
+	// This defines the structure of the event context that will be available for mapping to Story inputs
+	// Examples:
+	// - GitHub webhook: {"repository": "object", "ref": "string", "commits": "array", "sender": "object"}
+	// - File watcher: {"bucket": "string", "objectKey": "string", "size": "integer", "timestamp": "string"}
+	// - Slack event: {"channel": "string", "user": "object", "message": "string", "timestamp": "string"}
+	// - Cron trigger: {"scheduledTime": "string", "timezone": "string", "schedule": "string"}
+	// +kubebuilder:pruning:PreserveUnknownFields
+	ContextSchema *runtime.RawExtension `json:"contextSchema,omitempty"`
+
+	// DeliveryPolicy defines default trigger delivery behavior (dedupe/retry) for Impulses.
+	// +optional
+	DeliveryPolicy *TriggerDeliveryPolicy `json:"deliveryPolicy,omitempty"`
+}
+
+type ImpulseTemplateStatus struct {
+	TemplateStatus `json:",inline"`
+}
+
+// GetTemplateStatus returns a pointer to the embedded TemplateStatus.
+// This enables shared status update helpers to operate on both template types.
+func (t *ImpulseTemplate) GetTemplateStatus() *TemplateStatus {
+	return &t.Status.TemplateStatus
+}
+
+// GetImage returns the template's container image.
+func (t *ImpulseTemplate) GetImage() string {
+	return t.Spec.Image
+}
+
+// GetVersion returns the template's version.
+func (t *ImpulseTemplate) GetVersion() string {
+	return t.Spec.Version
+}
+
+// +kubebuilder:object:root=true
 type ImpulseTemplateList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

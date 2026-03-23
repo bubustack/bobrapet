@@ -1,0 +1,192 @@
+# Default values for the bobrapet operator chart.
+
+nameOverride: ""
+fullnameOverride: ""
+
+managementNamespace: "" # when empty, uses .Release.Namespace
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/bubustack/bobrapet
+  tag: "" # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+manager:
+  leaderElect: true
+  leaderElectionID: d3a8b358.bubustack.io
+  leaderElectionNamespace: ""
+  logLevel: info
+  metricsBindAddress: ":8443"
+  healthProbeBindAddress: ":8081"
+  configName: bobrapet-operator-config
+  configNamespace: ""
+  extraArgs: []
+  env: []
+  volumeMounts: []
+  volumes: []
+
+rbac:
+  create: true
+  aggregateRoles: true
+
+leaderElection:
+  create: true
+
+metrics:
+  enabled: true
+  service:
+    type: ClusterIP
+    annotations: {}
+    labels: {}
+    port: 8443
+  authProxy:
+    enabled: true
+  tls:
+    enabled: true
+    secretName: ""
+
+webhook:
+  enabled: true # when false, the deployment sets ENABLE_WEBHOOKS=false
+  failurePolicy: Fail
+  timeoutSeconds: 10
+  sideEffects: None
+  port: 443
+  targetPort: 9443
+  certSecretName: ""
+  service:
+    annotations: {}
+    labels: {}
+  caBundle: "" # leave empty when cert-manager integration is enabled
+
+certManager:
+  enabled: true
+  issuer:
+    kind: Issuer
+    name: bobrapet-selfsigned
+    create: true
+  renewalDaysBeforeExpiry: 30
+
+controllerConfigData:
+  controller.max-concurrent-reconciles: "10"
+  controller.requeue-base-delay: "2s"
+  controller.requeue-max-delay: "1m"
+  controller.health-check-interval: "30s"
+  controller.cleanup-interval: "1h"
+  controller.reconcile-timeout: "1m"
+  controller.default-engram-grpc-port: "50051"
+  controller.max-story-with-block-size-bytes: "65536"
+  images.registry: "ghcr.io/bubustack"
+  images.default-engram: "engram-default:latest"
+  images.default-impulse: "impulse-default:latest"
+  images.pull-policy: "IfNotPresent"
+  resources.default.cpu-request: "100m"
+  resources.default.cpu-limit: "500m"
+  resources.default.memory-request: "128Mi"
+  resources.default.memory-limit: "512Mi"
+  resources.engram.cpu-request: "100m"
+  resources.engram.cpu-limit: "1"
+  resources.engram.memory-request: "128Mi"
+  resources.engram.memory-limit: "512Mi"
+  retry.max-retries: "3"
+  retry.exponential-backoff-base: "1s"
+  retry.exponential-backoff-max: "60s"
+  timeout.default-step: "5m"
+  timeout.approval-default: "24h"
+  timeout.external-data-default: "30m"
+  timeout.conditional-default: "10m"
+  loop.max-iterations: "10000"
+  loop.default-batch-size: "100"
+  loop.max-batch-size: "1000"
+  loop.max-concurrency: "10"
+  loop.max-concurrency-limit: "50"
+  security.run-as-non-root: "true"
+  security.read-only-root-filesystem: "true"
+  security.allow-privilege-escalation: "false"
+  security.drop-capabilities: "ALL"
+  security.run-as-user: "1000"
+  security.automount-service-account-token: "false"
+  security.service-account-name: "default"
+  job.backoff-limit: "3"
+  job.ttl-seconds-after-finished: "3600"
+  job.restart-policy: "Never"
+  templating.evaluation-timeout: "30s"
+  templating.max-output-bytes: "65536"
+  templating.deterministic: "false"
+  templating.offloaded-data-policy: "inject"
+  templating.materialize-engram: "materialize"
+  telemetry.enabled: "true"
+  telemetry.trace-propagation: "true"
+  debug.enable-verbose-logging: "false"
+  debug.enable-step-output-logging: "false"
+  debug.enable-metrics: "true"
+  storyrun.max-concurrent-reconciles: "8"
+  storyrun.rate-limiter.base-delay: "50ms"
+  storyrun.rate-limiter.max-delay: "5m"
+  storyrun.max-inline-inputs-size: "1024"
+  storyrun.global-concurrency: "0"
+  storyrun.queue.default.concurrency: "0"
+  storyrun.queue.default.default-priority: "0"
+  steprun.max-concurrent-reconciles: "15"
+  steprun.rate-limiter.base-delay: "100ms"
+  steprun.rate-limiter.max-delay: "2m"
+  story.max-concurrent-reconciles: "5"
+  story.rate-limiter.base-delay: "200ms"
+  story.rate-limiter.max-delay: "1m"
+  engram.max-concurrent-reconciles: "5"
+  engram.rate-limiter.base-delay: "200ms"
+  engram.rate-limiter.max-delay: "1m"
+  engram.default-max-inline-size: "1024"
+  engram.default-grpc-port: "50051"
+  engram.default-storage-timeout-seconds: "300"
+  engram.default-graceful-shutdown-timeout-seconds: "20"
+  engram.default-termination-grace-period-seconds: "30"
+  engram.default-max-recv-msg-bytes: "10485760"
+  engram.default-max-send-msg-bytes: "10485760"
+  engram.default-dial-timeout-seconds: "10"
+  engram.default-channel-buffer-size: "16"
+  engram.default-reconnect-max-retries: "10"
+  engram.default-reconnect-base-backoff-millis: "500"
+  engram.default-reconnect-max-backoff-seconds: "30"
+  engram.default-hang-timeout-seconds: "30"
+  engram.default-message-timeout-seconds: "30"
+  impulse.max-concurrent-reconciles: "5"
+  impulse.rate-limiter.base-delay: "200ms"
+  impulse.rate-limiter.max-delay: "1m"
+  template.max-concurrent-reconciles: "2"
+  template.rate-limiter.base-delay: "500ms"
+  template.rate-limiter.max-delay: "10m"

@@ -27,11 +27,6 @@ if ! command -v kubectl &> /dev/null; then
   mv kubectl /usr/local/bin/kubectl
 fi
 
-# Install helm
-if ! command -v helm &> /dev/null; then
-  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-fi
-
 # Wait for Docker to be ready
 for i in {1..30}; do
   if docker info >/dev/null 2>&1; then
@@ -51,7 +46,6 @@ echo "Installed versions:"
 kind version
 kubebuilder version
 kubectl version --client
-helm version
 docker --version
 go version
 

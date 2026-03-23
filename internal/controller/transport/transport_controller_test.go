@@ -51,10 +51,7 @@ var _ = Describe("Transport Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: transportv1alpha1.TransportSpec{
-						Provider: "test-provider",
-						Driver:   "test-driver",
-					},
+					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

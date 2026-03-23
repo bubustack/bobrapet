@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,60 +23,16 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// ReferenceGrantSpec defines the desired state of ReferenceGrant.
-// The grant is namespaced and allows references *to* objects in the grant's
-// namespace from objects in other namespaces.
+// ReferenceGrantSpec defines the desired state of ReferenceGrant
 type ReferenceGrantSpec struct {
-	// From lists which resources are allowed to reference into this namespace.
-	// +kubebuilder:validation:MinItems=1
-	From []ReferenceGrantFrom `json:"from"`
+	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
+	// Important: Run "make" to regenerate code after modifying this file
+	// The following markers will use OpenAPI v3 schema to validate the value
+	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
 
-	// To lists the target resource kinds (and optionally names) that can be referenced.
-	// +kubebuilder:validation:MinItems=1
-	To []ReferenceGrantTo `json:"to"`
-}
-
-// ReferenceGrantFrom identifies the referencing resource.
-type ReferenceGrantFrom struct {
-	// Group is the API group of the referencing object (e.g., "bubustack.io").
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Group string `json:"group"`
-
-	// Kind is the Kubernetes kind of the referencing object (e.g., "StoryRun").
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	Kind string `json:"kind"`
-
-	// Namespace is the namespace of the referencing object.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-	Namespace string `json:"namespace"`
-}
-
-// ReferenceGrantTo identifies the target resource that can be referenced.
-type ReferenceGrantTo struct {
-	// Group is the API group of the target object (e.g., "bubustack.io").
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Group string `json:"group"`
-
-	// Kind is the Kubernetes kind of the target object (e.g., "Engram").
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	Kind string `json:"kind"`
-
-	// Name optionally restricts the grant to a specific resource name.
+	// foo is an example field of ReferenceGrant. Edit referencegrant_types.go to remove/update
 	// +optional
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-	Name *string `json:"name,omitempty"`
+	Foo *string `json:"foo,omitempty"`
 }
 
 // ReferenceGrantStatus defines the observed state of ReferenceGrant.
@@ -104,7 +60,6 @@ type ReferenceGrantStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:scope=Namespaced,shortName=refgrant,categories={bubu,ai}
 
 // ReferenceGrant is the Schema for the referencegrants API
 type ReferenceGrant struct {

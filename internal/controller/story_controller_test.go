@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,12 +25,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/bubustack/bobrapet/internal/config"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
-	"github.com/bubustack/bobrapet/pkg/refs"
+	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 )
 
 var _ = Describe("Story Controller", func() {
@@ -43,29 +40,18 @@ var _ = Describe("Story Controller", func() {
 			Name:      resourceName,
 			Namespace: "default", // TODO(user):Modify as needed
 		}
-		story := &bubushv1alpha1.Story{}
+		story := &bubustackiov1alpha1.Story{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Story")
 			err := k8sClient.Get(ctx, typeNamespacedName, story)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &bubushv1alpha1.Story{
+				resource := &bubustackiov1alpha1.Story{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: bubushv1alpha1.StorySpec{
-						Steps: []bubushv1alpha1.Step{
-							{
-								Name: "step1",
-								Ref: &refs.EngramReference{
-									ObjectReference: refs.ObjectReference{
-										Name: "some-engram",
-									},
-								},
-							},
-						},
-					},
+					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -73,11 +59,8 @@ var _ = Describe("Story Controller", func() {
 
 		AfterEach(func() {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &bubushv1alpha1.Story{}
+			resource := &bubustackiov1alpha1.Story{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			if err != nil && errors.IsNotFound(err) {
-				return
-			}
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Cleanup the specific resource instance Story")
@@ -85,13 +68,9 @@ var _ = Describe("Story Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			configManager := config.NewOperatorConfigManager(k8sClient, "default", "bobrapet-operator-config")
 			controllerReconciler := &StoryReconciler{
-				ControllerDependencies: config.ControllerDependencies{
-					Client:         k8sClient,
-					Scheme:         k8sClient.Scheme(),
-					ConfigResolver: config.NewResolver(k8sClient, configManager),
-				},
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

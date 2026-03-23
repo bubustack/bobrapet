@@ -1,0 +1,9 @@
+apiVersion: catalog.bubustack.io/v1alpha1
+kind: ImpulseTemplate
+metadata:
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
+  name: impulsetemplate-sample
+spec:
+  # TODO(user): Add fields here

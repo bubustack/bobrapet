@@ -51,12 +51,7 @@ var _ = Describe("TransportBinding Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					Spec: transportv1alpha1.TransportBindingSpec{
-						TransportRef: "test-transport",
-						StepName:     "step",
-						EngramName:   "engram",
-						Driver:       "test-driver",
-					},
+					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

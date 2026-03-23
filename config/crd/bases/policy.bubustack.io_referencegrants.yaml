@@ -8,14 +8,9 @@ metadata:
 spec:
   group: policy.bubustack.io
   names:
-    categories:
-    - bubu
-    - ai
     kind: ReferenceGrant
     listKind: ReferenceGrantList
     plural: referencegrants
-    shortNames:
-    - refgrant
     singular: referencegrant
   scope: Namespaced
   versions:
@@ -44,71 +39,10 @@ spec:
           spec:
             description: spec defines the desired state of ReferenceGrant
             properties:
-              from:
-                description: From lists which resources are allowed to reference into
-                  this namespace.
-                items:
-                  description: ReferenceGrantFrom identifies the referencing resource.
-                  properties:
-                    group:
-                      description: Group is the API group of the referencing object
-                        (e.g., "bubustack.io").
-                      maxLength: 253
-                      minLength: 1
-                      type: string
-                    kind:
-                      description: Kind is the Kubernetes kind of the referencing
-                        object (e.g., "StoryRun").
-                      maxLength: 63
-                      minLength: 1
-                      type: string
-                    namespace:
-                      description: Namespace is the namespace of the referencing object.
-                      maxLength: 63
-                      minLength: 1
-                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                      type: string
-                  required:
-                  - group
-                  - kind
-                  - namespace
-                  type: object
-                minItems: 1
-                type: array
-              to:
-                description: To lists the target resource kinds (and optionally names)
-                  that can be referenced.
-                items:
-                  description: ReferenceGrantTo identifies the target resource that
-                    can be referenced.
-                  properties:
-                    group:
-                      description: Group is the API group of the target object (e.g.,
-                        "bubustack.io").
-                      maxLength: 253
-                      minLength: 1
-                      type: string
-                    kind:
-                      description: Kind is the Kubernetes kind of the target object
-                        (e.g., "Engram").
-                      maxLength: 63
-                      minLength: 1
-                      type: string
-                    name:
-                      description: Name optionally restricts the grant to a specific
-                        resource name.
-                      maxLength: 253
-                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                      type: string
-                  required:
-                  - group
-                  - kind
-                  type: object
-                minItems: 1
-                type: array
-            required:
-            - from
-            - to
+              foo:
+                description: foo is an example field of ReferenceGrant. Edit referencegrant_types.go
+                  to remove/update
+                type: string
             type: object
           status:
             description: status defines the observed state of ReferenceGrant

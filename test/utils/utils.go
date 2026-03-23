@@ -1,5 +1,5 @@
 /*
-Copyright 2025 BubuStack.
+Copyright 2026.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/ginkgo/v2" // nolint:revive,staticcheck
 )
 
 const (
@@ -36,55 +36,27 @@ const (
 )
 
 func warnError(err error) {
-	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "warning: %v\n", err)
+	_, _ = fmt.Fprintf(GinkgoWriter, "warning: %v\n", err)
 }
 
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) (string, error) {
-	dir, err := GetProjectDir()
-	if err != nil {
-		warnError(err)
-	} else {
-		cmd.Dir = dir
+	dir, _ := GetProjectDir()
+	cmd.Dir = dir
+
+	if err := os.Chdir(cmd.Dir); err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "chdir dir: %q\n", err)
 	}
 
-	env := os.Environ()
-	if len(cmd.Env) > 0 {
-		env = append(env, cmd.Env...)
-	}
-	env = append(env, "GO111MODULE=on")
-	cmd.Env = env
-
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
 	command := strings.Join(cmd.Args, " ")
-	_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "running: %q\n", command)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
-	outStr := stdout.String()
+	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		errStr := strings.TrimSpace(stderr.String())
-		outTrim := strings.TrimSpace(outStr)
-		switch {
-		case errStr != "" && outTrim != "":
-			return outStr, fmt.Errorf("%q failed: stderr: %s; stdout: %s: %w", command, errStr, outTrim, err)
-		case errStr != "":
-			return outStr, fmt.Errorf("%q failed: %s: %w", command, errStr, err)
-		case outTrim != "":
-			return outStr, fmt.Errorf("%q failed: %s: %w", command, outTrim, err)
-		default:
-			return outStr, fmt.Errorf("%q failed: %w", command, err)
-		}
+		return string(output), fmt.Errorf("%q failed with error %q: %w", command, string(output), err)
 	}
 
-	if stderr.Len() > 0 {
-		_, _ = fmt.Fprintf(ginkgo.GinkgoWriter, "stderr: %s\n", strings.TrimSpace(stderr.String()))
-	}
-
-	return outStr, nil
+	return string(output), nil
 }
 
 // UninstallCertManager uninstalls the cert manager
@@ -116,24 +88,16 @@ func InstallCertManager() error {
 	if _, err := Run(cmd); err != nil {
 		return err
 	}
+	// Wait for cert-manager-webhook to be ready, which can take time if cert-manager
+	// was re-installed after uninstalling on a cluster.
+	cmd = exec.Command("kubectl", "wait", "deployment.apps/cert-manager-webhook",
+		"--for", "condition=Available",
+		"--namespace", "cert-manager",
+		"--timeout", "5m",
+	)
 
-	deployments := []string{
-		"deployment.apps/cert-manager",
-		"deployment.apps/cert-manager-cainjector",
-		"deployment.apps/cert-manager-webhook",
-	}
-	for _, deployment := range deployments {
-		cmd = exec.Command("kubectl", "wait", deployment,
-			"--for", "condition=Available",
-			"--namespace", "cert-manager",
-			"--timeout", "5m",
-		)
-		if _, err := Run(cmd); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	_, err := Run(cmd)
+	return err
 }
 
 // IsCertManagerCRDsInstalled checks if any Cert Manager CRDs are installed
@@ -205,16 +169,15 @@ func GetProjectDir() (string, error) {
 	if err != nil {
 		return wd, fmt.Errorf("failed to get current working directory: %w", err)
 	}
-	testE2EDir := string(os.PathSeparator) + "test" + string(os.PathSeparator) + "e2e"
-	if strings.HasSuffix(wd, testE2EDir) {
-		wd = strings.TrimSuffix(wd, testE2EDir)
-	}
+	wd = strings.ReplaceAll(wd, "/test/e2e", "")
 	return wd, nil
 }
 
 // UncommentCode searches for target in the file and remove the comment prefix
 // of the target content. The target content may span multiple lines.
 func UncommentCode(filename, target, prefix string) error {
+	// false positive
+	// nolint:gosec
 	content, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read file %q: %w", filename, err)
@@ -253,6 +216,8 @@ func UncommentCode(filename, target, prefix string) error {
 		return fmt.Errorf("failed to write to output: %w", err)
 	}
 
+	// false positive
+	// nolint:gosec
 	if err = os.WriteFile(filename, out.Bytes(), 0644); err != nil {
 		return fmt.Errorf("failed to write file %q: %w", filename, err)
 	}

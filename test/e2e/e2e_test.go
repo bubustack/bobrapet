@@ -2,7 +2,7 @@
 // +build e2e
 
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -53,7 +53,13 @@ var _ = Describe("Manager", Ordered, func() {
 	// and deploying the controller.
 	BeforeAll(func() {
 		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
+		nsManifest := fmt.Sprintf(`apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+`, namespace)
+		cmd := exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(nsManifest)
 		_, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
@@ -81,6 +87,10 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
+		By("cleaning up the metrics ClusterRoleBinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
 		_, _ = utils.Run(cmd)
@@ -99,13 +109,37 @@ var _ = Describe("Manager", Ordered, func() {
 	AfterEach(func() {
 		specReport := CurrentSpecReport()
 		if specReport.Failed() {
+			var cmd *exec.Cmd
+			podName := controllerPodName
+			if podName == "" {
+				cmd = exec.Command("kubectl", "get",
+					"pods", "-l", "control-plane=controller-manager",
+					"-o", "go-template={{ range .items }}"+
+						"{{ if not .metadata.deletionTimestamp }}"+
+						"{{ .metadata.name }}"+
+						"{{ \"\\n\" }}{{ end }}{{ end }}",
+					"-n", namespace,
+				)
+				podOutput, err := utils.Run(cmd)
+				if err == nil {
+					podNames := utils.GetNonEmptyLines(podOutput)
+					if len(podNames) > 0 {
+						podName = podNames[0]
+					}
+				}
+			}
+
 			By("Fetching controller manager pod logs")
-			cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-			controllerLogs, err := utils.Run(cmd)
-			if err == nil {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
+			if podName == "" {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs: skipped (controller pod name not available)\n")
 			} else {
-				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
+				cmd = exec.Command("kubectl", "logs", podName, "-n", namespace)
+				controllerLogs, err := utils.Run(cmd)
+				if err == nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "Controller logs:\n %s", controllerLogs)
+				} else {
+					_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Controller logs: %s", err)
+				}
 			}
 
 			By("Fetching Kubernetes events")
@@ -127,12 +161,16 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 
 			By("Fetching controller manager pod description")
-			cmd = exec.Command("kubectl", "describe", "pod", controllerPodName, "-n", namespace)
-			podDescription, err := utils.Run(cmd)
-			if err == nil {
-				fmt.Println("Pod description:\n", podDescription)
+			if podName == "" {
+				fmt.Println("Pod description: skipped (controller pod name not available)")
 			} else {
-				fmt.Println("Failed to describe controller pod")
+				cmd = exec.Command("kubectl", "describe", "pod", podName, "-n", namespace)
+				podDescription, err := utils.Run(cmd)
+				if err == nil {
+					fmt.Println("Pod description:\n", podDescription)
+				} else {
+					fmt.Println("Failed to describe controller pod")
+				}
 			}
 		}
 	})
@@ -175,10 +213,21 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=bobrapet-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
+			crbManifest := fmt.Sprintf(`apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: %s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bobrapet-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: %s
+  namespace: %s
+`, metricsRoleBindingName, serviceAccountName, namespace)
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(crbManifest)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
@@ -307,7 +356,7 @@ var _ = Describe("Manager", Ordered, func() {
 		It("should provisioned cert-manager", func() {
 			By("validating that cert-manager has the certificate Secret")
 			verifyCertManager := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "secrets", "webhook-server-cert", "-n", namespace)
+				cmd := exec.Command("kubectl", "get", "secrets", "bobrapet-webhook-server-cert", "-n", namespace)
 				_, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 			}
@@ -341,18 +390,6 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
-
-		// +kubebuilder:scaffold:e2e-webhooks-checks
-
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
 	})
 })
 
@@ -367,9 +404,19 @@ func serviceAccountToken() (string, error) {
 
 	// Temporary file to store the token request
 	secretName := fmt.Sprintf("%s-token-request", serviceAccountName)
-	tokenRequestFile := filepath.Join("/tmp", secretName)
-	err := os.WriteFile(tokenRequestFile, []byte(tokenRequestRawString), os.FileMode(0o644))
+	tmpFile, err := os.CreateTemp("", secretName+"-")
 	if err != nil {
+		return "", err
+	}
+	tokenRequestFile := tmpFile.Name()
+	defer func() {
+		_ = os.Remove(tokenRequestFile)
+	}()
+	if _, err := tmpFile.Write([]byte(tokenRequestRawString)); err != nil {
+		_ = tmpFile.Close()
+		return "", err
+	}
+	if err := tmpFile.Close(); err != nil {
 		return "", err
 	}
 
@@ -382,12 +429,12 @@ func serviceAccountToken() (string, error) {
 			serviceAccountName,
 		), "-f", tokenRequestFile)
 
-		output, err := cmd.CombinedOutput()
+		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		// Parse the JSON output to extract the token
 		var token tokenRequest
-		err = json.Unmarshal(output, &token)
+		err = json.Unmarshal([]byte(output), &token)
 		g.Expect(err).NotTo(HaveOccurred())
 
 		out = token.Status.Token

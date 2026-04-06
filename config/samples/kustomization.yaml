@@ -10,4 +10,6 @@ resources:
 - transport_v1alpha1_transport.yaml
 - transport_v1alpha1_transportbinding.yaml
 - policy_v1alpha1_referencegrant.yaml
+- runs_v1alpha1_storytrigger.yaml
+- runs_v1alpha1_effectclaim.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

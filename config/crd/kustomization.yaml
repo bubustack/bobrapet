@@ -7,19 +7,21 @@ resources:
 - bases/bubustack.io_impulses.yaml
 - bases/runs.bubustack.io_storyruns.yaml
 - bases/runs.bubustack.io_stepruns.yaml
+- bases/runs.bubustack.io_effectclaims.yaml
 - bases/catalog.bubustack.io_engramtemplates.yaml
 - bases/catalog.bubustack.io_impulsetemplates.yaml
 - bases/transport.bubustack.io_transports.yaml
 - bases/transport.bubustack.io_transportbindings.yaml
 - bases/policy.bubustack.io_referencegrants.yaml
+- bases/runs.bubustack.io_storytriggers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
-patches:
-# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix.
+# patches:
+# [WEBHOOK] To enable webhooks, uncomment all the sections with [WEBHOOK] prefix.
 # patches here are for enabling the conversion webhook for each CRD
 # +kubebuilder:scaffold:crdkustomizewebhookpatch
 
 # [WEBHOOK] To enable webhook, uncomment the following section
 # the following config is for teaching kustomize how to do kustomization for CRDs.
-#configurations:
-#- kustomizeconfig.yaml
+configurations:
+- kustomizeconfig.yaml

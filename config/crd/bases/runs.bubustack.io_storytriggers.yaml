@@ -1,0 +1,336 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: storytriggers.runs.bubustack.io
+spec:
+  group: runs.bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    - runs
+    kind: StoryTrigger
+    listKind: StoryTriggerList
+    plural: storytriggers
+    shortNames:
+    - trig
+    singular: storytrigger
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.storyRef.name
+      name: Story
+      type: string
+    - jsonPath: .status.decision
+      name: Decision
+      type: string
+    - jsonPath: .status.storyRunRef.name
+      name: StoryRun
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: StoryTrigger is the Schema for the storytriggers API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of StoryTrigger
+            properties:
+              deliveryIdentity:
+                description: DeliveryIdentity is the durable request identity used
+                  for dedupe and retry resolution.
+                properties:
+                  inputHash:
+                    description: |-
+                      InputHash is the canonical sha256 of the resolved trigger inputs.
+                      Required when Key is set.
+                    maxLength: 64
+                    type: string
+                  key:
+                    description: Key is the stable business key used for token/key
+                      dedupe modes.
+                    maxLength: 256
+                    type: string
+                  mode:
+                    description: Mode records how the trigger identity was derived.
+                    enum:
+                    - none
+                    - token
+                    - key
+                    type: string
+                  submissionId:
+                    description: |-
+                      SubmissionID identifies one logical trigger submission attempt chain.
+                      Retries for the same submission must reuse this value.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - submissionId
+                type: object
+              impulseRef:
+                description: ImpulseRef identifies the Impulse that observed the external
+                  event.
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+
+                      Note: cross-namespace references are currently rejected by admission
+                      validation in the operator.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                  version:
+                    description: Version pins the reference to a specific Impulse
+                      version.
+                    maxLength: 64
+                    type: string
+                required:
+                - name
+                type: object
+              inputs:
+                description: Inputs is the resolved Story input payload for the requested
+                  run.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              storyRef:
+                description: StoryRef identifies the Story executed when the trigger
+                  is accepted.
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+
+                      Note: cross-namespace references are currently rejected by admission
+                      validation in the operator.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced Story for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      When a controller resolves this reference, it stores the target's UID.
+                      On subsequent reconciliations, if the UID has changed, it indicates
+                      the target was deleted and recreated, which may require special handling.
+                    type: string
+                  version:
+                    description: Version pins the reference to a specific Story version.
+                    maxLength: 64
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - deliveryIdentity
+            - storyRef
+            type: object
+          status:
+            description: status defines the observed state of StoryTrigger
+            properties:
+              acceptedAt:
+                description: AcceptedAt records when the trigger was first accepted
+                  for controller processing.
+                format: date-time
+                type: string
+              completedAt:
+                description: CompletedAt records when the controller finished resolving
+                  the trigger.
+                format: date-time
+                type: string
+              conditions:
+                description: Conditions provide canonical Kubernetes lifecycle status
+                  for the trigger request.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              decision:
+                description: Decision is the controller-owned durable admission decision.
+                enum:
+                - Pending
+                - Created
+                - Reused
+                - Rejected
+                type: string
+              message:
+                description: Message provides a human-readable description of the
+                  current decision.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the latest generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              reason:
+                description: Reason is a stable machine-readable reason for the current
+                  decision.
+                type: string
+              storyRunRef:
+                description: StoryRunRef points at the accepted or reused StoryRun
+                  once resolution completes.
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+
+                      Note: cross-namespace references are currently rejected by admission
+                      validation in the operator.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced StoryRun for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      StoryRun drift detection helps maintain execution integrity and
+                      enables proper cleanup of orphaned StepRuns.
+                    type: string
+                required:
+                - name
+                type: object
+            type: object
+            x-kubernetes-validations:
+            - message: status.conditions reason field must be <= 64 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.reason)
+                || size(c.reason) <= 64)'
+            - message: status.conditions message field must be <= 2048 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.message)
+                || size(c.message) <= 2048)'
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

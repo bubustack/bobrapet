@@ -1,0 +1,36 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: bobrapet-selfsigned-bootstrap
+  annotations:
+    kustomize.config.k8s.io/skip-name-prefix: "true"
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: bobrapet-ca-root
+  namespace: cert-manager
+  annotations:
+    kustomize.config.k8s.io/skip-name-prefix: "true"
+spec:
+  isCA: true
+  commonName: bobrapet-ca-root
+  secretName: bobrapet-ca-root
+  duration: 43800h # 5 years
+  issuerRef:
+    kind: ClusterIssuer
+    name: bobrapet-selfsigned-bootstrap
+  privateKey:
+    rotationPolicy: Always
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: bobrapet-shared-ca
+  annotations:
+    kustomize.config.k8s.io/skip-name-prefix: "true"
+spec:
+  ca:
+    secretName: bobrapet-ca-root

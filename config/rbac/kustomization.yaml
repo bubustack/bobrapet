@@ -22,15 +22,12 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the bobrapet itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- runs_storytrigger_admin_role.yaml
+- runs_storytrigger_editor_role.yaml
+- runs_storytrigger_viewer_role.yaml
 - policy_referencegrant_admin_role.yaml
 - policy_referencegrant_editor_role.yaml
 - policy_referencegrant_viewer_role.yaml
-- transport_transportbinding_admin_role.yaml
-- transport_transportbinding_editor_role.yaml
-- transport_transportbinding_viewer_role.yaml
-- transport_transport_admin_role.yaml
-- transport_transport_editor_role.yaml
-- transport_transport_viewer_role.yaml
 - catalog_impulsetemplate_admin_role.yaml
 - catalog_impulsetemplate_editor_role.yaml
 - catalog_impulsetemplate_viewer_role.yaml

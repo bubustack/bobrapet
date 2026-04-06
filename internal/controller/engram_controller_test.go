@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,58 +27,93 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	bubustackiov1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
+	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
+	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
 )
 
 var _ = Describe("Engram Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
+		const templateName = "test-template"
 
 		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
-		engram := &bubustackiov1alpha1.Engram{}
+		engram := &bubushv1alpha1.Engram{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Engram")
+			// Create a valid EngramTemplate first.
+			engramTemplate := &catalogv1alpha1.EngramTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: templateName,
+				},
+				Spec: catalogv1alpha1.EngramTemplateSpec{
+					TemplateSpec: catalogv1alpha1.TemplateSpec{
+						Version:        "1.0.0",
+						SupportedModes: []enums.WorkloadMode{enums.WorkloadModeJob},
+					},
+				},
+			}
+			Expect(k8sClient.Create(ctx, engramTemplate)).To(Succeed())
+
 			err := k8sClient.Get(ctx, typeNamespacedName, engram)
 			if err != nil && errors.IsNotFound(err) {
-				resource := &bubustackiov1alpha1.Engram{
+				resource := &bubushv1alpha1.Engram{
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: bubushv1alpha1.EngramSpec{
+						TemplateRef: refs.EngramTemplateReference{
+							Name: templateName,
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &bubustackiov1alpha1.Engram{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
-
 			By("Cleanup the specific resource instance Engram")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			resource := &bubushv1alpha1.Engram{}
+			if err := k8sClient.Get(ctx, typeNamespacedName, resource); err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+			} else {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+
+			// Delete the EngramTemplate
+			engramTemplate := &catalogv1alpha1.EngramTemplate{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: templateName}, engramTemplate); err != nil {
+				Expect(errors.IsNotFound(err)).To(BeTrue())
+			} else {
+				Expect(k8sClient.Delete(ctx, engramTemplate)).To(Succeed())
+			}
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
+			configManager, err := config.NewOperatorConfigManager(k8sClient, "default", "bobrapet-operator-config")
+			Expect(err).NotTo(HaveOccurred())
 			controllerReconciler := &EngramReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				ControllerDependencies: config.ControllerDependencies{
+					Client:         k8sClient,
+					Scheme:         k8sClient.Scheme(),
+					ConfigResolver: config.NewResolver(k8sClient, configManager),
+				},
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			// This smoke test verifies that reconcile accepts a minimal valid Engram without error.
 		})
 	})
 })

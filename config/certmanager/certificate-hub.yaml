@@ -1,0 +1,20 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    kustomize.config.k8s.io/skip-name-prefix: "true"
+  name: bobrapet-hub-tls
+  namespace: system
+spec:
+  secretName: bobrapet-hub-tls
+  dnsNames:
+    - bobrapet-controller-manager.bobrapet-system.svc
+    - bobrapet-controller-manager.bobrapet-system.svc.cluster.local
+  issuerRef:
+    kind: ClusterIssuer
+    name: bobrapet-shared-ca
+  privateKey:
+    rotationPolicy: Always

@@ -28,3 +28,9 @@ go.work
 
 # Kubeconfig might contain secrets
 *.kubeconfig
+
+.DS_Store
+.gocache/
+dist/
+
+docs/deep-research/

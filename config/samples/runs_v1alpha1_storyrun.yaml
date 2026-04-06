@@ -6,4 +6,4 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: storyrun-sample
 spec:
-  # TODO(user): Add fields here
+  # Template sample. Populate this spec with a valid StoryRun before applying.

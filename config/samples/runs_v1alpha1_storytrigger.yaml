@@ -1,0 +1,17 @@
+apiVersion: runs.bubustack.io/v1alpha1
+kind: StoryTrigger
+metadata:
+  labels:
+    app.kubernetes.io/name: bobrapet
+    app.kubernetes.io/managed-by: kustomize
+  name: example-story-trigger-7ae6e94cb44073bc
+  namespace: default
+spec:
+  storyRef:
+    name: example-story
+  deliveryIdentity:
+    mode: none
+    submissionId: sample-submission
+  inputs:
+    event:
+      type: sample

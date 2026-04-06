@@ -88,7 +88,6 @@ resources:
   version: v1alpha1
 - api:
     crdVersion: v1
-    namespaced: true
   controller: true
   domain: bubustack.io
   group: transport
@@ -112,4 +111,28 @@ resources:
   kind: ReferenceGrant
   path: github.com/bubustack/bobrapet/api/policy/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubustack.io
+  group: runs
+  kind: EffectClaim
+  path: github.com/bubustack/bobrapet/api/runs/v1alpha1
+  version: v1alpha1
+  webhooks:
+    validation: true
+    webhookVersion: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: bubustack.io
+  group: runs
+  kind: StoryTrigger
+  path: github.com/bubustack/bobrapet/api/runs/v1alpha1
+  version: v1alpha1
+  webhooks:
+    validation: true
+    webhookVersion: v1
 version: "3"

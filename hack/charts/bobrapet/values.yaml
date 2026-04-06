@@ -1,0 +1,171 @@
+# Default values for the bobrapet Helm chart.
+#
+# This file must stay compatible with the templates in templates/.
+# The template references flat keys (.Values.image, .Values.manager, etc.).
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/bubustack/bobrapet
+  tag: "0.1.1"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+podLabels: {}
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+manager:
+  leaderElect: false
+  leaderElectionID: ""
+  leaderElectionNamespace: ""
+  metricsBindAddress: ":8443"
+  healthProbeBindAddress: ":8081"
+  logLevel: info
+  configNamespace: ""
+  configName: bobrapet-operator-config
+  extraArgs: []
+  env: []
+  volumeMounts: []
+  volumes: []
+
+metrics:
+  enabled: true
+  service:
+    port: 8443
+
+webhook:
+  enabled: false
+  targetPort: 9443
+  certSecretName: ""
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automount: true
+
+kubernetesClusterDomain: cluster.local
+
+# Operator ConfigMap values. These are mounted as a ConfigMap and consumed
+# by the operator at runtime. See https://bubustack.io/docs/operator/configuration.
+operatorConfig:
+  controllerCleanupInterval: 1h
+  controllerMaxConcurrentReconciles: "10"
+  controllerMaxStoryWithBlockSizeBytes: "65536"
+  controllerReconcileTimeout: 1m
+  controllerRequeueBaseDelay: 2s
+  controllerRequeueMaxDelay: 1m
+  controllerTransportGrpcDefaultTlsSecret: ""
+  controllerTransportGrpcEnableDownstreamTargets: "true"
+  controllerTransportHeartbeatInterval: 30s
+  controllerTransportHeartbeatTimeout: 2m
+  debugEnableMetrics: "true"
+  debugEnableStepOutputLogging: "false"
+  debugEnableVerboseLogging: "false"
+  engramDefaultChannelBufferSize: "16"
+  engramDefaultDialTimeoutSeconds: "10"
+  engramDefaultGracefulShutdownTimeoutSeconds: "20"
+  engramDefaultGrpcHeartbeatIntervalSeconds: "10"
+  engramDefaultGrpcPort: "50051"
+  engramDefaultHangTimeoutSeconds: "30"
+  engramDefaultMaxInlineSize: "4096"
+  engramDefaultMaxRecvMsgBytes: "10485760"
+  engramDefaultMaxSendMsgBytes: "10485760"
+  engramDefaultMessageTimeoutSeconds: "30"
+  engramDefaultReconnectBaseBackoffMillis: "500"
+  engramDefaultReconnectMaxBackoffSeconds: "30"
+  engramDefaultReconnectMaxRetries: "10"
+  engramDefaultStorageTimeoutSeconds: "300"
+  engramDefaultTerminationGracePeriodSeconds: "30"
+  engramMaxConcurrentReconciles: "5"
+  engramRateLimiterBaseDelay: 200ms
+  engramRateLimiterMaxDelay: 1m
+  imagesPullPolicy: IfNotPresent
+  impulseMaxConcurrentReconciles: "5"
+  impulseRateLimiterBaseDelay: 200ms
+  impulseRateLimiterMaxDelay: 1m
+  jobBackoffLimit: "3"
+  jobRestartPolicy: Never
+  jobTtlSecondsAfterFinished: "3600"
+  loopDefaultBatchSize: "100"
+  loopMaxBatchSize: "1000"
+  loopMaxConcurrency: "10"
+  loopMaxConcurrencyLimit: "50"
+  loopMaxIterations: "10000"
+  referencesCrossNamespacePolicy: deny
+  resourcesDefaultCpuLimit: 500m
+  resourcesDefaultCpuRequest: 100m
+  resourcesDefaultMemoryLimit: 512Mi
+  resourcesDefaultMemoryRequest: 128Mi
+  resourcesEngramCpuLimit: "1"
+  resourcesEngramCpuRequest: 100m
+  resourcesEngramMemoryLimit: 512Mi
+  resourcesEngramMemoryRequest: 128Mi
+  retryExponentialBackoffBase: 1s
+  retryExponentialBackoffMax: 60s
+  retryMaxRetries: "3"
+  securityAllowPrivilegeEscalation: "false"
+  securityAutomountServiceAccountToken: "false"
+  securityDropCapabilities: ALL
+  securityReadOnlyRootFilesystem: "true"
+  securityRunAsNonRoot: "true"
+  securityRunAsUser: "1000"
+  securityServiceAccountName: ""
+  steprunMaxConcurrentReconciles: "15"
+  steprunRateLimiterBaseDelay: 100ms
+  steprunRateLimiterMaxDelay: 2m
+  storyBindingMaxMutationsPerReconcile: "4"
+  storyBindingThrottleRequeueDelay: 3s
+  storyMaxConcurrentReconciles: "5"
+  storyRateLimiterBaseDelay: 200ms
+  storyRateLimiterMaxDelay: 1m
+  storyrunBindingMaxMutationsPerReconcile: "8"
+  storyrunBindingThrottleRequeueDelay: 2s
+  storyrunGlobalConcurrency: "0"
+  storyrunMaxConcurrentReconciles: "8"
+  storyrunMaxInlineInputsSize: "1024"
+  storyrunQueueDefaultConcurrency: "0"
+  storyrunQueueDefaultDefaultPriority: "0"
+  storyrunRateLimiterBaseDelay: 50ms
+  storyrunRateLimiterMaxDelay: 5m
+  storyrunRetentionSeconds: "86400"
+  streamingTtlSecondsAfterFinished: "0"
+  telemetryEnabled: "false"
+  telemetryTracePropagation: "false"
+  templateMaxConcurrentReconciles: "2"
+  templateRateLimiterBaseDelay: 500ms
+  templateRateLimiterMaxDelay: 10m
+  templatingDeterministic: "false"
+  templatingEvaluationTimeout: 30s
+  templatingMaterializeEngram: materialize
+  templatingMaxOutputBytes: "65536"
+  templatingOffloadedDataPolicy: inject
+  timeoutApprovalDefault: 24h
+  timeoutConditionalDefault: 10m
+  timeoutDefaultStep: 5m
+  timeoutExternalDataDefault: 30m

@@ -1,0 +1,32 @@
+apiVersion: v2
+name: bobrapet
+description: >
+  BubuStack's Kubernetes-native workflow controller. Reconciles Stories, StoryRuns,
+  Engrams, Impulses, and transport bindings so AI + data pipelines stay declarative.
+type: application
+version: 0.1.1
+appVersion: "0.1.1"
+home: https://github.com/bubustack/bobrapet
+sources:
+  - https://github.com/bubustack/bobrapet
+  - https://github.com/bubustack/bobravoz-grpc
+maintainers:
+  - name: BubuStack
+    url: https://bubustack.io
+keywords:
+  - kubernetes-operator
+  - bubustack
+  - workflow-engine
+  - ai
+  - data-pipelines
+annotations:
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: ai-machine-learning
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://bubustack.io/docs/bobrapet
+    - name: Transport Operator
+      url: https://github.com/bubustack/bobravoz-grpc
+    - name: Engram Catalog
+      url: https://github.com/bubustack?tab=repositories&q=engram

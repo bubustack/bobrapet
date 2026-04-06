@@ -1,0 +1,253 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: effectclaims.runs.bubustack.io
+spec:
+  group: runs.bubustack.io
+  names:
+    categories:
+    - bubu
+    - ai
+    - runs
+    kind: EffectClaim
+    listKind: EffectClaimList
+    plural: effectclaims
+    shortNames:
+    - eff
+    singular: effectclaim
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.stepRunRef.name
+      name: StepRun
+      type: string
+    - jsonPath: .spec.effectKey
+      name: Effect
+      type: string
+    - jsonPath: .spec.holderIdentity
+      name: Holder
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: EffectClaim is the Schema for the effectclaims API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of EffectClaim
+            properties:
+              acquireTime:
+                description: AcquireTime records when the current holder first acquired
+                  the reservation.
+                format: date-time
+                type: string
+              completedAt:
+                description: CompletedAt records when the effect entered a terminal
+                  completion state.
+                format: date-time
+                type: string
+              completionStatus:
+                description: CompletionStatus records the terminal effect outcome
+                  once known.
+                enum:
+                - completed
+                - released
+                - abandoned
+                type: string
+              details:
+                description: Details carries compact structured metadata about the
+                  terminal effect outcome.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              effectKey:
+                description: EffectKey identifies the stable external effect within
+                  the StepRun.
+                maxLength: 256
+                minLength: 1
+                type: string
+              holderIdentity:
+                description: HolderIdentity identifies the current reservation owner.
+                maxLength: 253
+                type: string
+              idempotencyKey:
+                description: IdempotencyKey optionally copies the step-scoped business
+                  idempotency key.
+                maxLength: 256
+                type: string
+              leaseDurationSeconds:
+                description: |-
+                  LeaseDurationSeconds bounds how long a reservation may remain unrenewed
+                  before another worker may recover it.
+                format: int32
+                minimum: 1
+                type: integer
+              leaseTransitions:
+                description: LeaseTransitions counts successful stale-takeover transitions.
+                format: int32
+                minimum: 0
+                type: integer
+              renewTime:
+                description: RenewTime records the latest observed successful renewal
+                  by the holder.
+                format: date-time
+                type: string
+              stepRunRef:
+                description: StepRunRef identifies the StepRun that owns this effect
+                  claim.
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+
+                      Note: cross-namespace references are currently rejected by admission
+                      validation in the operator.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced StepRun for drift detection.
+                      This field may be populated by clients or controllers to ensure the
+                      reference still points at the same StepRun instance after deletion
+                      and recreation.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - effectKey
+            - stepRunRef
+            type: object
+          status:
+            description: status defines the observed state of EffectClaim
+            properties:
+              conditions:
+                description: Conditions provide canonical Kubernetes lifecycle status
+                  for the claim.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: ObservedGeneration is the latest generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              phase:
+                description: Phase provides a canonical high-level lifecycle summary
+                  for the claim.
+                enum:
+                - Reserved
+                - Completed
+                - Released
+                - Abandoned
+                type: string
+            type: object
+            x-kubernetes-validations:
+            - message: status.conditions reason field must be <= 64 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.reason)
+                || size(c.reason) <= 64)'
+            - message: status.conditions message field must be <= 2048 characters
+              rule: '!has(self.conditions) || self.conditions.all(c, !has(c.message)
+                || size(c.message) <= 2048)'
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

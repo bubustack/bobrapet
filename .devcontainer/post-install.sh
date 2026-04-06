@@ -90,6 +90,11 @@ if ! command -v kubectl &> /dev/null; then
   echo "kubectl installed successfully"
 fi
 
+# Install helm
+if ! command -v helm &> /dev/null; then
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
+
 # Generate kubectl bash completion
 if command -v kubectl &> /dev/null; then
   if kubectl completion bash > "${BASH_COMPLETIONS_DIR}/kubectl" 2>/dev/null; then
@@ -142,6 +147,7 @@ echo "------------------------------------"
 kind version
 kubebuilder version
 kubectl version --client
+helm version
 docker --version
 go version
 

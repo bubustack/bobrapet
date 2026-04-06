@@ -1,0 +1,12 @@
+apiVersion: runs.bubustack.io/v1alpha1
+kind: EffectClaim
+metadata:
+  name: example-step-effect-f593b593cad9418d
+  namespace: default
+spec:
+  stepRunRef:
+    name: example-step
+  effectKey: deliver-webhook
+  idempotencyKey: storyrun-a/deliver
+  holderIdentity: worker-a
+  leaseDurationSeconds: 30

@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,54 +17,24 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"github.com/bubustack/bobrapet/pkg/enums"
+	"github.com/bubustack/bobrapet/pkg/refs"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
-
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// EngramSpec defines the desired state of Engram
-type EngramSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of Engram. Edit engram_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
-}
-
-// EngramStatus defines the observed state of Engram.
-type EngramStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the Engram resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
-	// +listType=map
-	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-}
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
-// Engram is the Schema for the engrams API
+// +kubebuilder:resource:scope=Namespaced,shortName=engram,categories={bubu,ai}
+// +kubebuilder:printcolumn:name="Template",type=string,JSONPath=".spec.templateRef.name"
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=".spec.mode"
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.validationStatus"
+// +kubebuilder:printcolumn:name="Usage",type=integer,JSONPath=".status.usageCount"
+// +kubebuilder:printcolumn:name="Triggers",type=integer,JSONPath=".status.triggers"
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 type Engram struct {
 	metav1.TypeMeta `json:",inline"`
-
 	// metadata is a standard object metadata
 	// +optional
 	metav1.ObjectMeta `json:"metadata,omitzero"`
@@ -78,9 +48,105 @@ type Engram struct {
 	Status EngramStatus `json:"status,omitzero"`
 }
 
-// +kubebuilder:object:root=true
+// EngramSpec describes the desired behaviour for an Engram.
+type EngramSpec struct {
+	// Version identifies this Engram instance for pinning by Story steps.
+	// +kubebuilder:validation:MaxLength=64
+	// +optional
+	Version string `json:"version,omitempty"`
 
-// EngramList contains a list of Engram
+	// TemplateRef selects the EngramTemplate that provides defaults, validation,
+	// and base artifacts for this instance.
+	// +kubebuilder:validation:Required
+	TemplateRef refs.EngramTemplateReference `json:"templateRef"`
+
+	// Mode optionally overrides the workload controller selected by the template.
+	// Supported values are job, deployment, and statefulset.
+	// +kubebuilder:validation:Enum=job;deployment;statefulset
+	Mode enums.WorkloadMode `json:"mode,omitempty"`
+
+	// With carries template-specific configuration. The template schema determines
+	// the structure and validation rules applied to this payload.
+	// +kubebuilder:pruning:PreserveUnknownFields
+	With *runtime.RawExtension `json:"with,omitempty"`
+
+	// Secrets maps named secret inputs defined by the template to concrete Secret
+	// resources in the tenant namespace.
+	Secrets map[string]string `json:"secrets,omitempty"`
+
+	// ExecutionPolicy captures the fully-resolved execution policy after hierarchical
+	// merge. Template defaults feed into this value.
+	// +optional
+	ExecutionPolicy *ExecutionPolicy `json:"executionPolicy,omitempty"`
+
+	// Overrides allows callers to apply instance-specific execution adjustments.
+	Overrides *ExecutionOverrides `json:"overrides,omitempty"`
+
+	// Transport carries transport-level overrides such as TLS configuration.
+	// +optional
+	Transport *EngramTransportSpec `json:"transport,omitempty"`
+}
+
+// EngramTransportSpec defines transport-related overrides for an Engram.
+type EngramTransportSpec struct {
+	// TLS configures TLS secrets for hybrid transports.
+	// +optional
+	TLS *EngramTLSSpec `json:"tls,omitempty"`
+}
+
+// EngramTLSSpec describes TLS secret resolution behavior.
+type EngramTLSSpec struct {
+	// SecretRef references a Secret containing tls.key/tls.crt data.
+	// +optional
+	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// UseDefaultTLS requests the operator's default TLS secret when true.
+	// Defaults to true when SecretRef is unset.
+	// +optional
+	UseDefaultTLS *bool `json:"useDefaultTLS,omitempty"`
+}
+
+// EngramStatus reports observed workload state.
+type EngramStatus struct {
+	// ObservedGeneration reflects the last reconciled generation.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions conveys per-condition status such as Ready.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// Replicas and ReadyReplicas surface pod readiness information for controllers
+	// that expose it (Deployments/StatefulSets). Jobs leave these fields at zero.
+	Replicas      int32       `json:"replicas,omitempty"`
+	ReadyReplicas int32       `json:"readyReplicas,omitempty"`
+	Phase         enums.Phase `json:"phase,omitempty"`
+
+	// ValidationStatus reflects whether the engram spec passed validation.
+	ValidationStatus enums.ValidationStatus `json:"validationStatus,omitempty"`
+	// ValidationErrors contains messages describing validation failures.
+	ValidationErrors []string `json:"validationErrors,omitempty"`
+
+	// UsageCount reports how many Stories reference this Engram.
+	// +optional
+	UsageCount int32 `json:"usageCount"`
+
+	// Triggers reports how many StepRuns currently reference this Engram.
+	// Useful for understanding runtime fan-out and utilisation.
+	// +optional
+	Triggers int64 `json:"triggers"`
+
+	// LastExecutionTime captures the completion timestamp for the most recent run.
+	LastExecutionTime *metav1.Time `json:"lastExecutionTime,omitempty"`
+	// TotalExecutions counts the number of completed runs for job workloads.
+	TotalExecutions int32 `json:"totalExecutions,omitempty"`
+	// FailedExecutions counts runs that ended in a failure state.
+	FailedExecutions int32 `json:"failedExecutions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
 type EngramList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`

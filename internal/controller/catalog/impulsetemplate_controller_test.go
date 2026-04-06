@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2025 BubuStack.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +28,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	catalogv1alpha1 "github.com/bubustack/bobrapet/api/catalog/v1alpha1"
+	"github.com/bubustack/bobrapet/internal/config"
+	"github.com/bubustack/bobrapet/pkg/enums"
 )
 
 var _ = Describe("ImpulseTemplate Controller", func() {
@@ -38,7 +40,7 @@ var _ = Describe("ImpulseTemplate Controller", func() {
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
 		impulsetemplate := &catalogv1alpha1.ImpulseTemplate{}
 
@@ -51,14 +53,18 @@ var _ = Describe("ImpulseTemplate Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: catalogv1alpha1.ImpulseTemplateSpec{
+						TemplateSpec: catalogv1alpha1.TemplateSpec{
+							Version:        "1.0.0",
+							SupportedModes: []enums.WorkloadMode{enums.WorkloadModeDeployment},
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &catalogv1alpha1.ImpulseTemplate{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
 			Expect(err).NotTo(HaveOccurred())
@@ -69,16 +75,17 @@ var _ = Describe("ImpulseTemplate Controller", func() {
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &ImpulseTemplateReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				ControllerDependencies: config.ControllerDependencies{
+					Client: k8sClient,
+					Scheme: k8sClient.Scheme(),
+				},
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			// This smoke test verifies that reconcile accepts a minimal valid ImpulseTemplate without error.
 		})
 	})
 })

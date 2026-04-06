@@ -76,6 +76,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-runs-bubustack-io-v1alpha1-effectclaim
+  failurePolicy: Fail
+  name: veffectclaim-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - effectclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-bubustack-io-v1alpha1-engram
   failurePolicy: Fail
   name: vengram-v1alpha1.kb.io
@@ -169,4 +189,64 @@ webhooks:
     - UPDATE
     resources:
     - storyruns
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-runs-bubustack-io-v1alpha1-storytrigger
+  failurePolicy: Fail
+  name: vstorytrigger-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storytriggers
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-transport-bubustack-io-v1alpha1-transport
+  failurePolicy: Fail
+  name: vtransport.kb.io
+  rules:
+  - apiGroups:
+    - transport.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - transports
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-transport-bubustack-io-v1alpha1-transportbinding
+  failurePolicy: Fail
+  name: vtransportbinding.kb.io
+  rules:
+  - apiGroups:
+    - transport.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - transportbindings
   sideEffects: None

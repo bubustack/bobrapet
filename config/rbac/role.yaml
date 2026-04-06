@@ -5,14 +5,82 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
-  - bubustack.io
+  - ""
   resources:
-  - engrams
-  - impulses
-  - stories
+  - configmaps
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bubustack.io
+  resources:
+  - engrams
+  verbs:
+  - create
   - get
   - list
   - patch
@@ -37,13 +105,11 @@ rules:
   - patch
   - update
 - apiGroups:
-  - catalog.bubustack.io
+  - bubustack.io
   resources:
-  - engramtemplates
-  - impulsetemplates
+  - impulses
+  - stories
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -52,10 +118,12 @@ rules:
 - apiGroups:
   - catalog.bubustack.io
   resources:
-  - engramtemplates/finalizers
-  - impulsetemplates/finalizers
+  - engramtemplates
+  - impulsetemplates
   verbs:
-  - update
+  - get
+  - list
+  - watch
 - apiGroups:
   - catalog.bubustack.io
   resources:
@@ -66,10 +134,63 @@ rules:
   - patch
   - update
 - apiGroups:
+  - policy.bubustack.io
+  resources:
+  - referencegrants
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - bind
+  - create
+  - escalate
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - runs.bubustack.io
+  resources:
+  - effectclaims
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - runs.bubustack.io
+  resources:
+  - effectclaims/status
+  - stepruns/status
+  - storyruns/status
+  - storytriggers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - runs.bubustack.io
   resources:
   - stepruns
   - storyruns
+  - storytriggers
   verbs:
   - create
   - delete
@@ -83,22 +204,13 @@ rules:
   resources:
   - stepruns/finalizers
   - storyruns/finalizers
+  - storytriggers/finalizers
   verbs:
-  - update
-- apiGroups:
-  - runs.bubustack.io
-  resources:
-  - stepruns/status
-  - storyruns/status
-  verbs:
-  - get
-  - patch
   - update
 - apiGroups:
   - transport.bubustack.io
   resources:
   - transportbindings
-  - transports
   verbs:
   - create
   - delete
@@ -110,16 +222,17 @@ rules:
 - apiGroups:
   - transport.bubustack.io
   resources:
-  - transportbindings/finalizers
-  - transports/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - transport.bubustack.io
-  resources:
   - transportbindings/status
   - transports/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - transport.bubustack.io
+  resources:
+  - transports
+  verbs:
+  - get
+  - list
+  - watch

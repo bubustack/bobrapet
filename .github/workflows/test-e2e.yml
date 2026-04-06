@@ -4,29 +4,45 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test-e2e:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    env:
+      KIND_VERSION: v0.31.0
     steps:
       - name: Clone the code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          check-latest: true
+          cache: true
+          cache-dependency-path: go.sum
 
-      - name: Install the latest version of kind
+      - name: Install pinned kind
         run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
+          KIND_ARCH="$(go env GOARCH)"
+          KIND_BINARY="kind-linux-${KIND_ARCH}"
+          KIND_BASE_URL="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"
+          curl --fail --location --silent --show-error -o "${KIND_BINARY}" "${KIND_BASE_URL}/${KIND_BINARY}"
+          curl --fail --location --silent --show-error -o "${KIND_BINARY}.sha256sum" "${KIND_BASE_URL}/${KIND_BINARY}.sha256sum"
+          sha256sum --check --strict "${KIND_BINARY}.sha256sum"
+          chmod +x "${KIND_BINARY}"
+          sudo mv "${KIND_BINARY}" /usr/local/bin/kind
 
       - name: Verify kind installation
-        run: kind version
+        run: |
+          kind version
+          kind version | grep -F "${KIND_VERSION}"
+
+      - name: Verify go.mod is tidy
+        run: go mod tidy -diff
 
       - name: Running Test e2e
-        run: |
-          go mod tidy
-          make test-e2e
+        run: make test-e2e

@@ -8,13 +8,35 @@ metadata:
 spec:
   group: transport.bubustack.io
   names:
+    categories:
+    - bubu
+    - transport
     kind: TransportBinding
     listKind: TransportBindingList
     plural: transportbindings
+    shortNames:
+    - tb
+    - tbind
     singular: transportbinding
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.transportRef
+      name: Transport
+      type: string
+    - jsonPath: .spec.stepName
+      name: Step
+      type: string
+    - jsonPath: .spec.driver
+      name: Driver
+      type: string
+    - jsonPath: .status.endpoint
+      name: Endpoint
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: TransportBinding is the Schema for the transportbindings API
@@ -39,25 +61,198 @@ spec:
           spec:
             description: spec defines the desired state of TransportBinding
             properties:
-              foo:
-                description: foo is an example field of TransportBinding. Edit transportbinding_types.go
-                  to remove/update
+              audio:
+                description: audio describes the desired audio flow for this binding.
+                properties:
+                  codecs:
+                    description: |-
+                      codecs enumerates the preferred codecs ordered by priority.
+                      If empty, defaults to PCM16.
+                    items:
+                      description: AudioCodec describes a negotiated audio codec.
+                      properties:
+                        channels:
+                          description: channels indicates the number of channels carried
+                            by this codec.
+                          format: int32
+                          type: integer
+                        name:
+                          description: name of the codec (e.g., pcm16, opus, g711-mu)
+                          enum:
+                          - pcm16
+                          - pcm24
+                          - opus
+                          - g711-mu
+                          - g711-a
+                          - g722
+                          - aac
+                          - mp3
+                          - flac
+                          - raw
+                          type: string
+                        sampleRateHz:
+                          description: sampleRateHz indicates the sampling rate for
+                            this codec.
+                          format: int32
+                          type: integer
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  direction:
+                    description: direction indicates whether the owning engram publishes,
+                      subscribes, or both.
+                    enum:
+                    - publish
+                    - subscribe
+                    - bidirectional
+                    type: string
+                required:
+                - direction
+                type: object
+              binary:
+                description: binary describes the desired binary flow for this binding.
+                properties:
+                  direction:
+                    description: direction indicates whether the owning engram publishes,
+                      subscribes, or both.
+                    enum:
+                    - publish
+                    - subscribe
+                    - bidirectional
+                    type: string
+                  mimeTypes:
+                    description: mimeTypes enumerates supported MIME types (e.g.,
+                      application/json, application/octet-stream).
+                    items:
+                      type: string
+                    type: array
+                required:
+                - direction
+                type: object
+              connectorEndpoint:
+                description: connectorEndpoint is the in-pod endpoint engrams should
+                  dial to reach the connector sidecar (e.g., 127.0.0.1:50051).
                 type: string
+              driver:
+                description: driver indicates which connector driver should be used.
+                minLength: 1
+                type: string
+              engramName:
+                description: engramName is the run-specific engram backing the step.
+                minLength: 1
+                type: string
+              rawSettings:
+                description: settings carries provider-specific configuration serialized
+                  as JSON.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              stepName:
+                description: stepName is the Story step that owns this binding.
+                minLength: 1
+                type: string
+              storyRunRef:
+                description: storyRunRef identifies the StoryRun this binding belongs
+                  to when scoped to an individual run.
+                properties:
+                  name:
+                    description: |-
+                      Name of the referenced object.
+                      Must be a valid DNS-1123 label as defined by Kubernetes naming conventions.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referenced object.
+                      If empty, defaults to same namespace as the referencing object.
+
+                      Cross-namespace references should be used carefully and only when
+                      multi-tenancy is properly configured. Consider the security implications:
+                      - Ensure RBAC policies allow cross-namespace access
+                      - Validate that the target namespace is trusted
+                      - Monitor cross-namespace references for security compliance
+
+                      Note: cross-namespace references are currently rejected by admission
+                      validation in the operator.
+                    maxLength: 63
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referenced StoryRun for drift detection.
+                      This field is populated by controllers and should not be set by users.
+
+                      StoryRun drift detection helps maintain execution integrity and
+                      enables proper cleanup of orphaned StepRuns.
+                    type: string
+                required:
+                - name
+                type: object
+              transportRef:
+                description: transportRef references the Transport CR driving this
+                  binding.
+                minLength: 1
+                type: string
+              video:
+                description: video describes the desired video flow for this binding.
+                properties:
+                  codecs:
+                    description: |-
+                      codecs enumerates supported codecs. Encoded pass-through drivers should
+                      declare the codecs they can forward.
+                    items:
+                      description: VideoCodec describes a negotiated video codec or
+                        raw pixel format.
+                      properties:
+                        name:
+                          description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                          enum:
+                          - h264
+                          - vp8
+                          - vp9
+                          - av1
+                          - raw-yuv420
+                          - raw-rgb
+                          - raw-bgr
+                          type: string
+                        profile:
+                          description: profile or format hint (e.g., baseline, high,
+                            rgb)
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  direction:
+                    description: direction indicates whether the owning engram publishes,
+                      subscribes, or both.
+                    enum:
+                    - publish
+                    - subscribe
+                    - bidirectional
+                    type: string
+                  raw:
+                    description: |-
+                      raw indicates whether raw frames are required for processing (e.g., CV tasks).
+                      Drivers may use this hint to determine if decoding is necessary.
+                    type: boolean
+                required:
+                - direction
+                type: object
+            required:
+            - driver
+            - engramName
+            - stepName
+            - transportRef
             type: object
           status:
             description: status defines the observed state of TransportBinding
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the TransportBinding resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: conditions represent the current state of the TransportBinding
+                  resource.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -116,10 +311,86 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              downstreamHost:
+                description: |-
+                  downstreamHost is the resolved downstream endpoint (host:port) for the engram owning this binding.
+                  This is populated when the engram can accept direct P2P connections from upstream engrams.
+                type: string
+              endpoint:
+                description: endpoint is the connector endpoint (host:port or unix
+                  socket) for this binding.
+                type: string
+              negotiatedAudio:
+                description: negotiatedAudio captures the codec the connector selected
+                  for audio.
+                properties:
+                  channels:
+                    description: channels indicates the number of channels carried
+                      by this codec.
+                    format: int32
+                    type: integer
+                  name:
+                    description: name of the codec (e.g., pcm16, opus, g711-mu)
+                    enum:
+                    - pcm16
+                    - pcm24
+                    - opus
+                    - g711-mu
+                    - g711-a
+                    - g722
+                    - aac
+                    - mp3
+                    - flac
+                    - raw
+                    type: string
+                  sampleRateHz:
+                    description: sampleRateHz indicates the sampling rate for this
+                      codec.
+                    format: int32
+                    type: integer
+                required:
+                - name
+                type: object
+              negotiatedBinary:
+                description: negotiatedBinary captures the MIME type the connector
+                  selected for binary payloads.
+                type: string
+              negotiatedVideo:
+                description: negotiatedVideo captures the codec the connector selected
+                  for video.
+                properties:
+                  name:
+                    description: name of the codec (e.g., h264, vp8, raw-yuv420)
+                    enum:
+                    - h264
+                    - vp8
+                    - vp9
+                    - av1
+                    - raw-yuv420
+                    - raw-rgb
+                    - raw-bgr
+                    type: string
+                  profile:
+                    description: profile or format hint (e.g., baseline, high, rgb)
+                    type: string
+                required:
+                - name
+                type: object
+              observedGeneration:
+                format: int64
+                type: integer
+              upstreamHost:
+                description: |-
+                  upstreamHost is the resolved upstream endpoint (host:port) that this engram should connect to.
+                  This is populated when the connection can bypass the hub and use direct P2P routing.
+                type: string
             type: object
         required:
         - spec
         type: object
+    selectableFields:
+    - jsonPath: .spec.transportRef
+    - jsonPath: .spec.storyRunRef.name
     served: true
     storage: true
     subresources:

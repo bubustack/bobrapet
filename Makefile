@@ -2,7 +2,7 @@
 IMG ?= ghcr.io/bubustack/bobrapet:latest
 CHART ?= bobrapet
 CHART_OVERRIDE_DIR ?= hack/charts
-HELM_CHART_OVERLAY_FILES ?= Chart.yaml values.yaml values.schema.json README.md
+HELM_CHART_OVERLAY_FILES ?= Chart.yaml README.md
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))

@@ -5,5 +5,5 @@ resources:
 - operator-config.yaml
 images:
 - name: ghcr.io/bubustack/bobrapet
-  newName: example.com/bobrapet
-  newTag: v0.0.1
+  newName: ghcr.io/bubustack/bobrapet
+  newTag: latest

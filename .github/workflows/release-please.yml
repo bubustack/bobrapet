@@ -169,18 +169,24 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Stamp release version into chart
+      - name: Stamp release version into Chart.yaml overlay
         if: steps.token-check.outputs.available == 'true'
         run: |
           VERSION="${RELEASE_VERSION#v}"
           sed -i "s/^version:.*/version: ${VERSION}/" hack/charts/${CHART_NAME}/Chart.yaml
           sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" hack/charts/${CHART_NAME}/Chart.yaml
-          sed -i "s/^  tag:.*/  tag: \"${VERSION}\"/" hack/charts/${CHART_NAME}/values.yaml
-          echo "Stamped chart with version ${VERSION}"
+          echo "Stamped Chart.yaml overlay with version ${VERSION}"
 
       - name: Build Helm chart artifacts
         if: steps.token-check.outputs.available == 'true'
         run: make helm-chart CHART=${{ env.CHART_NAME }}
+
+      - name: Stamp image tag in generated values
+        if: steps.token-check.outputs.available == 'true'
+        run: |
+          VERSION="${RELEASE_VERSION#v}"
+          sed -i "s/tag: latest/tag: \"${VERSION}\"/" dist/charts/${CHART_NAME}/values.yaml
+          echo "Stamped values.yaml image tag: ${VERSION}"
 
       - name: Checkout helm-charts repository
         if: steps.token-check.outputs.available == 'true'

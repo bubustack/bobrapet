@@ -6,6 +6,7 @@ description: >
 type: application
 version: 0.1.1
 appVersion: "0.1.1"
+icon: https://bubustack.io/img/logo.svg
 home: https://github.com/bubustack/bobrapet
 sources:
   - https://github.com/bubustack/bobrapet

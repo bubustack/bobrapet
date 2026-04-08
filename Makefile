@@ -157,7 +157,7 @@ build-installer: manifests generate kustomize ## Generate a consolidated YAML wi
 ##@ Helm
 
 .PHONY: helm-chart
-helm-chart: helmify kustomize ## Generate Helm chart via helmify (override CHART=<name> if needed)
+helm-chart: helmify helm-schema kustomize ## Generate Helm chart via helmify (override CHART=<name> if needed)
 	rm -rf dist/charts/$(CHART)
 	mkdir -p dist/charts
 	$(KUSTOMIZE) build config/default | $(HELMIFY) -crd-dir dist/charts/$(CHART)
@@ -168,6 +168,7 @@ helm-chart: helmify kustomize ## Generate Helm chart via helmify (override CHART
 			fi; \
 		done; \
 	fi
+	$(HELM_SCHEMA) -f dist/charts/$(CHART)/values.yaml -o dist/charts/$(CHART)/values.schema.json
 
 ##@ Deployment
 
@@ -209,6 +210,7 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 GOLANGCI_LINT = $(LOCALBIN)/golangci-lint
 HELMIFY ?= $(LOCALBIN)/helmify
+HELM_SCHEMA ?= $(LOCALBIN)/helm-values-schema-json
 
 ## Tool Versions
 ## Tool Versions
@@ -220,6 +222,7 @@ ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller
 ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
 GOLANGCI_LINT_VERSION ?= v2.11.4
 HELMIFY_VERSION ?= v0.4.19
+HELM_SCHEMA_VERSION ?= v2.3.1
 
 #ENVTEST_VERSION is the version of controller-runtime release branch to fetch the envtest setup script (i.e. release-0.20)
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
@@ -268,6 +271,11 @@ $(GOLANGCI_LINT): $(LOCALBIN)
 helmify: $(HELMIFY) ## Download helmify locally if necessary.
 $(HELMIFY): $(LOCALBIN)
 	$(call go-install-tool,$(HELMIFY),github.com/arttor/helmify/cmd/helmify,$(HELMIFY_VERSION))
+
+.PHONY: helm-schema
+helm-schema: $(HELM_SCHEMA) ## Download helm-values-schema-json locally if necessary.
+$(HELM_SCHEMA): $(LOCALBIN)
+	$(call go-install-tool,$(HELM_SCHEMA),github.com/losisin/helm-values-schema-json/v2,$(HELM_SCHEMA_VERSION))
 
 # go-install-tool will 'go install' any package with custom target and name of binary, if it doesn't exist
 # $1 - target path with name of binary

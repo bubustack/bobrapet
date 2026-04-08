@@ -19,11 +19,9 @@ package podspec
 import (
 	"maps"
 
+	"github.com/bubustack/bobrapet/internal/config"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
-
-	"github.com/bubustack/bobrapet/internal/config"
 )
 
 // Config provides common fields required to build a pod template.
@@ -126,7 +124,7 @@ func Build(cfg Config) corev1.PodTemplateSpec {
 
 	podSpec := corev1.PodSpec{
 		ServiceAccountName:           cfg.ResolvedConfig.ServiceAccountName,
-		AutomountServiceAccountToken: ptr.To(cfg.ResolvedConfig.AutomountServiceAccountToken),
+		AutomountServiceAccountToken: new(cfg.ResolvedConfig.AutomountServiceAccountToken),
 		SecurityContext:              cfg.ResolvedConfig.ToPodSecurityContext(),
 		Containers:                   []corev1.Container{container},
 	}
@@ -144,7 +142,7 @@ func Build(cfg Config) corev1.PodTemplateSpec {
 		podSpec.Volumes = append([]corev1.Volume(nil), cfg.Volumes...)
 	}
 	if cfg.TerminationGracePeriodSec > 0 {
-		podSpec.TerminationGracePeriodSeconds = ptr.To(cfg.TerminationGracePeriodSec)
+		podSpec.TerminationGracePeriodSeconds = new(cfg.TerminationGracePeriodSec)
 	}
 	if cfg.RestartPolicy != "" {
 		podSpec.RestartPolicy = cfg.RestartPolicy

@@ -86,22 +86,22 @@ func applyFlowControlDefaultsTransport(settings *transportv1alpha1.TransportStre
 	if shouldDefaultFlowControlTransport(fc) {
 		fc.Mode = transportv1alpha1.FlowControlCredits
 		fc.AckEvery = &transportv1alpha1.TransportFlowAckSettings{
-			Messages: int32Ptr(10),
-			MaxDelay: stringPtr("250ms"),
+			Messages: new(int32(10)),
+			MaxDelay: new("250ms"),
 		}
-		fc.PauseThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: int32Ptr(90)}
-		fc.ResumeThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: int32Ptr(50)}
+		fc.PauseThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: new(int32(90))}
+		fc.ResumeThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: new(int32(50))}
 		return
 	}
 	if fc.Mode == transportv1alpha1.FlowControlCredits || fc.Mode == transportv1alpha1.FlowControlWindow {
 		if fc.AckEvery == nil {
-			fc.AckEvery = &transportv1alpha1.TransportFlowAckSettings{Messages: int32Ptr(10), MaxDelay: stringPtr("250ms")}
+			fc.AckEvery = &transportv1alpha1.TransportFlowAckSettings{Messages: new(int32(10)), MaxDelay: new("250ms")}
 		}
 		if fc.PauseThreshold == nil {
-			fc.PauseThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: int32Ptr(90)}
+			fc.PauseThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: new(int32(90))}
 		}
 		if fc.ResumeThreshold == nil {
-			fc.ResumeThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: int32Ptr(50)}
+			fc.ResumeThreshold = &transportv1alpha1.TransportFlowThreshold{BufferPct: new(int32(50))}
 		}
 	}
 }
@@ -114,7 +114,7 @@ func applyRoutingDefaultsTransport(settings *transportv1alpha1.TransportStreamin
 		settings.Routing = &transportv1alpha1.TransportRoutingSettings{}
 	}
 	if settings.Routing.MaxDownstreams == nil {
-		settings.Routing.MaxDownstreams = int32Ptr(32)
+		settings.Routing.MaxDownstreams = new(int32(32))
 	}
 }
 
@@ -136,10 +136,10 @@ func applyLaneDefaultsTransportEntry(lane *transportv1alpha1.TransportLane) {
 		return
 	}
 	if lane.MaxMessages == nil {
-		lane.MaxMessages = int32Ptr(defaultLaneMaxMessages)
+		lane.MaxMessages = new(defaultLaneMaxMessages)
 	}
 	if lane.MaxBytes == nil {
-		lane.MaxBytes = int32Ptr(defaultLaneMaxBytes)
+		lane.MaxBytes = new(defaultLaneMaxBytes)
 	}
 	if lane.Direction == "" {
 		lane.Direction = transportv1alpha1.TransportLaneBidirectional
@@ -152,29 +152,29 @@ func defaultTransportLanes() []transportv1alpha1.TransportLane {
 			Name:        "audio",
 			Kind:        transportv1alpha1.TransportLaneAudio,
 			Direction:   transportv1alpha1.TransportLaneBidirectional,
-			MaxMessages: int32Ptr(defaultLaneMaxMessages),
-			MaxBytes:    int32Ptr(defaultLaneMaxBytes),
+			MaxMessages: new(defaultLaneMaxMessages),
+			MaxBytes:    new(defaultLaneMaxBytes),
 		},
 		{
 			Name:        "video",
 			Kind:        transportv1alpha1.TransportLaneVideo,
 			Direction:   transportv1alpha1.TransportLaneBidirectional,
-			MaxMessages: int32Ptr(defaultLaneMaxMessages),
-			MaxBytes:    int32Ptr(defaultLaneMaxBytes),
+			MaxMessages: new(defaultLaneMaxMessages),
+			MaxBytes:    new(defaultLaneMaxBytes),
 		},
 		{
 			Name:        "binary",
 			Kind:        transportv1alpha1.TransportLaneBinary,
 			Direction:   transportv1alpha1.TransportLaneBidirectional,
-			MaxMessages: int32Ptr(defaultLaneMaxMessages),
-			MaxBytes:    int32Ptr(defaultLaneMaxBytes),
+			MaxMessages: new(defaultLaneMaxMessages),
+			MaxBytes:    new(defaultLaneMaxBytes),
 		},
 		{
 			Name:        "payload",
 			Kind:        transportv1alpha1.TransportLanePayload,
 			Direction:   transportv1alpha1.TransportLaneBidirectional,
-			MaxMessages: int32Ptr(defaultLaneMaxMessages),
-			MaxBytes:    int32Ptr(defaultLaneMaxBytes),
+			MaxMessages: new(defaultLaneMaxMessages),
+			MaxBytes:    new(defaultLaneMaxBytes),
 		},
 	}
 }
@@ -193,11 +193,3 @@ const (
 	defaultLaneMaxMessages int32 = 100
 	defaultLaneMaxBytes    int32 = 1 * 1024 * 1024
 )
-
-func int32Ptr(val int32) *int32 {
-	return &val
-}
-
-func stringPtr(val string) *string {
-	return &val
-}

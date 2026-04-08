@@ -19,9 +19,6 @@ import (
 // Helpers
 // ---------------------------------------------------------------------------
 
-func int32Ptr(val int32) *int32    { return &val }
-func stringPtr(val string) *string { return &val }
-
 // newTransportScheme returns a runtime.Scheme with the transport API types registered.
 func newTransportScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
@@ -258,7 +255,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Backpressure: &transportv1alpha1.TransportBackpressureSettings{
 						Buffer: &transportv1alpha1.TransportBufferSettings{
-							MaxMessages: int32Ptr(-1),
+							MaxMessages: new(int32(-1)),
 						},
 					},
 				}
@@ -284,7 +281,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					FlowControl: &transportv1alpha1.TransportFlowControlSettings{
 						AckEvery: &transportv1alpha1.TransportFlowAckSettings{
-							MaxDelay: stringPtr("not-a-duration"),
+							MaxDelay: new("not-a-duration"),
 						},
 					},
 				}
@@ -297,7 +294,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					FlowControl: &transportv1alpha1.TransportFlowControlSettings{
-						PauseThreshold: &transportv1alpha1.TransportFlowThreshold{BufferPct: int32Ptr(120)},
+						PauseThreshold: &transportv1alpha1.TransportFlowThreshold{BufferPct: new(int32(120))},
 					},
 				}
 			},
@@ -322,7 +319,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Delivery: &transportv1alpha1.TransportDeliverySettings{
 						Replay: &transportv1alpha1.TransportReplaySettings{
-							CheckpointInterval: stringPtr("bad"),
+							CheckpointInterval: new("bad"),
 						},
 					},
 				}
@@ -359,7 +356,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Routing: &transportv1alpha1.TransportRoutingSettings{
-						MaxDownstreams: int32Ptr(0),
+						MaxDownstreams: new(int32(0)),
 					},
 				}
 			},
@@ -435,7 +432,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Partitioning: &transportv1alpha1.TransportPartitioningSettings{
-						Key: stringPtr(" "),
+						Key: new(" "),
 					},
 				}
 			},
@@ -447,7 +444,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Partitioning: &transportv1alpha1.TransportPartitioningSettings{
-						Partitions: int32Ptr(0),
+						Partitions: new(int32(0)),
 					},
 				}
 			},
@@ -471,7 +468,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Lifecycle: &transportv1alpha1.TransportLifecycleSettings{
-						DrainTimeoutSeconds: int32Ptr(-1),
+						DrainTimeoutSeconds: new(int32(-1)),
 					},
 				}
 			},
@@ -483,7 +480,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Lifecycle: &transportv1alpha1.TransportLifecycleSettings{
-						MaxInFlight: int32Ptr(-5),
+						MaxInFlight: new(int32(-5)),
 					},
 				}
 			},
@@ -496,7 +493,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Observability: &transportv1alpha1.TransportObservabilitySettings{
 						Tracing: &transportv1alpha1.TransportTracingSettings{
-							SampleRate: int32Ptr(200),
+							SampleRate: new(int32(200)),
 						},
 					},
 				}
@@ -510,7 +507,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Observability: &transportv1alpha1.TransportObservabilitySettings{
 						Tracing: &transportv1alpha1.TransportTracingSettings{
-							SamplePolicy: stringPtr("sometimes"),
+							SamplePolicy: new("sometimes"),
 						},
 					},
 				}
@@ -535,7 +532,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Recording: &transportv1alpha1.TransportRecordingSettings{
-						SampleRate: int32Ptr(200),
+						SampleRate: new(int32(200)),
 					},
 				}
 			},
@@ -547,7 +544,7 @@ func TestTransportValidatorRejectsInvalidStreamingSettings(t *testing.T) {
 			mutate: func(s *transportv1alpha1.TransportSpec) {
 				s.Streaming = &transportv1alpha1.TransportStreamingSettings{
 					Recording: &transportv1alpha1.TransportRecordingSettings{
-						RetentionSeconds: int32Ptr(-1),
+						RetentionSeconds: new(int32(-1)),
 					},
 				}
 			},

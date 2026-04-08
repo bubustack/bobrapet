@@ -222,8 +222,8 @@ func TestExecuteStoryStepMergesPolicyWith(t *testing.T) {
 }
 
 func TestResolveStepRetryPolicyPrefersStepOverride(t *testing.T) {
-	stepRetry := &bubuv1alpha1.RetryPolicy{MaxRetries: int32Ptr(2)}
-	storyRetry := &bubuv1alpha1.RetryPolicy{MaxRetries: int32Ptr(7)}
+	stepRetry := &bubuv1alpha1.RetryPolicy{MaxRetries: new(int32(2))}
+	storyRetry := &bubuv1alpha1.RetryPolicy{MaxRetries: new(int32(7))}
 	story := &bubuv1alpha1.Story{
 		Spec: bubuv1alpha1.StorySpec{
 			Policy: &bubuv1alpha1.StoryPolicy{
@@ -241,7 +241,7 @@ func TestResolveStepRetryPolicyPrefersStepOverride(t *testing.T) {
 }
 
 func TestResolveStepRetryPolicyFallsBackToStoryPolicy(t *testing.T) {
-	storyRetry := &bubuv1alpha1.RetryPolicy{MaxRetries: int32Ptr(5)}
+	storyRetry := &bubuv1alpha1.RetryPolicy{MaxRetries: new(int32(5))}
 	story := &bubuv1alpha1.Story{
 		Spec: bubuv1alpha1.StorySpec{
 			Policy: &bubuv1alpha1.StoryPolicy{
@@ -530,8 +530,4 @@ func TestCreateEngramStepRun_IdempotencyKeyTemplateFallback(t *testing.T) {
 	expected := runsidentity.StepRunIdempotencyKey(srun.Namespace, srun.Name, step.Name)
 	require.Equal(t, expected, created.Spec.IdempotencyKey,
 		"StepRun should use auto-generated idempotency key when template is not set")
-}
-
-func int32Ptr(v int32) *int32 {
-	return &v
 }

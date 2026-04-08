@@ -431,8 +431,8 @@ func TestResolveExecutionConfigPrecedenceOrder(t *testing.T) {
 					Name: "worker",
 					Execution: &v1alpha1.ExecutionOverrides{
 						ServiceAccountName:           &stepSAStr,
-						AutomountServiceAccountToken: boolPtr(false),
-						Debug:                        boolPtr(true),
+						AutomountServiceAccountToken: new(false),
+						Debug:                        new(true),
 					},
 				},
 			},
@@ -512,21 +512,21 @@ func TestResolveExecutionConfigChainTelemetryParity(t *testing.T) {
 				Image:          "template:latest",
 				Execution: &catalogv1alpha1.TemplateExecutionPolicy{
 					Images: &catalogv1alpha1.TemplateImagePolicy{
-						PullPolicy: stringPtr(string(corev1.PullAlways)),
+						PullPolicy: new(string(corev1.PullAlways)),
 					},
 					Resources: &catalogv1alpha1.TemplateResourcePolicy{
 						RecommendedCPURequest: &badTemplateCPU,
 					},
 					Security: &catalogv1alpha1.TemplateSecurityPolicy{
-						RequiresNonRoot: boolPtr(true),
+						RequiresNonRoot: new(true),
 					},
 					Job: &catalogv1alpha1.TemplateJobPolicy{
-						RecommendedBackoffLimit: int32Ptr(2),
+						RecommendedBackoffLimit: new(int32(2)),
 					},
 					Retry: &catalogv1alpha1.TemplateRetryPolicy{
-						RecommendedMaxRetries: intPtr(3),
+						RecommendedMaxRetries: new(3),
 					},
-					Timeout: stringPtr("45s"),
+					Timeout: new("45s"),
 					Service: &catalogv1alpha1.TemplateServicePolicy{
 						Ports: []catalogv1alpha1.TemplateServicePort{{Name: "http", Port: 80, TargetPort: 8080}},
 					},
@@ -575,7 +575,7 @@ func TestResolveExecutionConfigChainTelemetryParity(t *testing.T) {
 					Name: "worker",
 					Execution: &v1alpha1.ExecutionOverrides{
 						ServiceAccountName: &storyStepSA,
-						Debug:              boolPtr(true),
+						Debug:              new(true),
 					},
 				},
 			},
@@ -672,14 +672,6 @@ func TestResolveExecutionConfigChainTelemetryParity(t *testing.T) {
 		t.Fatalf("expected cpu request parse error, got %s", errMsg)
 	}
 }
-
-func boolPtr(v bool) *bool { return &v }
-
-func int32Ptr(v int32) *int32 { return &v }
-
-func intPtr(v int) *int { return &v }
-
-func stringPtr(v string) *string { return &v }
 
 type logRecord struct {
 	name  string

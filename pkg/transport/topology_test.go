@@ -288,7 +288,7 @@ func TestCanUseP2PRouting(t *testing.T) {
 			upstream: &v1alpha1.Step{Name: "step1"},
 			downstream: &v1alpha1.Step{
 				Name: "step2",
-				If:   stringPtr("condition"),
+				If:   new("condition"),
 			},
 			expectedCanUseP2P: false,
 		},

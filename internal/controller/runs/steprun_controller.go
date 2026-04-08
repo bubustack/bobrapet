@@ -44,7 +44,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/events"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1812,7 +1811,7 @@ func (r *StepRunReconciler) buildJobSpec(
 	}
 	// Batch StepRun pods need an in-cluster token for SDK status updates, log capture,
 	// and Kubernetes client access inside the managed engram runner.
-	podTemplate.Spec.AutomountServiceAccountToken = ptr.To(true)
+	podTemplate.Spec.AutomountServiceAccountToken = new(true)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -3929,9 +3928,9 @@ func (r *StepRunReconciler) applyTransportBindingSpec(
 	binding.Spec.StoryRunRef = &refs.StoryRunReference{
 		ObjectReference: refs.ObjectReference{
 			Name:      storyRun.Name,
-			Namespace: ptr.To(step.Namespace),
+			Namespace: new(step.Namespace),
 		},
-		UID: ptr.To(storyRun.UID),
+		UID: new(storyRun.UID),
 	}
 
 	if err := transportutil.PopulateBindingMedia(binding, ctxData.transportObj); err != nil {
@@ -4370,7 +4369,7 @@ func (r *StepRunReconciler) desiredRunScopedDeployment(
 	)
 	// Realtime step pods always carry a transport connector sidecar. The connector
 	// needs an in-cluster token to report binding readiness and handoff state.
-	podSpec.Spec.AutomountServiceAccountToken = ptr.To(true)
+	podSpec.Spec.AutomountServiceAccountToken = new(true)
 
 	podspec.ApplyStorageEnv(resolvedCfg, &podSpec.Spec, &podSpec.Spec.Containers[0], storageTimeout)
 

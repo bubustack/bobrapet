@@ -57,7 +57,7 @@ func TestEnsureMaterializeStepRunAcceptsOwnedMatchingStepRun(t *testing.T) {
 			Kind:       "StoryRun",
 			Name:       storyRun.Name,
 			UID:        storyRun.UID,
-			Controller: boolPtr(true),
+			Controller: new(true),
 		},
 	}
 
@@ -160,7 +160,7 @@ func TestEnsureMaterializeStepRunRejectsMismatchedIdentity(t *testing.T) {
 			Kind:       "StoryRun",
 			Name:       storyRun.Name,
 			UID:        storyRun.UID,
-			Controller: boolPtr(true),
+			Controller: new(true),
 		},
 	}
 
@@ -218,8 +218,4 @@ func newMaterializeStepRunFixture(
 			},
 		},
 	}
-}
-
-func boolPtr(v bool) *bool {
-	return &v
 }

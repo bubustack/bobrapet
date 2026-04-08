@@ -15,7 +15,7 @@ func TestMergeSettingsWithStreaming(t *testing.T) {
 	streaming := &transportv1alpha1.TransportStreamingSettings{
 		Backpressure: &transportv1alpha1.TransportBackpressureSettings{
 			Buffer: &transportv1alpha1.TransportBufferSettings{
-				MaxMessages: ptrInt32(20),
+				MaxMessages: new(int32(20)),
 				DropPolicy:  transportv1alpha1.BufferDropOldest,
 			},
 		},
@@ -58,8 +58,4 @@ func TestMergeSettingsPreservesTLSTransportSecurityMode(t *testing.T) {
 	require.Equal(t, contracts.TransportSecurityModeTLS, env[contracts.TransportSecurityModeEnv])
 	require.Equal(t, "bar", env["FOO"])
 	require.Equal(t, "baz", env["BAR"])
-}
-
-func ptrInt32(v int32) *int32 {
-	return &v
 }

@@ -165,7 +165,7 @@ func TestStoryValidatorValidateExecuteStoryReferencesUsesAPIReaderForCrossNamesp
 				{
 					Group: "bubustack.io",
 					Kind:  "Story",
-					Name:  testStringPtr(childName),
+					Name:  new(childName),
 				},
 			},
 		},
@@ -281,7 +281,7 @@ func TestImpulseValidatorValidateImpulseUsesAPIReaderForCrossNamespaceGrant(t *t
 				{
 					Group: "bubustack.io",
 					Kind:  "Story",
-					Name:  testStringPtr(storyName),
+					Name:  new(storyName),
 				},
 			},
 		},
@@ -303,7 +303,7 @@ func TestImpulseValidatorValidateImpulseUsesAPIReaderForCrossNamespaceGrant(t *t
 			StoryRef: refs.StoryReference{
 				ObjectReference: refs.ObjectReference{
 					Name:      storyName,
-					Namespace: testStringPtr(targetNamespace),
+					Namespace: new(targetNamespace),
 				},
 			},
 		},
@@ -345,8 +345,4 @@ func mustRawJSONExtension(t *testing.T, value any) *runtime.RawExtension {
 		t.Fatalf("marshal raw json: %v", err)
 	}
 	return &runtime.RawExtension{Raw: raw}
-}
-
-func testStringPtr(v string) *string {
-	return &v
 }

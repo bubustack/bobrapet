@@ -86,7 +86,7 @@ func TestEnsureImpulseServiceAccountAllowsControllerOwnedServiceAccount(t *testi
 				Kind:       "Impulse",
 				Name:       impulse.Name,
 				UID:        impulse.UID,
-				Controller: ptrTo(true),
+				Controller: new(true),
 			}},
 		},
 	}
@@ -145,8 +145,4 @@ func TestEnsureImpulseServiceAccountPreservesCustomServiceAccountAndAutomount(t 
 	require.NoError(t, err)
 	require.Equal(t, "pod-crash-runner", resolved.ServiceAccountName)
 	require.True(t, resolved.AutomountServiceAccountToken)
-}
-
-func ptrTo(v bool) *bool {
-	return &v
 }

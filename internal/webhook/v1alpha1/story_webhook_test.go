@@ -867,44 +867,44 @@ var _ = Describe("Story Webhook", func() {
 					Streaming: &transportv1alpha1.TransportStreamingSettings{
 						Backpressure: &transportv1alpha1.TransportBackpressureSettings{
 							Buffer: &transportv1alpha1.TransportBufferSettings{
-								MaxMessages: int32Ptr(-1),
+								MaxMessages: new(int32(-1)),
 							},
 						},
 						FlowControl: &transportv1alpha1.TransportFlowControlSettings{
 							Mode: transportv1alpha1.FlowControlMode("bogus"),
 							AckEvery: &transportv1alpha1.TransportFlowAckSettings{
-								MaxDelay: stringPtr("not-a-duration"),
+								MaxDelay: new("not-a-duration"),
 							},
 						},
 						Delivery: &transportv1alpha1.TransportDeliverySettings{
 							Replay: &transportv1alpha1.TransportReplaySettings{
-								CheckpointInterval: stringPtr("bad"),
+								CheckpointInterval: new("bad"),
 							},
 						},
 						Routing: &transportv1alpha1.TransportRoutingSettings{
 							Mode:           transportv1alpha1.TransportRoutingMode("mesh"),
 							FanOut:         transportv1alpha1.TransportFanOutMode("fanout"),
-							MaxDownstreams: int32Ptr(0),
+							MaxDownstreams: new(int32(0)),
 						},
 						Partitioning: &transportv1alpha1.TransportPartitioningSettings{
 							Mode:       transportv1alpha1.TransportPartitionMode("range"),
-							Key:        stringPtr(" "),
-							Partitions: int32Ptr(0),
+							Key:        new(" "),
+							Partitions: new(int32(0)),
 						},
 						Lifecycle: &transportv1alpha1.TransportLifecycleSettings{
 							Strategy:            transportv1alpha1.TransportUpgradeStrategy("invalid"),
-							DrainTimeoutSeconds: int32Ptr(-1),
+							DrainTimeoutSeconds: new(int32(-1)),
 						},
 						Observability: &transportv1alpha1.TransportObservabilitySettings{
 							Tracing: &transportv1alpha1.TransportTracingSettings{
-								SampleRate:   int32Ptr(200),
-								SamplePolicy: stringPtr("maybe"),
+								SampleRate:   new(int32(200)),
+								SamplePolicy: new("maybe"),
 							},
 						},
 						Recording: &transportv1alpha1.TransportRecordingSettings{
 							Mode:             transportv1alpha1.TransportRecordingMode("full"),
-							SampleRate:       int32Ptr(200),
-							RetentionSeconds: int32Ptr(-1),
+							SampleRate:       new(int32(200)),
+							RetentionSeconds: new(int32(-1)),
 							RedactFields:     []string{""},
 						},
 					},
@@ -1020,12 +1020,4 @@ func toRawExtension(payload any) (*runtime.RawExtension, error) {
 		}
 		return &runtime.RawExtension{Raw: data}, nil
 	}
-}
-
-func int32Ptr(val int32) *int32 {
-	return &val
-}
-
-func stringPtr(val string) *string {
-	return &val
 }

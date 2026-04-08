@@ -745,7 +745,7 @@ func MergeTemplateRetryIntoPolicy(policy *v1alpha1.RetryPolicy, templateRetry *c
 	out := &v1alpha1.RetryPolicy{}
 	if policy != nil {
 		if policy.MaxRetries != nil {
-			out.MaxRetries = ptr(*policy.MaxRetries)
+			out.MaxRetries = new(*policy.MaxRetries)
 		}
 		out.Delay = policy.Delay
 		out.MaxDelay = policy.MaxDelay
@@ -764,7 +764,7 @@ func MergeTemplateRetryIntoPolicy(policy *v1alpha1.RetryPolicy, templateRetry *c
 		}
 	}
 	if policy == nil && out.MaxRetries == nil && templateRetry.RecommendedMaxRetries != nil {
-		out.MaxRetries = ptr(int32(*templateRetry.RecommendedMaxRetries))
+		out.MaxRetries = new(int32(*templateRetry.RecommendedMaxRetries))
 	}
 	if policy != nil && out.MaxRetries == nil && policy.MaxRetries != nil {
 		out.MaxRetries = policy.MaxRetries
@@ -777,19 +777,15 @@ func MergeTemplateRetryIntoPolicy(policy *v1alpha1.RetryPolicy, templateRetry *c
 func parseBackoffStrategy(s string) *enums.BackoffStrategy {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "exponential":
-		return ptrBackoff(enums.BackoffStrategyExponential)
+		return new(enums.BackoffStrategyExponential)
 	case "linear":
-		return ptrBackoff(enums.BackoffStrategyLinear)
+		return new(enums.BackoffStrategyLinear)
 	case "constant":
-		return ptrBackoff(enums.BackoffStrategyConstant)
+		return new(enums.BackoffStrategyConstant)
 	default:
 		return nil
 	}
 }
-
-func ptrBackoff(v enums.BackoffStrategy) *enums.BackoffStrategy { return &v }
-
-func ptr[T any](v T) *T { return &v }
 
 // applyTemplateProbes copies the EngramTemplate's health check probes into the
 // resolved config using deep copies.

@@ -654,7 +654,7 @@ func TestEnforceStoryTimeoutMarksTimeout(t *testing.T) {
 		Spec: bubuv1alpha1.StorySpec{
 			Policy: &bubuv1alpha1.StoryPolicy{
 				Timeouts: &bubuv1alpha1.StoryTimeouts{
-					Story: stringPtr("1h"),
+					Story: new("1h"),
 				},
 			},
 		},
@@ -824,10 +824,6 @@ func TestFindAndLaunchReadyStepsEnforcesConcurrency(t *testing.T) {
 			t.Fatalf("expected %s to have a queue message", stepName)
 		}
 	}
-}
-
-func stringPtr(v string) *string {
-	return &v
 }
 
 type failingGetClient struct {

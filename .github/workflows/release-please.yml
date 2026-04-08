@@ -51,7 +51,7 @@ jobs:
       - name: Extract Docker metadata
         if: ${{ steps.release.outputs.release_created }}
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/build-push-action@v6
         with:
           images: ${{ env.GHCR_IMAGE }}
           tags: |
@@ -63,7 +63,7 @@ jobs:
 
       - name: Build and push Docker image
         if: ${{ steps.release.outputs.release_created }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64

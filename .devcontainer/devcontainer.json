@@ -1,6 +1,6 @@
 {
   "name": "Kubebuilder DevContainer",
-  "image": "docker.io/golang:1.25-bookworm",
+  "image": "docker.io/golang:1.26-bookworm",
   "features": {
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "moby": false,

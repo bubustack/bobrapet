@@ -28,7 +28,7 @@ This document provides guidelines for contributing to the operator and its docs.
 
 ### Prerequisites
 
-- Go 1.25.3 or later
+- Go 1.26+
 - Docker
 - `make`
 

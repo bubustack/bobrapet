@@ -80,7 +80,7 @@ kubectl patch storyrun <name> --type merge --subresource status \\
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Go 1.25.3 or newer (matching `go.mod`)
+- Go 1.26+ (matching `go.mod`)
 - Docker or another OCI-compatible image builder
 - `kubectl`
 - Access to a Kubernetes cluster supported by the current `bobrapet` release set

@@ -1,0 +1,18 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "bobrapet.fullname" . }}-ca-root
+  namespace: cert-manager
+  labels:
+  {{- include "bobrapet.labels" . | nindent 4 }}
+spec:
+  commonName: bobrapet-ca-root
+  dnsNames: []
+  duration: 43800h
+  isCA: true
+  issuerRef:
+    kind: ClusterIssuer
+    name: '{{ include "bobrapet.fullname" . }}-selfsigned-bootstrap'
+  privateKey:
+    rotationPolicy: Always
+  secretName: {{ include "bobrapet.fullname" . }}-ca-root

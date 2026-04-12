@@ -7,9 +7,16 @@ BubuStack's Kubernetes-native workflow controller. Reconciles Stories, StoryRuns
 - Kubernetes cluster supported by the current bobrapet release set (N-2 upstream)
 - Helm **3.x**
 - [cert-manager](https://cert-manager.io/) installed (for webhook TLS)
-- CRDs installed separately via `make install` or the [installer manifest](https://github.com/bubustack/bobrapet/releases)
 
 ## Installation
+
+For fresh cluster bootstrap, cert-manager, storage, and the first workflow,
+start with the website guides:
+
+- [Quickstart](https://bubustack.io/docs/getting-started/quickstart)
+- [Prerequisites](https://bubustack.io/docs/getting-started/prerequisites)
+
+Once the cluster prerequisites are ready, install `bobrapet`:
 
 ```bash
 # Add the BubuStack Helm repo
@@ -25,7 +32,9 @@ helm install bobrapet bubustack/bobrapet \
 **From local chart (development):**
 
 ```bash
-helm install bobrapet ./hack/charts/bobrapet \
+make helm-chart
+
+helm install bobrapet ./dist/charts/bobrapet \
   --namespace bobrapet-system \
   --create-namespace
 ```
@@ -38,7 +47,7 @@ helm install bobrapet ./hack/charts/bobrapet \
 |-----|------|---------|-------------|
 | `controllerManager.replicas` | int | `1` | Number of operator replicas |
 | `controllerManager.manager.image.repository` | string | `ghcr.io/bubustack/bobrapet` | Operator container image |
-| `controllerManager.manager.image.tag` | string | `latest` | Image tag (set to release version) |
+| `controllerManager.manager.image.tag` | string | chart `appVersion` | Image tag used by default when left empty or at the scaffold default |
 | `controllerManager.manager.imagePullPolicy` | string | `IfNotPresent` | Image pull policy |
 | `controllerManager.manager.resources.requests.cpu` | string | `10m` | CPU request |
 | `controllerManager.manager.resources.requests.memory` | string | `64Mi` | Memory request |
@@ -129,7 +138,7 @@ controllerManager:
   manager:
     image:
       repository: my-registry/bobrapet
-      tag: latest
+      tag: ""
     resources:
       limits:
         cpu: "2"
@@ -159,9 +168,10 @@ helm repo update
 helm upgrade bobrapet bubustack/bobrapet --namespace bobrapet-system
 ```
 
-> **CRDs are not managed by Helm.** After upgrading, apply the latest CRDs:
+> **CRDs ship with the chart, but Helm does not upgrade them automatically.**
+> Refresh them when the release changes CRD schemas:
 > ```bash
-> make install  # or kubectl apply -f config/crd/bases/
+> helm show crds bubustack/bobrapet | kubectl apply -f -
 > ```
 
 ## Uninstalling
@@ -170,10 +180,9 @@ helm upgrade bobrapet bubustack/bobrapet --namespace bobrapet-system
 helm uninstall bobrapet --namespace bobrapet-system
 ```
 
-> **CRDs are not removed automatically.** To remove them:
-> ```bash
-> make uninstall  # or kubectl delete -f config/crd/bases/
-> ```
+> **CRDs remain after uninstall.** Delete them manually only if you want to
+> remove the API definitions and all BubuStack custom resources from the
+> cluster.
 
 ## Links
 

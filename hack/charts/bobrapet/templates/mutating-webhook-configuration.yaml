@@ -1,0 +1,69 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "bobrapet.fullname" . }}-mutating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "bobrapet.fullname" . }}-serving-cert
+  labels:
+  {{- include "bobrapet.labels" . | nindent 4 }}
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /mutate-bubustack-io-v1alpha1-engram
+  failurePolicy: Fail
+  name: mengram-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - engrams
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /mutate-bubustack-io-v1alpha1-impulse
+  failurePolicy: Fail
+  name: mimpulse-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - impulses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /mutate-bubustack-io-v1alpha1-story
+  failurePolicy: Fail
+  name: mstory-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stories
+  sideEffects: None

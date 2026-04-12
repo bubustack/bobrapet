@@ -1,0 +1,11 @@
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ include "bobrapet.fullname" . }}-shared-ca
+  labels:
+  {{- include "bobrapet.labels" . | nindent 4 }}
+  annotations:
+    kustomize.config.k8s.io/skip-name-prefix: "true"
+spec:
+  ca:
+    secretName: {{ include "bobrapet.fullname" . }}-ca-root

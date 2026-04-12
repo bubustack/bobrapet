@@ -1,7 +1,5 @@
 resources:
 - shared-ca.yaml
-- certificate-metrics.yaml
-- certificate-hub.yaml
 - certificate-webhook.yaml
 
 configurations:

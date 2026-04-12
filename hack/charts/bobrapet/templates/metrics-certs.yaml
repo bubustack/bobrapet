@@ -1,0 +1,18 @@
+{{- if false }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "bobrapet.fullname" . }}-metrics-certs
+  labels:
+  {{- include "bobrapet.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+  - '{{ include "bobrapet.fullname" . }}-controller-manager-metrics-service.{{ .Release.Namespace }}.svc'
+  - '{{ include "bobrapet.fullname" . }}-controller-manager-metrics-service.{{ .Release.Namespace }}.svc.{{ .Values.kubernetesClusterDomain }}'
+  issuerRef:
+    kind: ClusterIssuer
+    name: '{{ include "bobrapet.fullname" . }}-shared-ca'
+  privateKey:
+    rotationPolicy: Always
+  secretName: bobrapet-metrics-server-cert
+{{- end }}

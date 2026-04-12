@@ -3,6 +3,8 @@ IMG ?= ghcr.io/bubustack/bobrapet:latest
 CHART ?= bobrapet
 CHART_OVERRIDE_DIR ?= hack/charts
 HELM_CHART_OVERLAY_FILES ?= Chart.yaml README.md
+HELM_CHART_OVERLAY_DIRS ?= templates
+RELEASE_PLEASE_MANIFEST ?= .github/.release-please-manifest.json
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -167,6 +169,21 @@ helm-chart: helmify helm-schema kustomize ## Generate Helm chart via helmify (ov
 				cp $(CHART_OVERRIDE_DIR)/$(CHART)/$$file dist/charts/$(CHART)/$$file; \
 			fi; \
 		done; \
+		for dir in $(HELM_CHART_OVERLAY_DIRS); do \
+			if [ -d $(CHART_OVERRIDE_DIR)/$(CHART)/$$dir ]; then \
+				mkdir -p dist/charts/$(CHART)/$$dir; \
+				cp -R $(CHART_OVERRIDE_DIR)/$(CHART)/$$dir/. dist/charts/$(CHART)/$$dir/; \
+			fi; \
+			done; \
+		fi
+	@if [ -f $(RELEASE_PLEASE_MANIFEST) ]; then \
+		VERSION="$$(awk -F'"' '/"[.]":/ { print $$4 }' $(RELEASE_PLEASE_MANIFEST))"; \
+		if [ -n "$$VERSION" ]; then \
+			sed -i.bak -E "s/^version:.*/version: $$VERSION/" dist/charts/$(CHART)/Chart.yaml; \
+			sed -i.bak -E "s/^appVersion:.*/appVersion: \"$$VERSION\"/" dist/charts/$(CHART)/Chart.yaml; \
+			VERSION="$$VERSION" perl -0pi.bak -e 's/^(\s*tag:).*$$/$$1 "$$ENV{VERSION}"/m' dist/charts/$(CHART)/values.yaml; \
+			rm -f dist/charts/$(CHART)/Chart.yaml.bak dist/charts/$(CHART)/values.yaml.bak; \
+		fi; \
 	fi
 	$(HELM_SCHEMA) -f dist/charts/$(CHART)/values.yaml -o dist/charts/$(CHART)/values.schema.json
 

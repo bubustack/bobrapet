@@ -1,0 +1,189 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "bobrapet.fullname" . }}-validating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "bobrapet.fullname" . }}-serving-cert
+  labels:
+  {{- include "bobrapet.labels" . | nindent 4 }}
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-runs-bubustack-io-v1alpha1-effectclaim
+  failurePolicy: Fail
+  name: veffectclaim-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - effectclaims
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-bubustack-io-v1alpha1-engram
+  failurePolicy: Fail
+  name: vengram-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - engrams
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-bubustack-io-v1alpha1-impulse
+  failurePolicy: Fail
+  name: vimpulse-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - impulses
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-runs-bubustack-io-v1alpha1-steprun
+  failurePolicy: Fail
+  name: vsteprun-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stepruns
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-bubustack-io-v1alpha1-story
+  failurePolicy: Fail
+  name: vstory-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - stories
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-runs-bubustack-io-v1alpha1-storyrun
+  failurePolicy: Fail
+  name: vstoryrun-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storyruns
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-runs-bubustack-io-v1alpha1-storytrigger
+  failurePolicy: Fail
+  name: vstorytrigger-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - runs.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - storytriggers
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-transport-bubustack-io-v1alpha1-transport
+  failurePolicy: Fail
+  name: vtransport.kb.io
+  rules:
+  - apiGroups:
+    - transport.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - transports
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: '{{ include "bobrapet.fullname" . }}-webhook-service'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-transport-bubustack-io-v1alpha1-transportbinding
+  failurePolicy: Fail
+  name: vtransportbinding.kb.io
+  rules:
+  - apiGroups:
+    - transport.bubustack.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - transportbindings
+  sideEffects: None

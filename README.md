@@ -1,6 +1,7 @@
 # 🤖 bobrapet — A Declarative, Kubernetes-Native AI Workflow Engine
 [![Go Reference](https://pkg.go.dev/badge/github.com/bubustack/bobrapet.svg)](https://pkg.go.dev/github.com/bubustack/bobrapet)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bubustack/bobrapet)](https://goreportcard.com/report/github.com/bubustack/bobrapet)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/bubustack)](https://artifacthub.io/packages/search?repo=bubustack)
 
 Bobrapet is a powerful, cloud-native workflow engine for orchestrating complex AI and data processing pipelines on Kubernetes. It leverages the declarative power of Custom Resource Definitions (CRDs) to let you define, manage, and execute multi-step, event-driven workflows with flexibility and control.
 
@@ -10,6 +11,7 @@ Bobrapet is a powerful, cloud-native workflow engine for orchestrating complex A
 - Quickstart: https://bubustack.io/docs/getting-started/quickstart
 - CRD reference: https://bubustack.io/docs/api/crd-design
 - API errors contract: https://bubustack.io/docs/api/errors
+- Artifact Hub chart: https://artifacthub.io/packages/search?repo=bubustack&ts_query_web=bobrapet
 
 ## 🌟 Key Features
 
@@ -79,68 +81,38 @@ kubectl patch storyrun <name> --type merge --subresource status \\
 
 ## 🚀 Quick Start
 
-### Prerequisites
-- Go 1.26+ (matching `go.mod`)
-- Docker or another OCI-compatible image builder
-- `kubectl`
-- Access to a Kubernetes cluster supported by the current `bobrapet` release set
+For fresh cluster bootstrap, cert-manager, storage, and a first workflow, use
+the website quickstart:
 
-### 1. Install the Operator
+- https://bubustack.io/docs/getting-started/quickstart
+- https://bubustack.io/docs/getting-started/prerequisites
 
-First, install the Custom Resource Definitions (CRDs):
-```bash
-make install
-```
-
-Next, deploy the operator controller to your cluster:
-```bash
-make deploy IMG=<your-repo>/bobrapet:latest
-```
-*(Replace `<your-repo>` with your container registry)*
-
-### 2. Deploy a sample workflow
-
-The following example defines a two-step workflow that fetches content from a URL and uses an AI model to summarize it. Notice how the `summarize` step implicitly depends on the output of the `fetch-content` step.
-
-Apply the sample manifests, which include the necessary `EngramTemplates`, `Engrams`, and the `Story` definition:
-```bash
-kubectl apply -k config/samples
-```
-
-This creates:
-- An `Engram` named `http-request-engram` to fetch web content.
-- An `Engram` named `openai-summarizer-engram` to summarize text.
-- A `Story` named `summarize-website-story` that defines the workflow.
-
-### 3. Run the workflow
-
-For a manual run, create a `StoryRun` resource directly. SDK helpers and
-Impulse workloads use the durable `StoryTrigger` admission path instead, but
-direct `StoryRun` creation remains valid for hands-on operator workflows. This
-`StoryRun` provides the initial input `url` required by the `Story`.
-
-```yaml
-apiVersion: runs.bubustack.io/v1alpha1
-kind: StoryRun
-metadata:
-  name: summarize-k8s-docs
-spec:
-  storyRef:
-    name: summarize-website-story
-  inputs:
-    url: https://kubernetes.io/docs/concepts/overview/
-```
-
-### 4. Observe the results
-
-Monitor the execution of the workflow by checking the `StoryRun` and its child `StepRuns`.
+Install `bobrapet` from the Helm repo:
 
 ```bash
-# Check the overall status of the workflow
-kubectl get storyrun summarize-k8s-docs -o yaml
+helm repo add bubustack https://bubustack.github.io/helm-charts
+helm repo update
+helm install bobrapet bubustack/bobrapet \
+  --namespace bobrapet-system \
+  --create-namespace
+```
 
-# Check the status of individual steps
-kubectl get stepruns -l bubustack.io/storyrun=summarize-k8s-docs
+### Realtime add-on
+
+Install `bobravoz-grpc` only if you want realtime Stories or the LiveKit
+examples:
+```bash
+helm install bobravoz-grpc bubustack/bobravoz-grpc \
+  --namespace bobrapet-system
+```
+
+If `bobrapet` is installed with a non-default Helm release name, install
+`bobravoz-grpc` with:
+
+```bash
+helm install bobravoz-grpc bubustack/bobravoz-grpc \
+  --namespace bobrapet-system \
+  --set sharedCAIssuerName=<bobrapet-release>-bobrapet-shared-ca
 ```
 
 ## ⚙️ Environment variables (operator-injected; consumed by SDK)
@@ -203,8 +175,9 @@ The override flows through Story/Step policies and StepRuns as well. When enable
     make helm-chart
     # or specify another name: make helm-chart CHART=mychart
     ```
-    Chart metadata and default values live under `hack/charts/<chart>/` so you can tweak
-    `values.yaml` or `Chart.yaml` without touching generated templates.
+    Chart overlays such as `Chart.yaml` and `README.md` live under
+    `hack/charts/<chart>/`. Generated templates, values, and CRDs are written
+    to `dist/charts/<chart>/`.
 
 ## 📢 Support, Security, and Changelog
 

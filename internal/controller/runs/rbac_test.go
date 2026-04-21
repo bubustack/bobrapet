@@ -28,6 +28,8 @@ import (
 	identity "github.com/bubustack/core/runtime/identity"
 )
 
+const preserveAnnotationValue = "keep"
+
 func TestRBACManagerReconcileCopiesStorageAnnotations(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := runsv1alpha1.AddToScheme(scheme); err != nil {
@@ -207,7 +209,7 @@ func TestRBACManagerReconcilePatchesExistingServiceAccountAnnotations(t *testing
 	if _, ok := sa.Annotations["stale.example/key"]; ok {
 		t.Fatalf("expected stale managed annotation to be pruned")
 	}
-	if sa.Annotations["preserve.example/key"] != "keep" {
+	if sa.Annotations["preserve.example/key"] != preserveAnnotationValue {
 		t.Fatalf("expected unmanaged annotation to be preserved, got %q", sa.Annotations["preserve.example/key"])
 	}
 	for key, val := range annotations {

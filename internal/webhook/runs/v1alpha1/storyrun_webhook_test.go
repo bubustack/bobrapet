@@ -164,6 +164,79 @@ var _ = Describe("StoryRun Webhook", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
 		})
+
+		It("allows setting cancelRequested to true", func() {
+			original := &runsv1alpha1.StoryRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "cancel-run",
+				},
+				Spec: runsv1alpha1.StoryRunSpec{
+					StoryRef: refs.StoryReference{
+						ObjectReference: refs.ObjectReference{
+							Name: "story-a",
+						},
+					},
+				},
+			}
+
+			updated := original.DeepCopy()
+			cancelTrue := true
+			updated.Spec.CancelRequested = &cancelTrue
+
+			_, err := validator.ValidateUpdate(context.Background(), original, updated)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("rejects clearing cancelRequested once set", func() {
+			cancelTrue := true
+			original := &runsv1alpha1.StoryRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "cancel-run-set",
+				},
+				Spec: runsv1alpha1.StoryRunSpec{
+					StoryRef: refs.StoryReference{
+						ObjectReference: refs.ObjectReference{
+							Name: "story-a",
+						},
+					},
+					CancelRequested: &cancelTrue,
+				},
+			}
+
+			updated := original.DeepCopy()
+			updated.Spec.CancelRequested = nil
+
+			_, err := validator.ValidateUpdate(context.Background(), original, updated)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
+		})
+
+		It("rejects cancelRequested updates mixed with other spec changes", func() {
+			original := &runsv1alpha1.StoryRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "cancel-run-with-input-change",
+				},
+				Spec: runsv1alpha1.StoryRunSpec{
+					StoryRef: refs.StoryReference{
+						ObjectReference: refs.ObjectReference{
+							Name: "story-a",
+						},
+					},
+				},
+			}
+
+			updated := original.DeepCopy()
+			cancelTrue := true
+			updated.Spec.CancelRequested = &cancelTrue
+			updated.Spec.Inputs = &runtime.RawExtension{Raw: []byte(`{"changed":true}`)}
+
+			_, err := validator.ValidateUpdate(context.Background(), original, updated)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
+		})
 	})
 
 	Context("trigger tokens", func() {

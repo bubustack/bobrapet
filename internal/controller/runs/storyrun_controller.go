@@ -72,6 +72,10 @@ const (
 	// storyRunSDKStopMessage matches the status message set by the SDK StopStoryRun helper
 	// (../bubu-sdk-go/k8s/client.go:703-727) when it terminates a StoryRun.
 	storyRunSDKStopMessage = "StoryRun finished via SDK"
+	// stepRunCancelRequestedAnnotationKey marks StepRuns that should drain gracefully.
+	stepRunCancelRequestedAnnotationKey = "bubustack.io/cancel-requested"
+	// stepRunCancelRequestedAnnotationValue is the marker value used for graceful cancel.
+	stepRunCancelRequestedAnnotationValue = "true"
 	// eventReasonStoryRunRedriveFromStep is emitted when a rerun-from-step is requested.
 	eventReasonStoryRunRedriveFromStep = "StoryRunRedriveFromStep"
 )
@@ -1502,12 +1506,12 @@ func (r *StoryRunReconciler) handleGracefulCancel(ctx context.Context, srun *run
 		if !sr.Status.Phase.IsTerminal() {
 			allTerminal = false
 			// Set cancel annotation so SDK can detect and drain gracefully
-			if sr.Annotations == nil || sr.Annotations["bubustack.io/cancel-requested"] != "true" {
+			if sr.Annotations == nil || sr.Annotations[stepRunCancelRequestedAnnotationKey] != stepRunCancelRequestedAnnotationValue {
 				patch := client.MergeFrom(sr.DeepCopy())
 				if sr.Annotations == nil {
 					sr.Annotations = map[string]string{}
 				}
-				sr.Annotations["bubustack.io/cancel-requested"] = "true"
+				sr.Annotations[stepRunCancelRequestedAnnotationKey] = stepRunCancelRequestedAnnotationValue
 				if err := r.Patch(ctx, sr, patch); err != nil {
 					log.Error(err, "Failed to annotate StepRun with cancel", "steprun", sr.Name)
 				}

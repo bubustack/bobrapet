@@ -134,6 +134,8 @@ func (v *StoryRunCustomValidator) ValidateCreate(ctx context.Context, sr *runsv1
 //   - Skips validation if resource is being deleted (DeletionTimestamp set).
 //   - Rejects updates that decrease observedGeneration.
 //   - Skips validation if spec is unchanged (metadata-only update).
+//   - Allows a graceful cancel request when only spec.cancelRequested changes
+//     from nil/false to true.
 //
 // Arguments:
 //   - ctx context.Context: for Story lookup.
@@ -164,7 +166,35 @@ func (v *StoryRunCustomValidator) ValidateUpdate(ctx context.Context, oldSr, new
 	if reflect.DeepEqual(oldSr.Spec, newSr.Spec) {
 		return nil, nil
 	}
+	if allowsGracefulCancelRequest(oldSr, newSr) {
+		return nil, nil
+	}
 	return nil, fmt.Errorf("spec is immutable for StoryRun; create a new StoryRun for updated inputs or references")
+}
+
+func allowsGracefulCancelRequest(oldSr, newSr *runsv1alpha1.StoryRun) bool {
+	if oldSr == nil || newSr == nil {
+		return false
+	}
+	if !allowsCancelRequestedTransition(oldSr.Spec.CancelRequested, newSr.Spec.CancelRequested) {
+		return false
+	}
+
+	oldSpec := oldSr.Spec
+	newSpec := newSr.Spec
+	oldSpec.CancelRequested = nil
+	newSpec.CancelRequested = nil
+
+	return reflect.DeepEqual(oldSpec, newSpec)
+}
+
+func allowsCancelRequestedTransition(oldValue, newValue *bool) bool {
+	newRequested := newValue != nil && *newValue
+	if !newRequested {
+		return false
+	}
+	oldRequested := oldValue != nil && *oldValue
+	return !oldRequested
 }
 
 // ValidateDelete implements webhook.CustomValidator for StoryRun deletion.

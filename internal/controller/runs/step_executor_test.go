@@ -23,6 +23,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
+const otherNamespace = "other"
+
 func TestDescribeStepRunDrift_NoDrift(t *testing.T) {
 	storyRun := &runsv1alpha1.StoryRun{ObjectMeta: metav1.ObjectMeta{Name: "story-run"}}
 	story := &bubuv1alpha1.Story{ObjectMeta: metav1.ObjectMeta{Name: "story"}}
@@ -52,7 +54,7 @@ func TestDescribeStepRunDrift_DetectsLabelAndRefChanges(t *testing.T) {
 	storyRun := &runsv1alpha1.StoryRun{ObjectMeta: metav1.ObjectMeta{Name: "story-run"}}
 	story := &bubuv1alpha1.Story{ObjectMeta: metav1.ObjectMeta{Name: "story"}}
 	step := &bubuv1alpha1.Step{Name: "step-a", Ref: &refs.EngramReference{ObjectReference: refs.ObjectReference{Name: "engram"}}}
-	otherNS := "other"
+	otherNS := otherNamespace
 	stepRun := &runsv1alpha1.StepRun{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "story-run-step-a",

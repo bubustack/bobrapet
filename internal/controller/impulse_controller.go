@@ -105,6 +105,7 @@ var errNamespaceTerminating = errors.New("impulse namespace is terminating")
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch;update
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch;update
 // +kubebuilder:rbac:groups=bubustack.io,resources=stories,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;patch
@@ -933,8 +934,9 @@ func (r *ImpulseReconciler) ensureImpulseServiceAccount(
 //
 // Behavior:
 //   - Creates/updates a Role granting the SDK trigger baseline:
-//     StoryTrigger create/get, StoryRun get, optional StoryRun stop via
-//     storyruns/status patch, and Impulse status patch for trigger counters.
+//     StoryTrigger create/get, StoryRun get/list/patch for optional stop
+//     helpers, storyruns/status patch for status-aware helpers, and Impulse
+//     status patch for trigger counters.
 //   - Creates/updates a RoleBinding binding the Role to the ServiceAccount.
 //   - Uses rbacutil helpers with ControllerReference for ownership.
 //
@@ -959,7 +961,7 @@ func (r *ImpulseReconciler) ensureImpulseRBAC(ctx context.Context, impulse *v1al
 		{
 			APIGroups: []string{"runs.bubustack.io"},
 			Resources: []string{"storyruns"},
-			Verbs:     []string{"get"},
+			Verbs:     []string{"get", "list", "patch"},
 		},
 		{
 			APIGroups: []string{"runs.bubustack.io"},

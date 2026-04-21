@@ -173,6 +173,7 @@ type StoryRunReconciler struct {
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=runs.bubustack.io,resources=storyruns/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;patch;escalate;bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;patch
@@ -911,7 +912,7 @@ func (r *StoryRunReconciler) reconcileAfterSetup(ctx context.Context, srun *runs
 		var blocked *templating.ErrEvaluationBlocked
 		if stderrors.As(err, &blocked) {
 			if log != nil {
-				log.Info("Template evaluation blocked; requeueing", "reason", blocked.Reason)
+				log.V(1).Info("Template evaluation blocked; requeueing", "reason", blocked.Reason)
 			}
 			if result.RequeueAfter == 0 {
 				result.RequeueAfter = r.nextRequeueDelay()

@@ -322,7 +322,7 @@ func (r *DAGReconciler) Reconcile(ctx context.Context, srun *runsv1alpha1.StoryR
 			if syncChanged {
 				state.needsPersist = true
 			}
-			state.log.Info("Synced StepRuns", "count", len(list.Items))
+			state.log.V(1).Info("Synced StepRuns", "count", len(list.Items))
 			state.stepRunList = list
 
 			prior, err := getPriorStepOutputs(ctx, r.Client, sr, list)
@@ -727,7 +727,7 @@ func (r *DAGReconciler) finalizeStoryRun(
 			var blocked *templating.ErrEvaluationBlocked
 			if errors.As(err, &blocked) {
 				if log != nil {
-					log.Info("Story output evaluation blocked; waiting for materialize", "reason", blocked.Reason)
+					log.V(1).Info("Story output evaluation blocked; waiting for materialize", "reason", blocked.Reason)
 				}
 				return err
 			}
@@ -2218,7 +2218,7 @@ func collectOutputsFromStepRuns(stepRunList *runsv1alpha1.StepRunList, outputs m
 		}
 		if updated {
 			outputs[stepID] = stepContext
-			log.Info("Collected StepRun context for DAG inputs",
+			log.V(1).Info("Collected StepRun context for DAG inputs",
 				"step", stepID,
 				"phase", sr.Status.Phase,
 				"signals", len(sr.Status.Signals) > 0,
@@ -2797,7 +2797,7 @@ func (r *DAGReconciler) findReadySteps(
 					log := logging.NewControllerLogger(ctx, "storyrun-if-eval")
 					var blocked *templating.ErrEvaluationBlocked
 					if errors.As(err, &blocked) {
-						log.Info("Template 'if' condition blocked; waiting for materialize", "step", step.Name, "reason", blocked.Reason)
+						log.V(1).Info("Template 'if' condition blocked; waiting for materialize", "step", step.Name, "reason", blocked.Reason)
 						continue
 					}
 					var offloaded *templating.ErrOffloadedDataUsage

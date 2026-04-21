@@ -157,15 +157,18 @@ func TestEnsureImpulseRBACDefaultRoleMatchesTriggerBaseline(t *testing.T) {
 	}
 
 	assertRoleRuleVerbs(t, role.Rules, "storytriggers", "create", "get")
-	assertRoleRuleVerbs(t, role.Rules, "storyruns", "get")
+	assertRoleRuleVerbs(t, role.Rules, "storyruns", "get", "list", "patch")
 	assertRoleRuleVerbs(t, role.Rules, "storyruns/status", "patch")
 	assertRoleRuleVerbs(t, role.Rules, "impulses", "get")
 	assertRoleRuleVerbs(t, role.Rules, "impulses/status", "patch")
 
 	if storyRunRule := findRoleRule(role.Rules, "storyruns"); storyRunRule == nil {
 		t.Fatalf("default impulse role is missing storyruns readback access: %#v", role.Rules)
-	} else if len(storyRunRule.Verbs) != 1 || !slices.Contains(storyRunRule.Verbs, "get") {
-		t.Fatalf("default impulse storyruns access must stay minimal, got %#v", storyRunRule)
+	} else if len(storyRunRule.Verbs) != 3 ||
+		!slices.Contains(storyRunRule.Verbs, "get") ||
+		!slices.Contains(storyRunRule.Verbs, "list") ||
+		!slices.Contains(storyRunRule.Verbs, "patch") {
+		t.Fatalf("default impulse storyruns access must support SDK stop helpers, got %#v", storyRunRule)
 	}
 	if storyTriggerRule := findRoleRule(role.Rules, "storytriggers"); storyTriggerRule == nil {
 		t.Fatalf("default impulse role is missing storytrigger submission access: %#v", role.Rules)

@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -40,6 +41,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	runsv1alpha1 "github.com/bubustack/bobrapet/api/runs/v1alpha1"
+	transportv1alpha1 "github.com/bubustack/bobrapet/api/transport/v1alpha1"
 	bubushv1alpha1 "github.com/bubustack/bobrapet/api/v1alpha1"
 	"github.com/bubustack/bobrapet/internal/config"
 	webhookshared "github.com/bubustack/bobrapet/internal/webhook/v1alpha1"
@@ -54,6 +56,7 @@ import (
 	runsidentity "github.com/bubustack/bobrapet/pkg/runs/identity"
 	runslist "github.com/bubustack/bobrapet/pkg/runs/list"
 	runsstatus "github.com/bubustack/bobrapet/pkg/runs/status"
+	transportutil "github.com/bubustack/bobrapet/pkg/transport"
 	"github.com/bubustack/core/contracts"
 	bootstrapruntime "github.com/bubustack/core/runtime/bootstrap"
 	stagemeta "github.com/bubustack/core/runtime/stage"
@@ -72,12 +75,17 @@ const (
 	// storyRunSDKStopMessage matches the status message set by the SDK StopStoryRun helper
 	// (../bubu-sdk-go/k8s/client.go:703-727) when it terminates a StoryRun.
 	storyRunSDKStopMessage = "StoryRun finished via SDK"
+	// storyRunGracefulCancelObservedAnnotation records when the controller first observed
+	// a graceful cancellation request so timeout enforcement survives requeues.
+	storyRunGracefulCancelObservedAnnotation = "storyrun.bubustack.io/graceful-cancel-observed-at"
 	// stepRunCancelRequestedAnnotationKey marks StepRuns that should drain gracefully.
 	stepRunCancelRequestedAnnotationKey = "bubustack.io/cancel-requested"
 	// stepRunCancelRequestedAnnotationValue is the marker value used for graceful cancel.
 	stepRunCancelRequestedAnnotationValue = "true"
 	// eventReasonStoryRunRedriveFromStep is emitted when a rerun-from-step is requested.
 	eventReasonStoryRunRedriveFromStep = "StoryRunRedriveFromStep"
+
+	defaultGracefulCancelTimeout = 30 * time.Second
 )
 
 func storyRunRedriveToken(srun *runsv1alpha1.StoryRun) string {
@@ -181,7 +189,7 @@ type StoryRunReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;patch;escalate;bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;patch
-// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=runs.bubustack.io,resources=stepruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=bubustack.io,resources=stories,verbs=get;list;watch
 // +kubebuilder:rbac:groups=bubustack.io,resources=engrams,verbs=get;list;watch;create
 
@@ -441,6 +449,10 @@ func (r *StoryRunReconciler) patchRedriveAnnotations(ctx context.Context, srun *
 				ann[runsidentity.StoryRunRedriveObservedAnnotation] = token
 				changed = true
 			}
+			if _, ok := ann[storyRunGracefulCancelObservedAnnotation]; ok {
+				delete(ann, storyRunGracefulCancelObservedAnnotation)
+				changed = true
+			}
 			if _, ok := ann[stepTimersAnnotationKey]; ok {
 				delete(ann, stepTimersAnnotationKey)
 				changed = true
@@ -456,6 +468,10 @@ func (r *StoryRunReconciler) patchRedriveAnnotations(ctx context.Context, srun *
 	changed := false
 	if ann[runsidentity.StoryRunRedriveObservedAnnotation] != token {
 		ann[runsidentity.StoryRunRedriveObservedAnnotation] = token
+		changed = true
+	}
+	if _, ok := ann[storyRunGracefulCancelObservedAnnotation]; ok {
+		delete(ann, storyRunGracefulCancelObservedAnnotation)
 		changed = true
 	}
 	if _, ok := ann[stepTimersAnnotationKey]; ok {
@@ -480,6 +496,10 @@ func (r *StoryRunReconciler) patchRedriveFromStepAnnotations(ctx context.Context
 				ann[runsidentity.StoryRunRedriveFromStepObservedAnnotation] = value
 				changed = true
 			}
+			if _, ok := ann[storyRunGracefulCancelObservedAnnotation]; ok {
+				delete(ann, storyRunGracefulCancelObservedAnnotation)
+				changed = true
+			}
 			if _, ok := ann[stepTimersAnnotationKey]; ok {
 				delete(ann, stepTimersAnnotationKey)
 				changed = true
@@ -495,6 +515,10 @@ func (r *StoryRunReconciler) patchRedriveFromStepAnnotations(ctx context.Context
 	changed := false
 	if ann[runsidentity.StoryRunRedriveFromStepObservedAnnotation] != value {
 		ann[runsidentity.StoryRunRedriveFromStepObservedAnnotation] = value
+		changed = true
+	}
+	if _, ok := ann[storyRunGracefulCancelObservedAnnotation]; ok {
+		delete(ann, storyRunGracefulCancelObservedAnnotation)
 		changed = true
 	}
 	if _, ok := ann[stepTimersAnnotationKey]; ok {
@@ -1487,11 +1511,23 @@ func (r *StoryRunReconciler) recordDependentMetrics(srun *runsv1alpha1.StoryRun,
 //
 // handleGracefulCancel processes a graceful cancel request on a StoryRun.
 // It annotates all non-terminal StepRuns with "bubustack.io/cancel-requested"
-// so SDKs can drain in-flight work, then transitions the StoryRun to Finished
-// once all steps reach a terminal phase.
+// so SDKs can drain in-flight work. Once the configured drain window expires,
+// it force-deletes any remaining non-terminal StepRuns so the existing StepRun
+// deletion cleanup path can tear down realtime runtime resources.
 func (r *StoryRunReconciler) handleGracefulCancel(ctx context.Context, srun *runsv1alpha1.StoryRun) (ctrl.Result, error) {
 	log := logging.NewReconcileLogger(ctx, "storyrun").WithValues("storyrun", srun.Name)
-	log.Info("Graceful cancel requested")
+
+	story, err := r.getStoryOptional(ctx, srun)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	startedAt, err := r.ensureGracefulCancelObservedAt(ctx, srun)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	timeout := r.resolveGracefulCancelTimeout(ctx, story, log)
+	now := time.Now()
+	forceDelete := timeout <= 0 || !now.Before(startedAt.Add(timeout))
 
 	// 1. List all StepRuns belonging to this StoryRun
 	stepRunList := &runsv1alpha1.StepRunList{}
@@ -1501,21 +1537,18 @@ func (r *StoryRunReconciler) handleGracefulCancel(ctx context.Context, srun *run
 
 	// 2. Annotate all non-terminal StepRuns with cancel signal
 	allTerminal := true
+	deletedCount := 0
 	for i := range stepRunList.Items {
 		sr := &stepRunList.Items[i]
-		if !sr.Status.Phase.IsTerminal() {
+		terminal, deleted, err := r.processGracefulCancelStepRun(ctx, sr, forceDelete, log)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !terminal {
 			allTerminal = false
-			// Set cancel annotation so SDK can detect and drain gracefully
-			if sr.Annotations == nil || sr.Annotations[stepRunCancelRequestedAnnotationKey] != stepRunCancelRequestedAnnotationValue {
-				patch := client.MergeFrom(sr.DeepCopy())
-				if sr.Annotations == nil {
-					sr.Annotations = map[string]string{}
-				}
-				sr.Annotations[stepRunCancelRequestedAnnotationKey] = stepRunCancelRequestedAnnotationValue
-				if err := r.Patch(ctx, sr, patch); err != nil {
-					log.Error(err, "Failed to annotate StepRun with cancel", "steprun", sr.Name)
-				}
-			}
+		}
+		if deleted {
+			deletedCount++
 		}
 	}
 
@@ -1529,8 +1562,237 @@ func (r *StoryRunReconciler) handleGracefulCancel(ctx context.Context, srun *run
 		return ctrl.Result{}, nil
 	}
 
-	// 4. Otherwise, requeue to check again
-	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	// 4. Otherwise, keep draining until the timeout expires, then wait for deletions to finish.
+	if forceDelete {
+		if deletedCount > 0 {
+			log.Info("Graceful cancel timeout expired; deleting remaining StepRuns",
+				"remainingStepRuns", deletedCount,
+				"timeout", timeout.String(),
+				"startedAt", startedAt.Format(time.RFC3339Nano),
+			)
+		}
+		return ctrl.Result{RequeueAfter: r.nextRequeueDelay()}, nil
+	}
+	remaining := startedAt.Add(timeout).Sub(now)
+	return ctrl.Result{RequeueAfter: min(r.nextRequeueDelay(), remaining)}, nil
+}
+
+func (r *StoryRunReconciler) processGracefulCancelStepRun(
+	ctx context.Context,
+	sr *runsv1alpha1.StepRun,
+	forceDelete bool,
+	log *logging.ControllerLogger,
+) (bool, bool, error) {
+	if sr == nil || sr.Status.Phase.IsTerminal() {
+		return true, false, nil
+	}
+	r.annotateStepRunForGracefulCancel(ctx, sr, log)
+	if !forceDelete || !sr.DeletionTimestamp.IsZero() {
+		return false, false, nil
+	}
+	if err := r.deleteStepRunForGracefulCancel(ctx, sr, log); err != nil {
+		return false, false, err
+	}
+	return false, true, nil
+}
+
+func (r *StoryRunReconciler) annotateStepRunForGracefulCancel(
+	ctx context.Context,
+	sr *runsv1alpha1.StepRun,
+	log *logging.ControllerLogger,
+) {
+	if sr == nil {
+		return
+	}
+	if sr.Annotations != nil && sr.Annotations[stepRunCancelRequestedAnnotationKey] == stepRunCancelRequestedAnnotationValue {
+		return
+	}
+	patch := client.MergeFrom(sr.DeepCopy())
+	if sr.Annotations == nil {
+		sr.Annotations = map[string]string{}
+	}
+	sr.Annotations[stepRunCancelRequestedAnnotationKey] = stepRunCancelRequestedAnnotationValue
+	if err := r.Patch(ctx, sr, patch); err != nil {
+		if log != nil {
+			log.Error(err, "Failed to annotate StepRun with cancel", "steprun", sr.Name)
+		}
+	}
+}
+
+func (r *StoryRunReconciler) deleteStepRunForGracefulCancel(
+	ctx context.Context,
+	sr *runsv1alpha1.StepRun,
+	log *logging.ControllerLogger,
+) error {
+	if sr == nil {
+		return nil
+	}
+	if err := r.Delete(ctx, sr, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !errors.IsNotFound(err) {
+		if log != nil {
+			log.Error(err, "Failed to delete StepRun after graceful cancel timeout", "steprun", sr.Name)
+		}
+		return err
+	}
+	return nil
+}
+
+func gracefulCancelObservedAt(srun *runsv1alpha1.StoryRun) (time.Time, bool) {
+	if srun == nil {
+		return time.Time{}, false
+	}
+	raw := strings.TrimSpace(srun.GetAnnotations()[storyRunGracefulCancelObservedAnnotation])
+	if raw == "" {
+		return time.Time{}, false
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil || timestamp.IsZero() {
+		return time.Time{}, false
+	}
+	return timestamp, true
+}
+
+func (r *StoryRunReconciler) ensureGracefulCancelObservedAt(ctx context.Context, srun *runsv1alpha1.StoryRun) (time.Time, error) {
+	if timestamp, ok := gracefulCancelObservedAt(srun); ok {
+		return timestamp, nil
+	}
+	now := time.Now().UTC()
+	patch := client.MergeFrom(srun.DeepCopy())
+	ann := srun.GetAnnotations()
+	if ann == nil {
+		ann = map[string]string{}
+	}
+	ann[storyRunGracefulCancelObservedAnnotation] = now.Format(time.RFC3339Nano)
+	srun.SetAnnotations(ann)
+	if err := r.Patch(ctx, srun, patch); err != nil {
+		return time.Time{}, err
+	}
+	return now, nil
+}
+
+func (r *StoryRunReconciler) resolveGracefulCancelTimeout(
+	ctx context.Context,
+	story *bubushv1alpha1.Story,
+	log *logging.ControllerLogger,
+) time.Duration {
+	timeout := defaultGracefulCancelTimeout
+	if r != nil && r.ConfigResolver != nil {
+		if cfg := r.ConfigResolver.GetOperatorConfig(); cfg != nil && cfg.Controller.Engram.EngramControllerConfig.DefaultGracefulShutdownTimeoutSeconds > 0 {
+			timeout = time.Duration(cfg.Controller.Engram.EngramControllerConfig.DefaultGracefulShutdownTimeoutSeconds) * time.Second
+		}
+	}
+	if story == nil {
+		return timeout
+	}
+	if story.Spec.Policy != nil && story.Spec.Policy.Timeouts != nil && story.Spec.Policy.Timeouts.GracefulShutdownTimeout != nil {
+		if configured := story.Spec.Policy.Timeouts.GracefulShutdownTimeout.Duration; configured > 0 {
+			timeout = configured
+		}
+	}
+	if story.Spec.Pattern != enums.RealtimePattern {
+		return timeout
+	}
+	if drain := r.resolveStoryTransportDrainTimeout(ctx, story, log); drain > 0 {
+		timeout = drain
+	}
+	return timeout
+}
+
+func (r *StoryRunReconciler) resolveStoryTransportDrainTimeout(
+	ctx context.Context,
+	story *bubushv1alpha1.Story,
+	log *logging.ControllerLogger,
+) time.Duration {
+	if story == nil {
+		return 0
+	}
+	maxDrain := time.Duration(0)
+	for i := range story.Spec.Transports {
+		drain, ok := r.resolveTransportDrainTimeout(ctx, &story.Spec.Transports[i], log)
+		if ok && drain > maxDrain {
+			maxDrain = drain
+		}
+	}
+	return maxDrain
+}
+
+func (r *StoryRunReconciler) resolveTransportDrainTimeout(
+	ctx context.Context,
+	decl *bubushv1alpha1.StoryTransport,
+	log *logging.ControllerLogger,
+) (time.Duration, bool) {
+	if decl == nil {
+		return 0, false
+	}
+	storySettings, err := transportutil.MergeSettingsWithStreaming(decl.Settings, decl.Streaming)
+	if err != nil {
+		if log != nil {
+			log.Error(err, "Failed to encode story transport settings while resolving graceful cancel timeout", "transport", decl.Name)
+		}
+		return 0, false
+	}
+
+	baseSettings := r.loadTransportDefaultSettings(ctx, decl, log)
+
+	mergedSettings, err := transportutil.MergeSettings(baseSettings, storySettings)
+	if err != nil {
+		if log != nil {
+			log.Error(err, "Failed to merge transport settings while resolving graceful cancel timeout", "transport", decl.Name)
+		}
+		return 0, false
+	}
+	if len(mergedSettings) == 0 {
+		return 0, false
+	}
+	return decodeTransportDrainTimeout(mergedSettings, decl.Name, log)
+}
+
+func (r *StoryRunReconciler) loadTransportDefaultSettings(
+	ctx context.Context,
+	decl *bubushv1alpha1.StoryTransport,
+	log *logging.ControllerLogger,
+) *runtime.RawExtension {
+	if decl == nil {
+		return nil
+	}
+	ref := strings.TrimSpace(decl.TransportRef)
+	if ref == "" {
+		return nil
+	}
+
+	var transport transportv1alpha1.Transport
+	if err := r.Get(ctx, types.NamespacedName{Name: ref}, &transport); err != nil {
+		if log != nil && !errors.IsNotFound(err) {
+			log.Error(err, "Failed to load transport defaults while resolving graceful cancel timeout", "transport", decl.Name, "transportRef", ref)
+		}
+		return nil
+	}
+
+	baseSettings, err := transportutil.MergeSettingsWithStreaming(transport.Spec.DefaultSettings, transport.Spec.Streaming)
+	if err != nil {
+		if log != nil {
+			log.Error(err, "Failed to encode transport defaults while resolving graceful cancel timeout", "transport", decl.Name, "transportRef", ref)
+		}
+		return nil
+	}
+	return baseSettings
+}
+
+func decodeTransportDrainTimeout(
+	settingsBytes []byte,
+	transportName string,
+	log *logging.ControllerLogger,
+) (time.Duration, bool) {
+	var settings transportv1alpha1.TransportStreamingSettings
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		if log != nil {
+			log.Error(err, "Failed to decode transport settings while resolving graceful cancel timeout", "transport", transportName)
+		}
+		return 0, false
+	}
+	if settings.Lifecycle == nil || settings.Lifecycle.DrainTimeoutSeconds == nil {
+		return 0, false
+	}
+	return time.Duration(*settings.Lifecycle.DrainTimeoutSeconds) * time.Second, true
 }
 
 // Inputs:

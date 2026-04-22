@@ -235,6 +235,7 @@ var _ = Describe("StoryRun Controller", func() {
 				ann = map[string]string{}
 			}
 			ann[runsidentity.StoryRunRedriveTokenAnnotation] = "token-1"
+			ann[storyRunGracefulCancelObservedAnnotation] = time.Now().Add(-time.Minute).Format(time.RFC3339Nano)
 			current.SetAnnotations(ann)
 			Expect(k8sClient.Patch(ctx, current, patch)).To(Succeed())
 
@@ -268,6 +269,7 @@ var _ = Describe("StoryRun Controller", func() {
 			Expect(updated.Status.Attempts).To(Equal(int32(2)))
 			Expect(updated.Status.TriggerTokens).To(ContainElement("story"))
 			Expect(updated.Annotations[runsidentity.StoryRunRedriveObservedAnnotation]).To(Equal("token-1"))
+			Expect(updated.Annotations).NotTo(HaveKey(storyRunGracefulCancelObservedAnnotation))
 		})
 
 		It("should annotate running StepRuns when cancelRequested is true", func() {
@@ -316,12 +318,17 @@ var _ = Describe("StoryRun Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
 			By("verifying StepRun has cancel annotation")
 			updated := &runsv1alpha1.StepRun{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: stepRun.Name, Namespace: stepRun.Namespace}, updated)).To(Succeed())
 			Expect(updated.Annotations).To(HaveKeyWithValue("bubustack.io/cancel-requested", "true"))
+
+			By("verifying StoryRun records when graceful cancel started")
+			currentRun := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, currentRun)).To(Succeed())
+			Expect(currentRun.Annotations).To(HaveKey(storyRunGracefulCancelObservedAnnotation))
 		})
 
 		It("should finish StoryRun when all steps are terminal and cancelRequested", func() {
@@ -396,6 +403,90 @@ var _ = Describe("StoryRun Controller", func() {
 			Expect(result.RequeueAfter).To(BeZero())
 
 			By("verifying StoryRun phase is Finished")
+			updated := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(updated.Status.Phase).To(Equal(enums.PhaseFinished))
+		})
+
+		It("should force-delete running StepRuns after the graceful cancel timeout expires", func() {
+			By("configuring a realtime drain timeout on the Story")
+			story := &v1alpha1.Story{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: storyName, Namespace: "default"}, story)).To(Succeed())
+			storyPatch := client.MergeFrom(story.DeepCopy())
+			story.Spec.Pattern = enums.RealtimePattern
+			story.Spec.Transports = []v1alpha1.StoryTransport{
+				{
+					Name:         "voice",
+					TransportRef: "voice-transport",
+					Settings: &runtime.RawExtension{
+						Raw: []byte(`{"lifecycle":{"drainTimeoutSeconds":1}}`),
+					},
+				},
+			}
+			Expect(k8sClient.Patch(ctx, story, storyPatch)).To(Succeed())
+
+			By("setting StoryRun phase to Running")
+			current := &runsv1alpha1.StoryRun{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			base := current.DeepCopy()
+			current.Status.Phase = enums.PhaseRunning
+			Expect(k8sClient.Status().Patch(ctx, current, client.MergeFrom(base))).To(Succeed())
+
+			By("creating a running StepRun")
+			stepRun := &runsv1alpha1.StepRun{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "cancel-step-timeout",
+					Namespace: "default",
+					Labels:    runsidentity.SelectorLabels(resourceName),
+				},
+				Spec: runsv1alpha1.StepRunSpec{
+					StoryRunRef: refs.StoryRunReference{
+						ObjectReference: refs.ObjectReference{Name: resourceName},
+					},
+					StepID: "step1",
+				},
+			}
+			Expect(k8sClient.Create(ctx, stepRun)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Name: stepRun.Name, Namespace: stepRun.Namespace}, stepRun)).To(Succeed())
+			srBase := stepRun.DeepCopy()
+			stepRun.Status.Phase = enums.PhaseRunning
+			Expect(k8sClient.Status().Patch(ctx, stepRun, client.MergeFrom(srBase))).To(Succeed())
+
+			By("setting cancelRequested with an expired cancel timestamp")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, current)).To(Succeed())
+			patch := client.MergeFrom(current.DeepCopy())
+			cancelTrue := true
+			current.Spec.CancelRequested = &cancelTrue
+			ann := current.GetAnnotations()
+			if ann == nil {
+				ann = map[string]string{}
+			}
+			ann[storyRunGracefulCancelObservedAnnotation] = time.Now().Add(-2 * time.Second).Format(time.RFC3339Nano)
+			current.SetAnnotations(ann)
+			Expect(k8sClient.Patch(ctx, current, patch)).To(Succeed())
+
+			By("reconciling to trigger forced deletion")
+			controllerReconciler := buildReconciler()
+			result, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			By("verifying the StepRun was deleted")
+			Eventually(func() bool {
+				err := k8sClient.Get(ctx, types.NamespacedName{Name: stepRun.Name, Namespace: stepRun.Namespace}, &runsv1alpha1.StepRun{})
+				return errors.IsNotFound(err)
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
+
+			By("reconciling again to finish the StoryRun")
+			result, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero())
+
 			updated := &runsv1alpha1.StoryRun{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal(enums.PhaseFinished))

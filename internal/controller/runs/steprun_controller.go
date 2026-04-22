@@ -5660,7 +5660,7 @@ func (r *StepRunReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.O
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&runsv1alpha1.StepRun{}, builder.WithPredicates(generationPredicate)).
+		For(&runsv1alpha1.StepRun{}, builder.WithPredicates(stepRunReconcilePredicate())).
 		WithOptions(opts).
 		Owns(&batchv1.Job{}, builder.WithPredicates(jobStatusPredicate)).
 		Owns(&appsv1.Deployment{}, builder.WithPredicates(generationPredicate)).
@@ -5670,6 +5670,29 @@ func (r *StepRunReconciler) SetupWithManager(mgr ctrl.Manager, opts controller.O
 		Watches(&v1alpha1.Engram{}, handler.EnqueueRequestsFromMapFunc(r.mapEngramToStepRuns), builder.WithPredicates(generationPredicate)).
 		Watches(&catalogv1alpha1.EngramTemplate{}, handler.EnqueueRequestsFromMapFunc(r.mapEngramTemplateToStepRuns), builder.WithPredicates(generationPredicate)).
 		Complete(r)
+}
+
+func stepRunReconcilePredicate() predicate.Predicate {
+	generationPredicate := predicate.GenerationChangedPredicate{}
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			_, ok := e.Object.(*runsv1alpha1.StepRun)
+			return ok
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldStep, ok1 := e.ObjectOld.(*runsv1alpha1.StepRun)
+			newStep, ok2 := e.ObjectNew.(*runsv1alpha1.StepRun)
+			if !ok1 || !ok2 {
+				return false
+			}
+			if generationPredicate.Update(e) {
+				return true
+			}
+			return oldStep.GetDeletionTimestamp() == nil && newStep.GetDeletionTimestamp() != nil
+		},
+		DeleteFunc:  func(event.DeleteEvent) bool { return false },
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
 }
 
 // mapEngramToStepRuns finds StepRuns referencing a given Engram.

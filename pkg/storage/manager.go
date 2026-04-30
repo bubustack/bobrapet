@@ -72,6 +72,8 @@ const (
 	configMapRefKey  = "$bubuConfigMapRef"
 	secretRefKey     = "$bubuSecretRef"
 	defaultRefFormat = "auto"
+	contentTypeJSON  = "json"
+	contentTypeRaw   = "raw"
 )
 
 const (
@@ -417,7 +419,7 @@ func (sm *StorageManager) DehydrateInputs(ctx context.Context, data any, storyRu
 	}
 	if result != nil {
 		if encoded, encodeErr := json.Marshal(result); encodeErr == nil && len(encoded) > sm.maxInlineSize {
-			ref, offloadErr := sm.offloadValue(ctx, encoded, "json", storyRunID, "input", sm.inputPrefix)
+			ref, offloadErr := sm.offloadValue(ctx, encoded, contentTypeJSON, storyRunID, "input", sm.inputPrefix)
 			if offloadErr != nil {
 				trace.SpanFromContext(ctx).AddEvent(
 					"dehydrate.inputs.error",
@@ -682,13 +684,13 @@ func (sm *StorageManager) hydrateFromStorageRefPath(ctx context.Context, refPath
 
 func hydrateStoredObject(obj StoredObject, refPath string) (any, error) {
 	switch obj.ContentType {
-	case "json":
+	case contentTypeJSON:
 		var loaded any
 		if err := json.Unmarshal(obj.Data, &loaded); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal hydrated JSON data from '%s': %w", refPath, err)
 		}
 		return loaded, nil
-	case "raw":
+	case contentTypeRaw:
 		var raw string
 		if err := json.Unmarshal(obj.Data, &raw); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal hydrated raw content from '%s': %w", refPath, err)
@@ -718,7 +720,7 @@ func (sm *StorageManager) dehydrateValue(
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal value at depth %d for offload: %w", depth, err)
 		}
-		return sm.offloadValue(ctx, encoded, "json", id, keyPrefix, pathPrefix)
+		return sm.offloadValue(ctx, encoded, contentTypeJSON, id, keyPrefix, pathPrefix)
 	}
 	switch v := value.(type) {
 	case map[string]any:
@@ -761,7 +763,7 @@ func (sm *StorageManager) dehydrateMap(
 			return nil, fmt.Errorf("failed to marshal map for size check: %w", err)
 		}
 		if len(encodedMap) > sm.maxInlineSize {
-			return sm.offloadValue(ctx, encodedMap, "json", id, keyPrefix, pathPrefix)
+			return sm.offloadValue(ctx, encodedMap, contentTypeJSON, id, keyPrefix, pathPrefix)
 		}
 	} else {
 		// Some fields were individually offloaded, but the partially-dehydrated map may
@@ -776,7 +778,7 @@ func (sm *StorageManager) dehydrateMap(
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal map for bulk offload: %w", err)
 			}
-			return sm.offloadValue(ctx, encodedMap, "json", id, keyPrefix, pathPrefix)
+			return sm.offloadValue(ctx, encodedMap, contentTypeJSON, id, keyPrefix, pathPrefix)
 		}
 	}
 	return dehydratedMap, nil
@@ -811,7 +813,7 @@ func (sm *StorageManager) dehydrateSlice(
 			return nil, fmt.Errorf("failed to marshal slice for size check: %w", err)
 		}
 		if len(encodedSlice) > sm.maxInlineSize {
-			return sm.offloadValue(ctx, encodedSlice, "json", id, keyPrefix, pathPrefix)
+			return sm.offloadValue(ctx, encodedSlice, contentTypeJSON, id, keyPrefix, pathPrefix)
 		}
 	} else {
 		// Some items were individually offloaded, but the partially-dehydrated slice may
@@ -826,7 +828,7 @@ func (sm *StorageManager) dehydrateSlice(
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal slice for bulk offload: %w", err)
 			}
-			return sm.offloadValue(ctx, encodedSlice, "json", id, keyPrefix, pathPrefix)
+			return sm.offloadValue(ctx, encodedSlice, contentTypeJSON, id, keyPrefix, pathPrefix)
 		}
 	}
 	return dehydrated, nil
@@ -844,7 +846,7 @@ func (sm *StorageManager) dehydrateString(
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal raw string for storage: %w", err)
 	}
-	return sm.offloadValue(ctx, marshaledString, "raw", id, keyPrefix, pathPrefix)
+	return sm.offloadValue(ctx, marshaledString, contentTypeRaw, id, keyPrefix, pathPrefix)
 }
 
 func (sm *StorageManager) dehydrateOther(
@@ -859,14 +861,14 @@ func (sm *StorageManager) dehydrateOther(
 	if len(encoded) <= sm.maxInlineSize {
 		return v, nil
 	}
-	return sm.offloadValue(ctx, encoded, "json", id, keyPrefix, pathPrefix)
+	return sm.offloadValue(ctx, encoded, contentTypeJSON, id, keyPrefix, pathPrefix)
 }
 
 func storageRefContentType(contentType string) string {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
-	case "json":
+	case contentTypeJSON:
 		return "application/json"
-	case "raw":
+	case contentTypeRaw:
 		return "text/plain"
 	case "":
 		return "application/octet-stream"

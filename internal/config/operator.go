@@ -33,6 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -151,7 +153,7 @@ func (m *OperatorConfigManager) GetControllerConfig() *ControllerConfig {
 //   - Should be called before manager.Start() when loading initial config.
 //   - The reader bypasses the controller-runtime cache for early startup scenarios.
 func (m *OperatorConfigManager) SetAPIReader(reader client.Reader) {
-	m.manager.SetAPIReader(reader)
+	m.manager.SetAPIReader(configMapReader(reader))
 }
 
 // OperatorConfigManager manages the operator's dynamic configuration using the shared
@@ -188,7 +190,7 @@ type OperatorConfigManager struct {
 //     on the unstarted cache during the initial config load.
 func NewOperatorConfigManager(k8sClient client.Client, namespace, configMapName string, reader ...client.Reader) (*OperatorConfigManager, error) {
 	shared, err := operatorconfig.NewManager(operatorconfig.Options[OperatorConfig]{
-		Client:         k8sClient,
+		Client:         configMapReader(k8sClient),
 		Logger:         configManagerLog,
 		ConfigMapKey:   types.NamespacedName{Name: configMapName, Namespace: namespace},
 		ControllerName: "operator-config-manager",
@@ -354,7 +356,8 @@ func logConfigSummary(logger interface{ Info(string, ...any) }, config *Operator
 //   - ConfigMap deletion is handled gracefully by falling back to defaults.
 //   - This prevents the controller from requeuing forever on NotFound errors.
 func (m *OperatorConfigManager) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-	return m.manager.Reconcile(ctx, req)
+	_, err := m.manager.Reconcile(ctx, operatorconfig.Request{NamespacedName: req.NamespacedName})
+	return reconcile.Result{}, err
 }
 
 // SetupWithManager registers the operator config manager as a controller that
@@ -378,7 +381,35 @@ func (m *OperatorConfigManager) Reconcile(ctx context.Context, req reconcile.Req
 //   - Does not load initial config; startup calls LoadInitial separately.
 //   - GenericFunc returns false; periodic resync events are not processed.
 func (m *OperatorConfigManager) SetupWithManager(mgr ctrl.Manager) error {
-	return m.manager.SetupWithManager(mgr)
+	return ctrl.NewControllerManagedBy(mgr).
+		Named("operator-config-manager").
+		For(&corev1.ConfigMap{}).
+		WithEventFilter(m.configMapPredicate()).
+		Complete(m)
+}
+
+func (m *OperatorConfigManager) configMapPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return m.manager.MatchesConfigMap(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return m.manager.MatchesConfigMap(e.ObjectNew)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return m.manager.MatchesConfigMap(e.Object)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+func configMapReader(reader client.Reader) operatorconfig.ConfigMapReader {
+	if reader == nil {
+		return nil
+	}
+	return operatorconfig.ConfigMapReaderFunc(func(ctx context.Context, key types.NamespacedName, into *corev1.ConfigMap) error {
+		return reader.Get(ctx, key, into)
+	})
 }
 
 // parseOperatorConfigMap converts the ConfigMap data into an OperatorConfig snapshot.

@@ -48,7 +48,8 @@ func MarshalStoryTransportStatuses(transports []bubuv1alpha1.StoryTransportStatu
 //   - Resolves descriptor.Kind from the referenced Transport when possible,
 //     preferring provider, then driver, then the raw transportRef.
 //   - Carries effective mode information from Story status when available.
-//   - Includes transportRef and modeReason in descriptor.Config for downstream consumers.
+//   - Includes transportRef and modeReason in descriptor.TypedConfig for
+//     downstream consumers.
 func MarshalRuntimeTransportDescriptors(
 	ctx context.Context,
 	reader client.Reader,
@@ -72,11 +73,13 @@ func MarshalRuntimeTransportDescriptors(
 
 		if status, ok := statusByName[declared.Name]; ok {
 			descriptor.Mode = string(status.Mode)
-			if config := buildRuntimeTransportConfig(declared.TransportRef, status.ModeReason); len(config) > 0 {
-				descriptor.Config = config
+			if typed := buildRuntimeTypedTransportConfig(declared.TransportRef, status.ModeReason); typed != nil {
+				descriptor.TypedConfig = typed
 			}
-		} else if config := buildRuntimeTransportConfig(declared.TransportRef, ""); len(config) > 0 {
-			descriptor.Config = config
+		} else {
+			if typed := buildRuntimeTypedTransportConfig(declared.TransportRef, ""); typed != nil {
+				descriptor.TypedConfig = typed
+			}
 		}
 
 		descriptors = append(descriptors, descriptor)
@@ -87,6 +90,17 @@ func MarshalRuntimeTransportDescriptors(
 		return "", err
 	}
 	return string(bytes), nil
+}
+
+func buildRuntimeTypedTransportConfig(transportRef, modeReason string) *envelope.TransportConfig {
+	cfg := &envelope.TransportConfig{
+		TransportRef: strings.TrimSpace(transportRef),
+		ModeReason:   strings.TrimSpace(modeReason),
+	}
+	if cfg.TransportRef == "" && cfg.ModeReason == "" {
+		return nil
+	}
+	return cfg
 }
 
 func resolveRuntimeTransportKind(ctx context.Context, reader client.Reader, transportRef string) string {
@@ -109,20 +123,6 @@ func resolveRuntimeTransportKind(ctx context.Context, reader client.Reader, tran
 		return driver
 	}
 	return ref
-}
-
-func buildRuntimeTransportConfig(transportRef, modeReason string) map[string]any {
-	config := map[string]any{}
-	if ref := strings.TrimSpace(transportRef); ref != "" {
-		config["transportRef"] = ref
-	}
-	if reason := strings.TrimSpace(modeReason); reason != "" {
-		config["modeReason"] = reason
-	}
-	if len(config) == 0 {
-		return nil
-	}
-	return config
 }
 
 // ResolveStoryTransport returns the named transport (or the first available one when name is empty)

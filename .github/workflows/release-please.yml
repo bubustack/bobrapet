@@ -35,7 +35,7 @@ jobs:
       # Build and push Docker images when release is created
       - name: Checkout code
         if: ${{ steps.release.outputs.release_created }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         if: ${{ steps.release.outputs.release_created }}
@@ -159,7 +159,7 @@ jobs:
 
       - name: Checkout source
         if: steps.token-check.outputs.available == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
         if: steps.token-check.outputs.available == 'true'
@@ -176,7 +176,7 @@ jobs:
 
       - name: Checkout helm-charts repository
         if: steps.token-check.outputs.available == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.HELM_CHARTS_REPO }}
           token: ${{ secrets.HELM_CHARTS_TOKEN }}
